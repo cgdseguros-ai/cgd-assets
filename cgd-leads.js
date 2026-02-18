@@ -1,22 +1,11 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - SEM storage do navegador
    - FILA multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
-   - Layout/estética MANTIDOS
+   - Layout/estética: MANTIDOS (evitar mexer em CSS/estrutura já aprovada)
+   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO (IDs custom do seu Bitrix)
 */
 (function(){
   "use strict";
-
-  // ====== Sentinel do seu LOADER antigo ======
-  const BUILD = "2026-02-19.1";
-  function markSentinel(msg, ok){
-    try{
-      const box = document.getElementById("cgd-sentinel");
-      if(!box) return;
-      box.style.background = ok ? "#ecfff1" : "#fff";
-      box.style.borderColor = ok ? "rgba(0,160,60,.35)" : "rgba(0,0,0,.12)";
-      box.textContent = msg;
-    }catch(_){}
-  }
 
   // =========================
   // CONFIG — AJUSTE AQUI
@@ -24,56 +13,59 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
+    // Campo UF usado no Follow-up (lead)
     UF_PRAZO: "UF_CRM_1768175087",
 
+    // Campos do lead que você pediu pra exibir
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014",
-    UF_IDADE:     "UF_CRM_1771339221",
+    UF_DT_LEAD:   "UF_CRM_1771333014",      // Data/Hora do Lead (pode vir em string DD/MM/AAAA ou ISO)
+    UF_IDADE:     "UF_CRM_1771339221",      // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
-    UF_FONTE:     "UF_CRM_1767285733843",
+    UF_FONTE_TXT: "UF_CRM_1767285733843",
 
+    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
-      STAGE_ID: "C27:UC_SVUYIO",
-      UF_QUEUE_JSON: "UF_CRM_1771293519",
+      STAGE_ID: "C27:UC_SVUYIO",          // QUEUE_JSON
+      UF_QUEUE_JSON: "UF_CRM_1771293519", // QUEUE_JSON (campo)
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
-    // ✅ FOLLOW-UP cria DEAL na Pipeline 17 (TF SAÚDE) na coluna da usuária
-    FOLLOWUP_DEAL: {
-      ENABLED: true,
+    // ✅ Pipeline 17 (TF SAÚDE) — stages por usuária (você mandou)
+    DEAL_PIPELINE17: {
       CATEGORY_ID: 17,
-      DEFAULT_STAGE_ID: "C17:NEW", // NOVA TAREFA
       STAGE_BY_USER: {
-        "15":  "C17:UC_FQ8UPI",  // ALINE
-        "19":  "C17:UC_1HXNTB",  // ADRIANA
-        "17":  "C17:UC_RRQKAQ",  // ANDREYNA
-        "23":  "C17:UC_4HQGI1",  // MARIANA
-        "811": "C17:UC_8Y4R4V",  // JOSIANE
-        "3081":"C17:EXECUTING",  // BRUNA LUISA
-        "3083":"C17:UC_8O5UFO",  // FERNANDA SILVA
-        "3079":"C17:UC_P1P9RJ",  // LIVIA ALVES
-        "3085":"C17:UC_U8AAGB",  // NICOLLE BELMONTE
-        "3389":"C17:UC_A6LSS8",  // ANNA CLARA
-        "815": "C17:UC_ZT6WEB",  // GABRIEL
-        "3387":"C17:UC_RXISLQ",  // BEATRIZ
+        "15":   "C17:UC_FQ8UPI",  // ALINE
+        "19":   "C17:UC_1HXNTB",  // ADRIANA
+        "17":   "C17:UC_RRQKAQ",  // ANDREYNA
+        "23":   "C17:UC_4HQGI1",  // MARIANA
+        "811":  "C17:UC_8Y4R4V",  // JOSIANE
+        "3081": "C17:EXECUTING",  // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",  // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",  // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",  // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",  // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",  // GABRIEL
+        "3387": "C17:UC_RXISLQ"   // BEATRIZ
       }
     },
 
+    // Logo
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
+    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
     REFRESH_WHO_MS: 6000,
 
-    // Visual: mostra só 30 cards pra performance
-    LIMIT_NEW_RENDER: 30,
-    // Count: conta pendentes até 5000
-    LIMIT_PENDING_COUNT: 5000,
+    // Limites de UI (exibição) vs backend (carregar tudo)
+    LIMIT_NEW_DISPLAY: 30,     // quantos cards renderiza na coluna (UI)
+    LIMIT_NEW_FETCH_MAX: 800,  // quantos pendentes pode puxar do Bitrix (para contar e transferir em lote)
+    LIMIT_USER_HISTORY: 120,   // histórico mostrado no modal (sem storage; vem do Bitrix)
+    LIMIT_USER_SEARCH: 200,    // quando buscar por palavra-chave no Bitrix
 
-    LIMIT_USER_HISTORY: 60,
-
+    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -86,37 +78,56 @@
       { name:"NICOLLE BELMONTE", id:3085 },
       { name:"ANNA CLARA", id:3389 },
       { name:"GABRIEL", id:815 },
-      { name:"BEATRIZ", id:3387 },
+      { name:"BEATRIZ", id:3387 }
     ],
 
-    // ✅ Status reais do seu Bitrix (ENTITY_ID=STATUS)
+    // ✅ Status/Stages de LEADS (VOCÊ MANDOU)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
-      QUALIFICADO: "UC_0NFA3H", // Qualificado (custom)
-      PERDIDO: "UC_5IMTI4",     // Perdido (custom)
-      CONVERTIDO: "UC_B3RQAF",  // Convertido (custom)
+      QUALIFICADO: "UC_0NFA3H",
+      PERDIDO: "UC_5IMTI4",
+      CONVERTIDO: "UC_B3RQAF"
     },
 
+    // Para exibir nomes bonitos no modal ABRIR (stage name)
+    LEAD_STATUS_NAME: {
+      "NEW": "NOVO LEAD",
+      "IN_PROCESS": "EM ATENDIMENTO",
+      "UC_0NFA3H": "QUALIFICADO",
+      "UC_5IMTI4": "PERDIDO",
+      "UC_B3RQAF": "CONVERTIDO",
+      "CONVERTED": "LEAD CONVERTIDO",
+      "JUNK": "DESCARTADO"
+    },
+
+    // Campos do lead para listagem (inclui UFs específicos)
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
-      "SOURCE_ID",
-      "PHONE","EMAIL",
-      "ADDRESS_CITY","ADDRESS_REGION",
+      "SOURCE_ID","PHONE","EMAIL",
+      "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
       "UF_CRM_1771282782",
       "UF_CRM_1771333014",
       "UF_CRM_1771339221",
       "UF_CRM_LEAD_1731909705398",
       "UF_CRM_1767285733843",
+      "UF_*"
     ],
 
+    // Badge “quente”
     HOT_EMOJI: "🔥",
-    TZ: "America/Sao_Paulo"
+
+    // Links do GET (Equipes) — ajuste as URLs aqui (sem mexer no layout)
+    GET_LINKS: [
+      { label: "Equipe Α ALPHA — Painel", url: "https://getcgdcorretora.bitrix24.site/alpha/" },
+      { label: "Equipe Β BETA — Painel",  url: "https://getcgdcorretora.bitrix24.site/beta/"  },
+      { label: "Equipe Δ DELTA — Painel", url: "https://getcgdcorretora.bitrix24.site/delta/" }
+    ]
   };
 
   // =========================
-  // Helpers
+  // Helpers DOM
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
@@ -124,47 +135,65 @@
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-  const clean = (v)=> {
-    const s = String(v??"").trim();
-    return s && s !== "null" && s !== "undefined" ? s : "";
-  };
 
   function nowBRTime(){
-    try{ return new Date().toLocaleTimeString("pt-BR", { timeZone: CONFIG.TZ }); }catch(_){ return ""; }
+    try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
+  function pad2(n){ return String(n).padStart(2,"0"); }
+
   function todayISOStart(){
     const d = new Date();
     d.setHours(0,0,0,0);
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da= String(d.getDate()).padStart(2,"0");
-    return `${y}-${m}-${da}T00:00:00`;
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T00:00:00`;
   }
   function monthISOStart(){
     const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    return `${y}-${m}-01T00:00:00`;
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-01T00:00:00`;
   }
+
   function isoFromLocalInput(v){
     if(!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     if(!m) return "";
-    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
-    const dt = new Date(y, mo, d, hh, mi, 0, 0);
+    const dt = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], 0, 0);
     if(Number.isNaN(dt.getTime())) return "";
     return dt.toISOString();
   }
-  function fmtDT(v){
-    const s = clean(v);
-    if(!s) return "";
+
+  // Parse da Data do Lead (UF_DT_LEAD)
+  // Aceita:
+  // - ISO (2026-02-18T12:34:00+03:00 / 2026-02-18T12:34:00)
+  // - BR (DD/MM/AAAA HH:MM ou DD/MM/AAAA)
+  function parseLeadDateAny(v){
+    const s = String(v||"").trim();
+    if(!s) return null;
+
+    // BR dd/mm/yyyy [hh:mm]
+    let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?$/);
+    if(m){
+      const dd=+m[1], mm=+m[2]-1, yy=+m[3], hh=+(m[4]||"0"), mi=+(m[5]||"0");
+      const dt = new Date(yy, mm, dd, hh, mi, 0, 0);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+
+    // ISO
     const t = Date.parse(s);
     if(Number.isFinite(t)){
-      try{
-        return new Date(t).toLocaleString("pt-BR", { timeZone: CONFIG.TZ }).slice(0,16);
-      }catch(_){}
+      const dt = new Date(t);
+      return Number.isNaN(dt.getTime()) ? null : dt;
     }
-    return s.replace("T"," ").slice(0,16);
+
+    return null;
+  }
+  function formatBRDate(dt){
+    if(!dt) return "";
+    try{
+      return `${pad2(dt.getDate())}/${pad2(dt.getMonth()+1)}/${dt.getFullYear()} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+    }catch(_){ return ""; }
+  }
+  function dayKey(dt){
+    if(!dt) return "";
+    return `${dt.getFullYear()}-${pad2(dt.getMonth()+1)}-${pad2(dt.getDate())}`;
   }
 
   // =========================
@@ -208,7 +237,8 @@
     return data.result;
   }
 
-  async function bxListAll(method, params, max=200){
+  // Paginação Bitrix (start)
+  async function bxListAll(method, params, max=2000){
     let start = 0;
     let out = [];
     while(true){
@@ -261,17 +291,20 @@
   }
 
   // =========================
-  // UI/CSS (mantido)
+  // UI / CSS (mantido)
   // =========================
   function injectCSS(){
-    const st = document.createElement("style");
-    st.textContent = document.getElementById("__cgd_css__")?.textContent || `
-/* CSS idêntico ao aprovado — mantido */
+    // (mantém o CSS que você já aprovou — sem mudanças visuais relevantes)
+    const css = `
 #cgdApp{
-  --radius:18px; --border: rgba(30,40,70,.12);
-  --text: rgba(18,26,40,.92); --muted: rgba(18,26,40,.62);
-  --card: rgba(255,255,255,.82); --card2: rgba(255,255,255,.92);
+  --radius:18px;
+  --border: rgba(30,40,70,.12);
+  --text: rgba(18,26,40,.92);
+  --muted: rgba(18,26,40,.62);
+  --card: rgba(255,255,255,.82);
+  --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
+
   min-height: calc(100vh - 60px);
   padding: 10px 12px 90px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
@@ -282,69 +315,318 @@
     radial-gradient(900px 650px at 55% 95%, rgba(255,150,200,.12), transparent 60%),
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
-.cgdTop{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.72);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:999px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:var(--shadow);}
-.cgdTopLeft{display:flex;align-items:center;gap:10px;min-width:280px;}
-.cgdLogo{width:53px;height:53px;border-radius:999px;border:1px solid rgba(0,0,0,.10);object-fit:cover;background:#fff;}
-.cgdTitle{font-weight:950;letter-spacing:.2px;font-size:13px;white-space:nowrap;}
-.cgdTopRight{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
-.cgdPill{border:1px solid var(--border);background:rgba(255,255,255,.78);border-radius:999px;padding:6px 10px;font-size:12px;font-weight:900;}
-.cgdBtn{cursor:pointer;border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.86);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:950;}
-.cgdBtn:active{transform:translateY(1px);}
-.cgdGrid{margin-top:12px;display:grid;grid-template-columns:1.05fr 1.95fr;gap:12px;}
-.cgdCol{border:1px solid var(--border);border-radius:var(--radius);background:rgba(255,255,255,.62);box-shadow:var(--shadow);overflow:hidden;min-height:68vh;display:flex;flex-direction:column;}
-.cgdColHead{padding:10px 12px;background:rgba(255,255,255,.78);border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
-.cgdColHead .hTitle{font-weight:950;font-size:12px;letter-spacing:.3px;text-transform:uppercase;line-height:1.25;width:100%;}
-.cgdColHead .hSub{font-size:11px;color:var(--muted);font-weight:800;margin-top:2px;width:100%;}
-.cgdColHead .hActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
-.cgdList{padding:10px;display:flex;flex-direction:column;gap:10px;overflow:auto;min-height:0;}
-.cgdCard{border:1px solid var(--border);border-radius:16px;background:var(--card2);box-shadow:0 8px 20px rgba(20,30,60,.08);padding:10px;}
-.cgdCardRow{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
-.cgdLeadName{font-weight:950;font-size:14px;line-height:1.2;word-break:break-word;flex:1 1 auto;}
-.cgdBadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
-.cgdBadge{font-size:10px;font-weight:950;border:1px solid rgba(30,40,70,.12);padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.9);}
-.cgdActions{margin-top:10px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
-.cgdMiniBtn{cursor:pointer;border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.92);border-radius:12px;padding:7px 10px;font-size:12px;font-weight:950;}
-.cgdMiniBtn.primary{background:rgba(120,210,255,.25);}
-.cgdMiniBtn.danger{background:rgba(255,80,120,.16);border-color:rgba(255,80,120,.30);}
-.cgdAlertBox{border:1px solid rgba(255,80,140,.35);border-radius:16px;padding:12px;background:linear-gradient(135deg, rgba(255,210,230,.75), rgba(220,240,255,.70));display:flex;align-items:center;justify-content:space-between;gap:10px;}
-.cgdAlertBox .txt{font-weight:950;font-size:12px;line-height:1.25;width:100%;}
-.cgdAlertBox .txt small{display:block;margin-top:4px;font-size:11px;color:rgba(18,26,40,.70);font-weight:900;}
-.cgdBottom{position:fixed;left:0;right:0;bottom:0;z-index:80;background:rgba(255,255,255,.76);backdrop-filter:blur(10px);border-top:1px solid rgba(30,40,70,.14);padding:10px 12px;display:flex;flex-direction:column;gap:10px;}
-.cgdQueueRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
-.cgdQueueChip{border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.9);border-radius:999px;padding:7px 10px;font-weight:950;font-size:12px;}
-.cgdStatusLine{font-size:11px;color:rgba(18,26,40,.60);font-weight:900;}
-.cgdOffline{display:none;}
-.cgdModalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.28);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;}
-.cgdModal{width:min(980px, 96vw);max-height:min(88vh, 900px);background:rgba(255,255,255,.94);border:1px solid rgba(30,40,70,.16);border-radius:20px;box-shadow:0 24px 70px rgba(20,30,60,.22);overflow:hidden;display:flex;flex-direction:column;}
-.cgdModalHead{padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid rgba(30,40,70,.12);background:rgba(255,255,255,.75);}
-.cgdModalTitle{font-weight:950;font-size:13px;}
-.cgdModalBody{padding:12px 14px;overflow:auto;min-height:0;}
-.cgdModalFoot{padding:12px 14px;border-top:1px solid rgba(30,40,70,.12);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;background:rgba(255,255,255,.75);}
-.cgdInput, .cgdSelect{border:1px solid rgba(30,40,70,.18);border-radius:12px;padding:10px 12px;font-weight:900;font-size:12px;background:rgba(255,255,255,.95);}
-.cgdRow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-.cgdTable{width:100%;border-collapse:collapse;overflow:hidden;border-radius:14px;border:1px solid rgba(30,40,70,.12);}
-.cgdTable th, .cgdTable td{padding:10px 10px;border-bottom:1px solid rgba(30,40,70,.10);font-size:12px;}
-.cgdTable th{text-align:left;font-weight:950;background:rgba(245,248,255,.8);}
-.cgdTable tr:last-child td{border-bottom:0;}
-#listWho.cgdWhoGrid{display:grid!important;grid-template-columns:1fr 1fr;gap:10px;}
-@media (max-width:1100px){#listWho.cgdWhoGrid{grid-template-columns:1fr;}}
-.bitrix-footer{position:fixed!important;left:0!important;right:0!important;bottom:0!important;top:auto!important;z-index:5!important;}
-body{padding-bottom:90px!important;}
-@media (max-width:1100px){.cgdGrid{grid-template-columns:1fr;}.cgdTopLeft{min-width:unset;}}
-    `;
-    st.id = "__cgd_css__";
+.cgdTop{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255,255,255,.72);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 12px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  box-shadow: var(--shadow);
+}
+.cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
+.cgdLogo{
+  width: 53px; height: 53px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,.10);
+  object-fit: cover;
+  background: #fff;
+}
+.cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
+.cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
+.cgdPill{
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.78);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+.cgdBtn{
+  cursor:pointer;
+  border: 1px solid rgba(30,40,70,.14);
+  background: rgba(255,255,255,.86);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 950;
+}
+.cgdBtn:active{ transform: translateY(1px); }
+
+.cgdGrid{
+  margin-top: 12px;
+  display:grid;
+  grid-template-columns: 1.05fr 1.95fr;
+  gap: 12px;
+}
+.cgdCol{
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.62);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  min-height: 68vh;
+  display:flex;
+  flex-direction: column;
+}
+.cgdColHead{
+  padding: 10px 12px;
+  background: rgba(255,255,255,.78);
+  border-bottom: 1px solid var(--border);
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cgdColHead .hTitle{
+  font-weight: 950;
+  font-size: 12px;
+  letter-spacing:.3px;
+  text-transform: uppercase;
+  line-height: 1.25;
+  width: 100%;
+}
+.cgdColHead .hSub{
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 800;
+  margin-top: 2px;
+  width: 100%;
+}
+.cgdColHead .hActions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+
+.cgdList{
+  padding: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow:auto;
+  min-height: 0;
+}
+.cgdCard{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card2);
+  box-shadow: 0 8px 20px rgba(20,30,60,.08);
+  padding: 10px 10px 10px;
+}
+.cgdCardRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap:10px;
+}
+.cgdLeadName{
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.2;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.cgdBadges{
+  display:flex;
+  gap:6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.cgdBadge{
+  font-size: 10px;
+  font-weight: 950;
+  border: 1px solid rgba(30,40,70,.12);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.9);
+}
+.cgdActions{
+  margin-top: 10px;
+  display:flex;
+  gap:8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.cgdMiniBtn{
+  cursor:pointer;
+  border: 1px solid rgba(30,40,70,.14);
+  background: rgba(255,255,255,.92);
+  border-radius: 12px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+.cgdMiniBtn.primary{ background: rgba(120,210,255,.25); }
+.cgdMiniBtn.danger{ background: rgba(255,80,120,.16); border-color: rgba(255,80,120,.30); }
+
+.cgdAlertBox{
+  border: 1px solid rgba(255,80,140,.35);
+  border-radius: 16px;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(255,210,230,.75), rgba(220,240,255,.70));
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cgdAlertBox .txt{
+  font-weight: 950;
+  font-size: 12px;
+  line-height: 1.25;
+  width: 100%;
+}
+.cgdAlertBox .txt small{
+  display:block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(18,26,40,.70);
+  font-weight: 900;
+}
+
+.cgdBottom{
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 80;
+  background: rgba(255,255,255,.76);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(30,40,70,.14);
+  padding: 10px 12px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cgdQueueChip{
+  border: 1px solid rgba(30,40,70,.14);
+  background: rgba(255,255,255,.9);
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-weight: 950;
+  font-size: 12px;
+}
+.cgdStatusLine{
+  font-size: 11px;
+  color: rgba(18,26,40,.60);
+  font-weight: 900;
+}
+
+/* ✅ QUEM PEGOU HOJE em 2 colunas */
+#listWho.cgdWhoGrid{
+  display:grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 1100px){
+  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
+}
+
+/* ===== Modals modernos (mantidos) ===== */
+.cgdModalOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 16px;
+}
+.cgdModal{
+  width: min(980px, 96vw);
+  max-height: min(88vh, 900px);
+  background: rgba(255,255,255,.94);
+  border: 1px solid rgba(30,40,70,.16);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(20,30,60,.22);
+  overflow:hidden;
+  display:flex;
+  flex-direction: column;
+}
+.cgdModalHead{
+  padding: 12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(30,40,70,.12);
+  background: rgba(255,255,255,.75);
+}
+.cgdModalTitle{ font-weight: 950; font-size: 13px; }
+.cgdModalBody{
+  padding: 12px 14px;
+  overflow: auto;
+  min-height: 0;
+}
+.cgdModalFoot{
+  padding: 12px 14px;
+  border-top: 1px solid rgba(30,40,70,.12);
+  display:flex;
+  gap: 10px;
+  justify-content:flex-end;
+  flex-wrap: wrap;
+  background: rgba(255,255,255,.75);
+}
+.cgdInput, .cgdSelect{
+  border: 1px solid rgba(30,40,70,.18);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 900;
+  font-size: 12px;
+  background: rgba(255,255,255,.95);
+}
+.cgdRow{
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+}
+.cgdTable{
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(30,40,70,.12);
+}
+.cgdTable th, .cgdTable td{
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(30,40,70,.10);
+  font-size: 12px;
+}
+.cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
+.cgdTable tr:last-child td{ border-bottom: 0; }
+
+/* Bitrix footer fix */
+.bitrix-footer{
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  z-index: 5 !important;
+}
+body{ padding-bottom: 90px !important; }
+
+@media (max-width: 1100px){
+  .cgdGrid{ grid-template-columns: 1fr; }
+  .cgdTopLeft{ min-width: unset; }
+}
+`;
+    const st = document.createElement("style");
+    st.textContent = css;
     document.head.appendChild(st);
   }
 
   // =========================
   // Modal system
   // =========================
-  function openModal(title, bodyHTML, footHTML){
+  function openModal(title, bodyHTML, footHTML, opts){
     closeModal();
     const ov = document.createElement("div");
     ov.className = "cgdModalOverlay";
+    const extraStyle = (opts && opts.modalWidthPx) ? `style="width:min(${opts.modalWidthPx}px,96vw)"` : "";
     ov.innerHTML = `
-      <div class="cgdModal" role="dialog" aria-modal="true">
+      <div class="cgdModal" role="dialog" aria-modal="true" ${extraStyle}>
         <div class="cgdModalHead">
           <div class="cgdModalTitle">${esc(title)}</div>
           <button class="cgdBtn" data-close-modal>Fechar</button>
@@ -355,12 +637,15 @@ body{padding-bottom:90px!important;}
     `;
     ov.addEventListener("click", (e)=>{
       if(e.target === ov) closeModal();
-      if(e.target.closest("[data-close-modal]")) closeModal();
+      const c = e.target.closest("[data-close-modal]");
+      if(c) closeModal();
     });
     document.body.appendChild(ov);
     document.addEventListener("keydown", escClose, {capture:true});
   }
-  function escClose(e){ if(e.key === "Escape") closeModal(); }
+  function escClose(e){
+    if(e.key === "Escape"){ closeModal(); }
+  }
   function closeModal(){
     const ov = $(".cgdModalOverlay");
     if(ov) ov.remove();
@@ -368,18 +653,21 @@ body{padding-bottom:90px!important;}
   }
 
   // =========================
-  // State (RAM)
+  // State (somente RAM)
   // =========================
   const state = {
     soundOn: true,
     lastNewLeadId: null,
-    newLeads: [],
-    pendingTotal: 0,
+
+    // pendentes (carrega tudo) + subset (render)
+    newLeadsAll: [],
+    newLeadsTotal: 0,
+    newLeadsShown: [],
+
     stats: { day:0, month:0 },
     userStats: {},
-    queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    leadStatusMap: {}, // STATUS_ID -> NAME
-    savingNext: false,
+
+    queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] }
   };
 
   // =========================
@@ -400,7 +688,6 @@ body{padding-bottom:90px!important;}
             <div class="cgdTitle">PAINEL DE LEADS • CGD CORRETORA</div>
           </div>
           <div class="cgdTopRight">
-            <div class="cgdPill" id="pillPending">Pendentes: 0</div>
             <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
             <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
             <button class="cgdBtn" id="btnGet">GET (Equipes)</button>
@@ -414,7 +701,7 @@ body{padding-bottom:90px!important;}
           <section class="cgdCol" id="colNew">
             <div class="cgdColHead">
               <div style="width:100%">
-                <div class="hTitle">NOVOS LEADS • PENDENTES</div>
+                <div class="hTitle">NOVOS LEADS • PENDENTES <span style="opacity:.7">(<span id="pendingTotal">0</span>)</span></div>
                 <div class="hSub">Somente status: <b>NOVO LEAD</b></div>
               </div>
               <div class="hActions">
@@ -456,9 +743,8 @@ body{padding-bottom:90px!important;}
 
         <div class="cgdBottom">
           <div class="cgdQueueRow" id="queueRow">
-            <div class="cgdQueueChip"><b>Fila de atendimento</b></div>
-            <button class="cgdBtn" id="btnQueue">FILA</button>
-            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em FILA e selecione quem entra.</div>
+            <button class="cgdQueueChip" id="btnQueueBottom"><b>Fila de atendimento</b></button>
+            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila de atendimento e selecione quem entra.</div>
           </div>
           <div class="cgdQueueRow">
             <button class="cgdBtn" id="btnQueueReset">Resetar</button>
@@ -471,124 +757,172 @@ body{padding-bottom:90px!important;}
   }
 
   // =========================
-  // Data fetch
+  // LEADS: fetch / actions
   // =========================
-  async function fetchLeadStatusMap(){
-    const list = await bxListAll("crm.status.list", { filter: { ENTITY_ID: "STATUS" } }, 500);
-    const map = {};
-    (list||[]).forEach(x=>{
-      if(x && x.STATUS_ID) map[String(x.STATUS_ID)] = String(x.NAME||x.STATUS_ID);
-    });
-    state.leadStatusMap = map;
-  }
-
-  async function fetchNewLeads(){
-    return await bxListAll("crm.lead.list", {
+  async function fetchNewLeadsAll(){
+    const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_PENDING_COUNT);
+    }, CONFIG.LIMIT_NEW_FETCH_MAX);
+    return items || [];
   }
 
-  async function fetchStats(){
+  // Contagem “Leads do dia/mês”: puxados (mudaram para EM ATENDIMENTO) no período
+  async function fetchStatsPulled(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
+    // aproximamos via DATE_MODIFY + STATUS_ID = EM_ATENDIMENTO
+    // (Bitrix não dá “data exata da mudança de etapa” via lead.list; essa é a forma estável que funciona no REST)
     const dayItems = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
+      filter: { ">DATE_MODIFY": startToday, "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 5000);
+    }, 2000);
 
     const monthItems = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      filter: { ">DATE_MODIFY": startMonth, "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 5000);
+    }, 6000);
 
     return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
 
-  async function fetchUserHistory(userId){
-    const startToday = todayISOStart();
-    const startMonth = monthISOStart();
+  async function fetchUserCounts(userId){
+    const inproc = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 5000);
 
+    const qual = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.QUALIFICADO },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 5000);
+
+    return { emAtendimento: (inproc||[]).length, qualificado: (qual||[]).length };
+  }
+
+  async function fetchUserHistory(userId){
+    const last = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID","TITLE","NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID", CONFIG.UF_DT_LEAD]
+    }, CONFIG.LIMIT_USER_HISTORY);
+
+    // puxados hoje: aproximado por DATE_MODIFY + status EM_ATENDIMENTO
     const today = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
+      filter: { "ASSIGNED_BY_ID": String(userId), ">DATE_MODIFY": todayISOStart(), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
     }, 5000);
 
     const month = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      filter: { "ASSIGNED_BY_ID": String(userId), ">DATE_MODIFY": monthISOStart(), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 5000);
+    }, 9000);
 
-    const last = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId) },
+    return { pulledToday: (today||[]).length, pulledMonth: (month||[]).length, last: (last||[]) };
+  }
+
+  async function searchLeadsByKeyword(userId, keyword){
+    const kw = String(keyword||"").trim();
+    if(!kw) return [];
+    // busca ampla: TITLE contém kw OR NAME contém kw (Bitrix não suporta OR fácil no lead.list; fazemos 2 buscas e unimos)
+    const a = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "%TITLE": kw },
       order: { DATE_MODIFY:"DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, CONFIG.LIMIT_USER_HISTORY);
+      select: ["ID","TITLE","NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID", CONFIG.UF_DT_LEAD]
+    }, CONFIG.LIMIT_USER_SEARCH);
 
-    return { pulledToday: today.length, pulledMonth: month.length, last };
+    const b = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "%NAME": kw },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID","TITLE","NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID", CONFIG.UF_DT_LEAD]
+    }, CONFIG.LIMIT_USER_SEARCH);
+
+    const map = new Map();
+    (a||[]).concat(b||[]).forEach(it=> map.set(String(it.ID), it));
+    return Array.from(map.values()).sort((x,y)=> (+y.ID) - (+x.ID));
   }
 
   async function leadUpdate(id, fields){
     return bx("crm.lead.update", { id: String(id), fields });
   }
 
+  async function leadGet(id){
+    return bx("crm.lead.get", { id: String(id) });
+  }
+
   async function actionPickLead(leadId, userId){
     await leadUpdate(leadId, { ASSIGNED_BY_ID: String(userId), STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO });
   }
+
+  async function actionPickLeadForFirstInQueue(leadId){
+    const q = await fetchQueue();
+    const order = (q.order||[]).slice();
+    if(order.length===0) throw new Error("Fila vazia");
+    const nextId = order.shift();
+    order.push(nextId); // volta pro final da fila
+    await actionPickLead(leadId, nextId);
+    await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+    await refreshQueue();
+  }
+
   async function actionDiscardLead(leadId){
     await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
   }
+
   async function actionMoveLead(leadId, statusId){
     const fields = { STATUS_ID: statusId };
+
     if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-      const lead = await bx("crm.lead.get", { id: String(leadId) });
-      const t = clean(lead?.TITLE);
+      const lead = await leadGet(leadId);
+      const nm = leadDisplayName(lead);
+      const t = String(lead.TITLE || nm || "").trim();
+
+      // marca 🔥 no TITLE (sem duplicar)
       if(t && !t.includes(CONFIG.HOT_EMOJI)){
         fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
       }
     }
+
     await leadUpdate(leadId, fields);
   }
 
   async function actionSetPrazo(leadId, iso){
     await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+  }
 
-    if(!CONFIG.FOLLOWUP_DEAL?.ENABLED) return;
+  // ✅ FOLLOW-UP: cria negócio na Pipeline 17, coluna da usuária
+  async function createFollowUpDealFromLead(leadId, userId, isoPrazo){
+    const stage = CONFIG.DEAL_PIPELINE17.STAGE_BY_USER[String(userId)];
+    if(!stage) throw new Error("Sem STAGE_ID para essa usuária (pipeline 17)");
 
-    const lead = await bx("crm.lead.get", { id: String(leadId) });
-    const assigned = clean(lead?.ASSIGNED_BY_ID);
-    const title = clean(lead?.TITLE) || `Lead #${leadId}`;
+    const lead = await leadGet(leadId);
+    const nm = leadDisplayName(lead);
+    const titleBase = nm || (lead.TITLE || `Lead #${leadId}`);
+    const dealTitle = `FOLLOW-UP • [LEAD #${leadId}] ${titleBase}`.slice(0, 250);
 
-    const stageByUser = CONFIG.FOLLOWUP_DEAL.STAGE_BY_USER || {};
-    const stage = stageByUser[assigned] || clean(CONFIG.FOLLOWUP_DEAL.DEFAULT_STAGE_ID);
-
-    const fields = {
-      TITLE: `FOLLOW-UP • ${title}`,
-      CATEGORY_ID: CONFIG.FOLLOWUP_DEAL.CATEGORY_ID,
-      ASSIGNED_BY_ID: assigned || undefined,
-      COMMENTS: `Criado via Painel CGD.\nLead ID: ${leadId}\nPrazo: ${iso}`
-    };
-    if(stage) fields.STAGE_ID = stage;
-
-    try{
-      await bx("crm.deal.add", { fields });
-    }catch(err){
-      try{
-        const f2 = { ...fields };
-        delete f2.STAGE_ID;
-        await bx("crm.deal.add", { fields: f2 });
-      }catch(_){}
-    }
+    // cria deal “card” na pipeline 17
+    await bx("crm.deal.add", {
+      fields: {
+        CATEGORY_ID: CONFIG.DEAL_PIPELINE17.CATEGORY_ID,
+        STAGE_ID: stage,
+        TITLE: dealTitle,
+        ASSIGNED_BY_ID: String(userId),
+        OPPORTUNITY: 0,
+        COMMENTS: isoPrazo ? `FOLLOW-UP: ${isoPrazo}` : `FOLLOW-UP criado pelo painel (Lead #${leadId}).`
+      }
+    });
   }
 
   // =========================
-  // Queue JSON via Deal
+  // Queue JSON via Pipeline 27
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -598,7 +932,7 @@ body{padding-bottom:90px!important;}
         "%TITLE": CONFIG.QUEUE.TITLE_KEY
       },
       order: { ID:"DESC" },
-      select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON]
+      select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
     }, 5);
 
     if(items && items[0]) return items[0];
@@ -611,17 +945,17 @@ body{padding-bottom:90px!important;}
         [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v:1, order:[], hiddenUsers:[], updatedAt: Date.now() })
       }
     });
+
     return bx("crm.deal.get", { id: String(id) });
   }
 
   function parseQueue(json){
     try{
       const o = JSON.parse(json || "{}");
-      return {
-        order: Array.isArray(o.order) ? o.order.map(String) : [],
-        hiddenUsers: Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [],
-        updatedAt: +o.updatedAt || 0
-      };
+      const order = Array.isArray(o.order) ? o.order.map(String) : [];
+      const hiddenUsers = Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [];
+      const updatedAt = +o.updatedAt || 0;
+      return { order, hiddenUsers, updatedAt };
     }catch(_){
       return { order:[], hiddenUsers:[], updatedAt:0 };
     }
@@ -629,7 +963,8 @@ body{padding-bottom:90px!important;}
 
   async function fetchQueue(){
     const deal = await ensureQueueDeal();
-    return { dealId: String(deal.ID), ...parseQueue(deal[CONFIG.QUEUE.UF_QUEUE_JSON]) };
+    const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
+    return { dealId: String(deal.ID), ...parseQueue(raw) };
   }
 
   async function saveQueue(dealId, payload){
@@ -649,32 +984,38 @@ body{padding-bottom:90px!important;}
   // Render helpers
   // =========================
   function leadDisplayName(it){
-    const t = clean(it?.TITLE);
+    // prioridade: NAME + LAST_NAME (cliente) -> TITLE -> fallback
+    const n = [it.NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
+    if(n) return n;
+    const t = String(it.TITLE||"").trim();
     if(t) return t;
-    const parts = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String);
-    return parts.join(" ").trim() || `Lead #${it.ID}`;
+    return `Lead #${it.ID}`;
   }
 
-  function getUF(it, uf){ return clean(it?.[uf]); }
+  function getUF(it, key){
+    return it ? it[key] : null;
+  }
 
   function badgesFromLead(it){
     const b = [];
-    const oper = getUF(it, CONFIG.UF_OPERADORA);
-    const idade= getUF(it, CONFIG.UF_IDADE);
-    const bairro=getUF(it, CONFIG.UF_BAIRRO);
-    const fonte =getUF(it, CONFIG.UF_FONTE);
-    const dtLead=getUF(it, CONFIG.UF_DT_LEAD);
+    const op = getUF(it, CONFIG.UF_OPERADORA);
+    const idade = getUF(it, CONFIG.UF_IDADE);
+    const bairro = getUF(it, CONFIG.UF_BAIRRO);
+    const fonte = getUF(it, CONFIG.UF_FONTE_TXT);
 
-    if(oper)  b.push(["OPERADORA", oper]);
+    const dt = parseLeadDateAny(getUF(it, CONFIG.UF_DT_LEAD));
+    const dtTxt = dt ? formatBRDate(dt) : (getUF(it, CONFIG.UF_DT_LEAD) ? String(getUF(it, CONFIG.UF_DT_LEAD)) : "");
+
+    if(op) b.push(["OPERADORA", op]);
     if(idade) b.push(["IDADE", idade]);
-    if(bairro)b.push(["BAIRRO", bairro]);
+    if(bairro) b.push(["BAIRRO", bairro]);
     if(fonte) b.push(["FONTE", fonte]);
-    if(dtLead)b.push(["LEAD", fmtDT(dtLead)]);
+    if(dtTxt) b.push(["DT LEAD", dtTxt]);
 
-    const st = clean(it.STATUS_ID);
-    if(st){
-      b.push(["STAGE", state.leadStatusMap[st] || st]);
-    }
+    // status bonito
+    const st = String(it.STATUS_ID||"");
+    if(st) b.push(["STAGE", (CONFIG.LEAD_STATUS_NAME[st]||st)]);
+
     return b.slice(0, 8);
   }
 
@@ -684,13 +1025,19 @@ body{padding-bottom:90px!important;}
 
     const alert = $("#alertNew");
     const btnSoundOn = $("#btnSoundOn");
-
     list.innerHTML = "";
+
     if(alert) list.appendChild(alert);
+
+    const totalEl = $("#pendingTotal");
+    if(totalEl) totalEl.textContent = String(state.newLeadsTotal||0);
 
     const has = (items||[]).length > 0;
     if(alert) alert.style.display = has ? "flex" : "none";
-    if(btnSoundOn) btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
+
+    if(btnSoundOn){
+      btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
+    }
 
     if(!has){
       const empty = document.createElement("div");
@@ -701,12 +1048,13 @@ body{padding-bottom:90px!important;}
       return;
     }
 
-    const render = items.slice(0, CONFIG.LIMIT_NEW_RENDER);
-
-    render.forEach(it=>{
+    (items||[]).forEach(it=>{
       const id = String(it.ID||"");
       const title = leadDisplayName(it);
-      const badges = badgesFromLead(it).map(([k,v])=> `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`).join("");
+
+      const badges = badgesFromLead(it).map(([k,v]) =>
+        `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`
+      ).join("");
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -725,16 +1073,17 @@ body{padding-bottom:90px!important;}
     });
   }
 
-  function renderStats(){
-    $("#pillPending").textContent = `Pendentes: ${state.pendingTotal||0}`;
-    $("#pillDay").textContent = `Leads do dia: ${state.stats.day||0}`;
-    $("#pillMonth").textContent = `Leads do mês: ${state.stats.month||0}`;
+  function renderStats(stats){
+    $("#pillDay").textContent = `Leads do dia: ${stats.day||0}`;
+    $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
   }
 
   function computeUserOrder(){
     const users = CONFIG.USERS.slice();
+
     const queueSet = new Set((state.queue.order||[]).map(String));
     const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
+
     const visible = users.filter(u => !hiddenSet.has(String(u.id)));
 
     function lastTs(u){
@@ -760,10 +1109,11 @@ body{padding-bottom:90px!important;}
     list.innerHTML = "";
 
     const ordered = computeUserOrder();
+
     ordered.forEach(u=>{
       const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, last:[] };
-      const last1 = us.last?.[0] ? `Último: ${us.last[0].TITLE || ("#"+us.last[0].ID)}` : "Último: —";
-      const last2 = us.last?.[1] ? `Anterior: ${us.last[1].TITLE || ("#"+us.last[1].ID)}` : "Anterior: —";
+      const l0 = us.last && us.last[0] ? leadDisplayName(us.last[0]) : "—";
+      const l1 = us.last && us.last[1] ? leadDisplayName(us.last[1]) : "—";
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -771,16 +1121,24 @@ body{padding-bottom:90px!important;}
         <div class="cgdCardRow">
           <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
           <div style="display:flex; gap:8px; align-items:center">
-            <span class="cgdBadge">hoje: ${esc(us.pulledToday||0)}</span>
+            <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
             <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
             <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
           </div>
         </div>
-        <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.85">${esc(last1)}</div>
-        <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.75">${esc(last2)}</div>
+        <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.85">Último: ${esc(l0)}</div>
+        <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.75">Anterior: ${esc(l1)}</div>
       `;
       list.appendChild(card);
     });
+
+    if(ordered.length===0){
+      const empty = document.createElement("div");
+      empty.style.opacity=".75";
+      empty.style.fontWeight="900";
+      empty.textContent="Nenhuma usuária para mostrar (todas ocultas).";
+      list.appendChild(empty);
+    }
   }
 
   function renderQueue(){
@@ -788,15 +1146,13 @@ body{padding-bottom:90px!important;}
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
-    const keepTitle = row.firstElementChild;
-    const keepBtn = $("#btnQueue");
+    const keepBtn = $("#btnQueueBottom");
     row.innerHTML = "";
-    if(keepTitle) row.appendChild(keepTitle);
     if(keepBtn) row.appendChild(keepBtn);
 
     const order = state.queue.order || [];
-    if(order.length===0){
-      hint.textContent = "Fila vazia. Clique em FILA e selecione quem entra.";
+    if(order.length === 0){
+      hint.textContent = "Fila vazia. Clique em Fila de atendimento e selecione quem entra.";
       row.appendChild(hint);
       return;
     }
@@ -822,187 +1178,230 @@ body{padding-bottom:90px!important;}
   // Modals
   // =========================
   function modalGetEquipes(){
+    const links = (CONFIG.GET_LINKS||[]).map(l=>{
+      const url = String(l.url||"").trim();
+      if(!url) return "";
+      return `<div class="cgdRow" style="margin:6px 0">
+        <a href="${esc(url)}" target="_blank" rel="noopener" class="cgdBtn" style="text-decoration:none;display:inline-block">${esc(l.label||url)}</a>
+      </div>`;
+    }).join("") || `<div style="font-weight:900;opacity:.75">Configure as URLs em CONFIG.GET_LINKS.</div>`;
+
     openModal("GET (Equipes)", `
-      <div style="font-weight:900; opacity:.8; margin-bottom:10px">
-        GET (Equipes) — (atalhos/regras podem ser colocados aqui depois).
-      </div>
-      <div class="cgdRow">
-        <button class="cgdBtn" data-close-modal>Ok</button>
-      </div>
+      <div style="font-weight:900;opacity:.8;margin-bottom:10px">Acessos rápidos</div>
+      ${links}
     `);
   }
 
   async function modalQueue(){
-    let q;
-    try{ q = await fetchQueue(); }catch(_){
-      return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
-    }
+    const q = await fetchQueue();
+
     state.queue = { ...state.queue, ...q };
 
     const currentSet = new Set((q.order||[]).map(String));
+
     const body = `
       <div style="font-weight:950; margin-bottom:10px">Gerenciar fila (sincroniza em todos os PCs)</div>
+
       <div class="cgdRow" style="margin-bottom:12px">
         <button class="cgdBtn" id="qAll">Selecionar todas</button>
         <button class="cgdBtn" id="qNone">Limpar</button>
         <button class="cgdBtn" id="qApply">Aplicar alterações</button>
       </div>
+
+      <div style="font-weight:950;margin-bottom:8px">Ordem da fila</div>
+      <table class="cgdTable" style="margin-bottom:12px">
+        <thead><tr><th style="width:80px">#</th><th>Usuária</th><th style="width:140px">Mover</th></tr></thead>
+        <tbody id="qOrderTbody">
+          ${(q.order||[]).map((id, idx)=>{
+            const u = CONFIG.USERS.find(x=>String(x.id)===String(id));
+            return `<tr data-qord="${esc(id)}">
+              <td><b>${esc(idx+1)}</b></td>
+              <td><b>${esc(u?u.name:("USER "+id))}</b> <span style="opacity:.65;font-weight:900">(${esc(id)})</span></td>
+              <td>
+                <button class="cgdBtn" data-up="${esc(id)}">↑</button>
+                <button class="cgdBtn" data-down="${esc(id)}">↓</button>
+              </td>
+            </tr>`;
+          }).join("") || `<tr><td colspan="3" style="opacity:.75;font-weight:900">Fila vazia.</td></tr>`}
+        </tbody>
+      </table>
+
+      <div style="font-weight:950;margin-bottom:8px">Quem entra na fila</div>
       <table class="cgdTable">
-        <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
-        <tbody>
+        <thead><tr><th style="width:90px">Na fila</th><th>Usuária</th></tr></thead>
+        <tbody id="qTbody">
           ${CONFIG.USERS.map(u=>{
             const checked = currentSet.has(String(u.id)) ? "checked" : "";
             return `<tr>
-              <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
+              <td><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
               <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
             </tr>`;
           }).join("")}
         </tbody>
       </table>
-    `;
-    openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
-    $("#qAll")?.addEventListener("click", ()=> $$('input[type=checkbox][data-q-user]').forEach(ch=> ch.checked=true));
-    $("#qNone")?.addEventListener("click", ()=> $$('input[type=checkbox][data-q-user]').forEach(ch=> ch.checked=false));
+      <div style="margin-top:10px;font-size:11px;font-weight:900;opacity:.7">
+        Atualizado: ${q.updatedAt ? new Date(q.updatedAt).toLocaleString("pt-BR") : "—"}
+      </div>
+    `;
+
+    openModal("FILA DE ATENDIMENTO", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`, { modalWidthPx: 1100 });
+
+    const moveInOrder = async (id, dir)=>{
+      const ord = (state.queue.order||[]).slice();
+      const i = ord.findIndex(x=>String(x)===String(id));
+      if(i<0) return;
+      const j = i + dir;
+      if(j<0 || j>=ord.length) return;
+      const tmp = ord[i]; ord[i]=ord[j]; ord[j]=tmp;
+      await saveQueue(state.queue.dealId, { order: ord, hiddenUsers: state.queue.hiddenUsers||[] });
+      const fresh = await fetchQueue();
+      state.queue = { ...state.queue, ...fresh };
+      renderQueue();
+      renderWho();
+      closeModal();
+      await modalQueue();
+    };
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const up = e.target.closest("[data-up]");
+      const dn = e.target.closest("[data-down]");
+      if(up) return moveInOrder(up.getAttribute("data-up"), -1);
+      if(dn) return moveInOrder(dn.getAttribute("data-down"), +1);
+    });
+
+    $("#qAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
+    });
+    $("#qNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = false);
+    });
 
     $("#qApply")?.addEventListener("click", async ()=>{
-      const btn = $("#qApply");
       try{
-        btn.disabled = true;
-        const checked = $$('input[type=checkbox][data-q-user]').filter(ch=>ch.checked).map(ch=> String(ch.getAttribute("data-q-user")));
+        $("#qApply").disabled = true;
+
+        const checked = $$('input[type=checkbox][data-q-user]')
+          .filter(ch=>ch.checked)
+          .map(ch=> String(ch.getAttribute("data-q-user")));
+
         const prev = (q.order||[]).map(String);
         const next = [];
         for(const id of prev){ if(checked.includes(id)) next.push(id); }
         for(const id of checked){ if(!next.includes(id)) next.push(id); }
+
         await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+
         const fresh = await fetchQueue();
         state.queue = { ...state.queue, ...fresh };
-        renderQueue(); renderWho();
+        renderQueue();
+        renderWho();
+        setStatus(`Atualizado: ${nowBRTime()}`);
+        closeModal();
+        await modalQueue();
       }catch(err){
         console.error(err);
+        alert("Falha ao salvar fila agora.");
       }finally{
-        btn.disabled = false;
+        $("#qApply").disabled = false;
       }
     });
   }
 
   async function modalHideUsers(){
-    let q;
-    try{ q = await fetchQueue(); }catch(_){
-      return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
-    }
+    const q = await fetchQueue();
     const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
 
     const body = `
-      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards (sincroniza em todos os PCs)</div>
+      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
+
       <div class="cgdRow" style="margin-bottom:12px">
         <button class="cgdBtn" id="huNone">Mostrar todas</button>
         <button class="cgdBtn" id="huApply">Aplicar</button>
       </div>
+
       <table class="cgdTable">
-        <thead><tr><th>Oculta</th><th>Usuária</th></tr></thead>
+        <thead><tr><th style="width:90px">Oculta</th><th>Usuária</th></tr></thead>
         <tbody>
           ${CONFIG.USERS.map(u=>{
             const checked = hiddenSet.has(String(u.id)) ? "checked" : "";
             return `<tr>
-              <td style="width:90px"><input type="checkbox" data-hu-user="${esc(u.id)}" ${checked} /></td>
+              <td><input type="checkbox" data-hu-user="${esc(u.id)}" ${checked} /></td>
               <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
             </tr>`;
           }).join("")}
         </tbody>
       </table>
     `;
+
     openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
-    $("#huNone")?.addEventListener("click", ()=> $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked=false));
+    $("#huNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
+    });
 
     $("#huApply")?.addEventListener("click", async ()=>{
-      const btn = $("#huApply");
       try{
-        btn.disabled = true;
-        const hidden = $$('input[type=checkbox][data-hu-user]').filter(ch=>ch.checked).map(ch=> String(ch.getAttribute("data-hu-user")));
+        $("#huApply").disabled = true;
+        const hidden = $$('input[type=checkbox][data-hu-user]')
+          .filter(ch=> ch.checked)
+          .map(ch=> String(ch.getAttribute("data-hu-user")));
+
         await saveQueue(q.dealId, { order: q.order||[], hiddenUsers: hidden });
+
         const fresh = await fetchQueue();
         state.queue = { ...state.queue, ...fresh };
-        renderQueue(); renderWho();
+        renderQueue();
+        renderWho();
+        setStatus(`Atualizado: ${nowBRTime()}`);
       }catch(err){
         console.error(err);
+        alert("Falha ao salvar agora.");
       }finally{
-        btn.disabled = false;
-      }
-    });
-  }
-
-  async function modalPickLead(leadId){
-    const firstId = state.queue.order?.[0] ? String(state.queue.order[0]) : "";
-    const firstName = firstId ? (CONFIG.USERS.find(x=>String(x.id)===firstId)?.name || ("USER "+firstId)) : "";
-
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Como você quer pegar este lead?</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <button class="cgdBtn" id="pickFirst" ${firstId ? "" : "disabled"}>Pegar p/ 1ª da fila ${firstId ? `(${esc(firstName)})` : ""}</button>
-      </div>
-      <div style="margin:10px 0; font-weight:900; opacity:.65">ou</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Selecionar usuária:</label>
-        <select class="cgdSelect" id="pickUser">${uops}</select>
-        <button class="cgdBtn" id="pickGo">Confirmar</button>
-      </div>
-    `;
-    openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
-
-    $("#pickFirst")?.addEventListener("click", async ()=>{
-      const btn = $("#pickFirst");
-      try{
-        if(!firstId) return;
-        btn.disabled = true;
-
-        await actionPickLead(leadId, firstId);
-
-        const q = await fetchQueue();
-        const order = (q.order||[]).slice();
-        const moved = order.shift();
-        if(moved) order.push(moved);
-        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
-
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-      }finally{
-        btn.disabled = false;
-      }
-    });
-
-    $("#pickGo")?.addEventListener("click", async ()=>{
-      const btn = $("#pickGo");
-      try{
-        btn.disabled = true;
-        const uid = $("#pickUser").value;
-        await actionPickLead(leadId, uid);
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-      }finally{
-        btn.disabled = false;
+        $("#huApply").disabled = false;
       }
     });
   }
 
   async function modalBatchTransfer(){
-    const items = state.newLeads || [];
-    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    // usa a lista COMPLETA (state.newLeadsAll), não só a exibida
+    const all = (state.newLeadsAll || []).slice();
+
+    // valores de operadora (distinct)
+    const ops = Array.from(new Set(all.map(it => String(getUF(it, CONFIG.UF_OPERADORA)||"").trim()).filter(Boolean))).sort();
+    const opsOptions = [`<option value="">Todas</option>`].concat(ops.map(o=> `<option value="${esc(o)}">${esc(o)}</option>`)).join("");
+
+    const usersOpt = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
 
     const body = `
-      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote (carrega TODOS os pendentes)</div>
+
       <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Operadora:</label>
+        <select class="cgdSelect" id="btOp">${opsOptions}</select>
+
+        <label style="font-weight:950">Dia (Data do Lead):</label>
+        <input class="cgdInput" type="date" id="btDay" />
+
         <label style="font-weight:950">Transferir para:</label>
-        <select class="cgdSelect" id="btUser">${ops}</select>
+        <select class="cgdSelect" id="btUser">${usersOpt}</select>
+
+        <button class="cgdBtn" id="btApply">Filtrar</button>
       </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Pendentes: <b>${esc(all.length)}</b></div>
+        <div class="cgdBadge">Mostrando: <b id="btCount">${esc(all.length)}</b></div>
+      </div>
+
       <table class="cgdTable">
-        <thead><tr><th style="width:90px">Sel.</th><th>Lead</th><th>Info</th></tr></thead>
+        <thead>
+          <tr>
+            <th style="width:70px">Sel.</th>
+            <th>Lead</th>
+            <th style="width:330px">Info</th>
+          </tr>
+        </thead>
         <tbody id="btTbody"></tbody>
       </table>
     `;
@@ -1010,178 +1409,462 @@ body{padding-bottom:90px!important;}
     openModal("TRANSFERIR EM LOTE", body, `
       <button class="cgdBtn" data-close-modal>Cancelar</button>
       <button class="cgdBtn" id="btDo">Transferir selecionados</button>
-    `);
+    `, { modalWidthPx: 1200 });
 
     const tbody = $("#btTbody");
-    const render = items.slice(0, 500);
-    tbody.innerHTML = render.length ? render.map(it=>{
-      const info = badgesFromLead(it).slice(0,5).map(([k,v])=> `${k}: ${v}`).join(" • ");
+    const countEl = $("#btCount");
+
+    function infoCol(it){
+      const op = getUF(it, CONFIG.UF_OPERADORA) || "—";
+      const idade = getUF(it, CONFIG.UF_IDADE) || "—";
+      const bairro = getUF(it, CONFIG.UF_BAIRRO) || "—";
+      const fonte = getUF(it, CONFIG.UF_FONTE_TXT) || "—";
+      const dt = parseLeadDateAny(getUF(it, CONFIG.UF_DT_LEAD));
+      const dtTxt = dt ? formatBRDate(dt) : (getUF(it, CONFIG.UF_DT_LEAD) ? String(getUF(it, CONFIG.UF_DT_LEAD)) : "—");
       return `
+        <div class="cgdBadges" style="margin-top:0">
+          <span class="cgdBadge">OPERADORA: ${esc(op)}</span>
+          <span class="cgdBadge">IDADE: ${esc(idade)}</span>
+          <span class="cgdBadge">BAIRRO: ${esc(bairro)}</span>
+          <span class="cgdBadge">FONTE: ${esc(fonte)}</span>
+          <span class="cgdBadge">DT LEAD: ${esc(dtTxt)}</span>
+        </div>
+      `;
+    }
+
+    function draw(list){
+      countEl.textContent = String(list.length);
+      tbody.innerHTML = list.length ? list.map(it=>`
         <tr>
           <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
-          <td><b>${esc(leadDisplayName(it))}</b> <span style="opacity:.65;font-weight:900">ID: ${esc(it.ID)}</span></td>
-          <td style="opacity:.85;font-weight:900">${esc(info)}</td>
+          <td>
+            <b>${esc(leadDisplayName(it))}</b>
+            <div style="opacity:.65;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STAGE: ${esc(CONFIG.LEAD_STATUS_NAME[String(it.STATUS_ID||"")]||String(it.STATUS_ID||"—"))}</div>
+          </td>
+          <td>${infoCol(it)}</td>
         </tr>
-      `;
-    }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+      `).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    function applyFilter(){
+      const op = String($("#btOp")?.value||"").trim();
+      const day = String($("#btDay")?.value||"").trim(); // yyyy-mm-dd
+      let list = all;
+
+      if(op){
+        list = list.filter(it => String(getUF(it, CONFIG.UF_OPERADORA)||"").trim() === op);
+      }
+      if(day){
+        list = list.filter(it=>{
+          const dt = parseLeadDateAny(getUF(it, CONFIG.UF_DT_LEAD));
+          return dt ? dayKey(dt) === day : false;
+        });
+      }
+      draw(list);
+    }
+
+    draw(all);
+
+    $("#btApply")?.addEventListener("click", applyFilter);
 
     $("#btDo")?.addEventListener("click", async ()=>{
-      const btn = $("#btDo");
       const toId = $("#btUser").value;
-      const ids = $$("input[type=checkbox][data-bt-id]", tbody).filter(x=>x.checked).map(x=> x.getAttribute("data-bt-id"));
-      if(!ids.length) return;
+      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
+        .filter(x=>x.checked)
+        .map(x=> x.getAttribute("data-bt-id"));
+
+      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
       try{
-        btn.disabled = true;
+        $("#btDo").disabled = true;
         for(const id of ids){
           await actionPickLead(id, toId);
           await sleep(120);
         }
         closeModal();
         await hardRefreshAll();
+        alert("Transferência concluída ✅");
       }catch(err){
         console.error(err);
+        alert("Falha ao transferir agora.");
       }finally{
-        btn.disabled = false;
+        $("#btDo").disabled = false;
       }
     });
   }
 
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    openModal("PEGAR LEAD", `
+      <div style="font-weight:950;margin-bottom:10px">Escolha como pegar este lead</div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <button class="cgdBtn" id="pickQueue">Pegar p/ próxima da fila</button>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div style="font-weight:950;margin-bottom:8px">Ou selecionar usuária:</div>
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Usuária:</label>
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+        <button class="cgdBtn" id="pickGo">Confirmar</button>
+      </div>
+
+      <div style="font-size:11px;font-weight:900;opacity:.75">
+        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+      </div>
+    `);
+
+    $("#pickQueue")?.addEventListener("click", async ()=>{
+      try{
+        $("#pickQueue").disabled = true;
+        await actionPickLeadForFirstInQueue(leadId);
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Fila vazia ou falha ao pegar pela fila.");
+      }finally{
+        $("#pickQueue").disabled = false;
+      }
+    });
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      try{
+        const uid = $("#pickUser").value;
+        $("#pickGo").disabled = true;
+        await actionPickLead(leadId, uid);
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Falha ao pegar agora.");
+      }finally{
+        $("#pickGo").disabled = false;
+      }
+    });
+  }
+
+  // ✅ Modal ABRIR (busca + filtro por stage + contagens + follow-up que cria negócio na pipeline 17)
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
-    let hist = { pulledToday:0, pulledMonth:0, last:[] };
-    try{ hist = await fetchUserHistory(u.id); }catch(_){}
+    // sempre vem do Bitrix (multi-PC, sem storage)
+    const [hist, counts] = await Promise.all([fetchUserHistory(u.id), fetchUserCounts(u.id)]);
 
-    const rows = (hist.last||[]).map(it=>{
-      const id = String(it.ID);
-      const title = clean(it.TITLE) || `Lead #${id}`;
-      const stId = clean(it.STATUS_ID);
-      const stName = state.leadStatusMap[stId] || stId || "—";
-      const dm = fmtDT(it.DATE_MODIFY);
-
-      return `<tr>
-        <td>
-          <b>${esc(title)}</b>
-          <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")}</div>
-        </td>
-        <td><span class="cgdBadge">${esc(stName)}</span></td>
-        <td>
-          <div class="cgdRow">
-            <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
-            <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
-          </div>
-        </td>
-        <td>
-          <div class="cgdRow">
-            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">QUALIFICADO (🔥)</button>
-            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">CONVERTIDO</button>
-            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">PERDIDO</button>
-          </div>
-        </td>
-      </tr>`;
-    }).join("") || `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-
-    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, `
-      <div class="cgdRow" style="justify-content:space-between;margin-bottom:10px">
-        <div style="font-weight:950">FOLLOW-UP + Mover</div>
+    const body = `
+      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
+        <div style="font-weight:950">GERENCIAR • ${esc(u.name)} (${esc(u.id)})</div>
         <button class="cgdBtn" id="muRefresh">Atualizar</button>
       </div>
+
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Atendidos hoje: <b>${esc(hist.pulledToday||0)}</b></div>
-        <div class="cgdBadge">Atendidos mês: <b>${esc(hist.pulledMonth||0)}</b></div>
-        <div class="cgdBadge">Últimos: <b>${esc((hist.last||[]).length)}</b></div>
+        <div class="cgdBadge">EM ATENDIMENTO: <b>${esc(counts.emAtendimento||0)}</b></div>
+        <div class="cgdBadge">QUALIFICADO: <b>${esc(counts.qualificado||0)}</b></div>
+        <div class="cgdBadge">puxados hoje: <b>${esc(hist.pulledToday||0)}</b></div>
+        <div class="cgdBadge">puxados mês: <b>${esc(hist.pulledMonth||0)}</b></div>
       </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" id="muSearch" placeholder="Buscar por palavra-chave…" style="min-width:260px" />
+        <button class="cgdBtn" id="muSearchGo">Buscar no Bitrix</button>
+
+        <select class="cgdSelect" id="muFilter">
+          <option value="ALL">Todos</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Somente EM ATENDIMENTO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Somente QUALIFICADOS</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Somente PERDIDOS</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Somente CONVERTIDOS</option>
+        </select>
+
+        <button class="cgdBtn" id="muAll">Marcar todos</button>
+        <button class="cgdBtn" id="muNone">Desmarcar</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" type="datetime-local" id="muBulkDate" />
+        <button class="cgdBtn" id="muBulkPrazo">FOLLOW-UP em lote</button>
+
+        <select class="cgdSelect" id="muMoveTo">
+          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Mover p/ PERDIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
+        </select>
+        <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
+      </div>
+
       <table class="cgdTable">
-        <thead><tr><th>Lead</th><th>Stage</th><th>FOLLOW-UP</th><th>Mover</th></tr></thead>
-        <tbody>${rows}</tbody>
+        <thead>
+          <tr>
+            <th style="width:70px">Sel.</th>
+            <th>Lead</th>
+            <th style="width:220px">Stage</th>
+            <th style="width:370px">FOLLOW-UP</th>
+            <th style="width:360px">Transferir</th>
+          </tr>
+        </thead>
+        <tbody id="muTbody"></tbody>
       </table>
-    `);
+    `;
+
+    openModal(`ABRIR • ${u.name} (${u.id})`, body, undefined, { modalWidthPx: 1200 });
+
+    let listBase = (hist.last||[]).slice();
+
+    const tbody = $("#muTbody");
+    const filter = $("#muFilter");
+    const search = $("#muSearch");
+
+    function stageName(id){
+      return CONFIG.LEAD_STATUS_NAME[String(id||"")] || String(id||"—");
+    }
+
+    function renderRows(){
+      const q = (search.value||"").trim().toLowerCase();
+      const f = (filter.value||"ALL");
+
+      const list = listBase.filter(it=>{
+        const nm = leadDisplayName(it).toLowerCase();
+        if(q && !nm.includes(q)) return false;
+        if(f!=="ALL" && String(it.STATUS_ID) !== String(f)) return false;
+        return true;
+      });
+
+      const userOptions = CONFIG.USERS
+        .filter(x=> String(x.id)!==String(u.id))
+        .map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`)
+        .join("");
+
+      tbody.innerHTML = list.length ? list.map(it=>{
+        const id = String(it.ID);
+        const nm = leadDisplayName(it);
+        const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
+        const st = String(it.STATUS_ID||"—");
+
+        return `<tr data-row="${esc(id)}">
+          <td><input type="checkbox" data-sel="${esc(id)}" /></td>
+          <td>
+            <b>${esc(nm)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")}</div>
+          </td>
+          <td><span class="cgdBadge">${esc(stageName(st))}</span></td>
+          <td>
+            <div class="cgdRow">
+              <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+              <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+            </div>
+            <div style="opacity:.65;font-weight:900;font-size:11px;margin-top:6px">
+              Salvar cria <b>NEGÓCIO</b> na Pipeline 17 (coluna da usuária) + grava prazo no lead.
+            </div>
+          </td>
+          <td>
+            <div class="cgdRow">
+              <select class="cgdSelect" data-move-to="${esc(id)}">${userOptions}</select>
+              <button class="cgdBtn" data-do-transfer="${esc(id)}">Transferir</button>
+              <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificar 🔥</button>
+              <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perder</button>
+              <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Converter</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="5" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    renderRows();
 
     $("#muRefresh")?.addEventListener("click", async ()=>{
       closeModal();
       await modalManageUser(userId);
     });
 
+    $("#muAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
+    });
+    $("#muNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false);
+    });
+
+    function selectedIds(){
+      return $$('input[type=checkbox][data-sel]')
+        .filter(ch=> ch.checked)
+        .map(ch=> ch.getAttribute("data-sel"));
+    }
+
+    // buscar no Bitrix (carrega mais, outros dias)
+    $("#muSearchGo")?.addEventListener("click", async ()=>{
+      const kw = ($("#muSearch").value||"").trim();
+      if(!kw) return;
+      try{
+        $("#muSearchGo").disabled = true;
+        const found = await searchLeadsByKeyword(u.id, kw);
+        // junta com base atual e reordena por ID desc
+        const map = new Map();
+        listBase.forEach(it=> map.set(String(it.ID), it));
+        (found||[]).forEach(it=> map.set(String(it.ID), it));
+        listBase = Array.from(map.values()).sort((a,b)=> (+b.ID)-(+a.ID));
+        renderRows();
+      }catch(err){
+        console.error(err);
+        alert("Falha ao buscar agora.");
+      }finally{
+        $("#muSearchGo").disabled = false;
+      }
+    });
+
+    search?.addEventListener("input", renderRows);
+    filter?.addEventListener("change", renderRows);
+
+    // lote follow-up
+    $("#muBulkPrazo")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
+      if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
+      try{
+        $("#muBulkPrazo").disabled = true;
+        for(const id of ids){
+          await actionSetPrazo(id, iso);
+          await createFollowUpDealFromLead(id, u.id, iso);
+          await sleep(140);
+        }
+        closeModal();
+        await hardRefreshAll();
+        alert("FOLLOW-UP em lote criado ✅");
+      }catch(err){
+        console.error(err);
+        alert("Falha ao salvar FOLLOW-UP agora.");
+      }finally{
+        $("#muBulkPrazo").disabled = false;
+      }
+    });
+
+    // lote mover stage
+    $("#muBulkMove")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const to = $("#muMoveTo")?.value;
+      if(!to) return;
+      try{
+        $("#muBulkMove").disabled = true;
+        for(const id of ids){
+          await actionMoveLead(id, to);
+          await sleep(140);
+        }
+        closeModal();
+        await hardRefreshAll();
+        alert("Movimento em lote concluído ✅");
+      }catch(err){
+        console.error(err);
+        alert("Falha ao mover agora.");
+      }finally{
+        $("#muBulkMove").disabled = false;
+      }
+    });
+
+    // ações individuais (delegação)
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
       const sp = e.target.closest("[data-save-prazo]");
-      const mv = e.target.closest("[data-move]");
+      const tf = e.target.closest("[data-do-transfer]");
+      const mv = e.target.closest("[data-move-stage]");
+
       try{
         if(sp){
           const leadId = sp.getAttribute("data-save-prazo");
           const inp = $(`input[data-prazo="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
           const iso = isoFromLocalInput(inp?.value || "");
-          if(!iso) return;
+          if(!iso) return alert("Preencha data/hora corretamente.");
           sp.disabled = true;
+
+          // salva UF prazo + cria deal na pipeline 17
           await actionSetPrazo(leadId, iso);
+          await createFollowUpDealFromLead(leadId, u.id, iso);
+
+          closeModal();
           await hardRefreshAll();
+          alert("FOLLOW-UP criado ✅");
         }
+
+        if(tf){
+          const leadId = tf.getAttribute("data-do-transfer");
+          const sel = $(`select[data-move-to="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
+          const toId = sel?.value;
+          if(!toId) return;
+          tf.disabled = true;
+          await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toId) });
+          closeModal();
+          await hardRefreshAll();
+          alert("Transferido ✅");
+        }
+
         if(mv){
-          const leadId = mv.getAttribute("data-move");
+          const leadId = mv.getAttribute("data-move-stage");
           const to = mv.getAttribute("data-to");
           mv.disabled = true;
           await actionMoveLead(leadId, to);
+          closeModal();
           await hardRefreshAll();
         }
       }catch(err){
         console.error(err);
+        alert("Falha ao executar agora.");
       }finally{
         if(sp) sp.disabled = false;
+        if(tf) tf.disabled = false;
         if(mv) mv.disabled = false;
       }
     });
   }
 
   // =========================
-  // Refresh
+  // Refresh orchestration
   // =========================
   async function refreshNewLeads(){
-    try{
-      const all = await fetchNewLeads();
-      state.pendingTotal = all.length;
-      state.newLeads = all;
+    const itemsAll = await fetchNewLeadsAll();
 
-      const newest = all?.[0]?.ID ? String(all[0].ID) : null;
-      if(all.length>0 && state.soundOn && newest && newest !== state.lastNewLeadId){
+    state.newLeadsAll = itemsAll || [];
+    state.newLeadsTotal = state.newLeadsAll.length;
+
+    // subset UI
+    state.newLeadsShown = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_DISPLAY);
+
+    // alarme: só quando chega um novo ID
+    const newest = state.newLeadsAll[0] ? String(state.newLeadsAll[0].ID) : null;
+    if(state.newLeadsTotal > 0 && state.soundOn){
+      if(newest && newest !== state.lastNewLeadId){
         state.lastNewLeadId = newest;
         tripleBeep();
       }
-
-      renderNewLeads(all);
-      renderStats();
-    }catch(err){
-      console.warn(err);
     }
+
+    renderNewLeads(state.newLeadsShown);
   }
 
   async function refreshStats(){
-    try{
-      state.stats = await fetchStats();
-      renderStats();
-    }catch(err){ console.warn(err); }
+    const s = await fetchStatsPulled();
+    state.stats = s;
+    renderStats(s);
   }
 
   async function refreshUsers(){
-    try{
-      await Promise.all(CONFIG.USERS.map(async u=>{
-        state.userStats[u.id] = await fetchUserHistory(u.id);
-      }));
-      renderWho();
-    }catch(err){ console.warn(err); }
+    const jobs = CONFIG.USERS.map(async u=>{
+      const h = await fetchUserHistory(u.id);
+      state.userStats[u.id] = h;
+    });
+    await Promise.all(jobs);
+    renderWho();
   }
 
   async function refreshQueue(){
-    try{
-      const q = await fetchQueue();
-      state.queue = { ...state.queue, ...q };
-      renderQueue();
-      renderWho();
-    }catch(err){ console.warn(err); }
+    const q = await fetchQueue();
+    state.queue = { ...state.queue, ...q };
+    renderQueue();
+    renderWho();
   }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
-    await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshQueue(), refreshUsers()]);
+    await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshUsers(), refreshQueue()]);
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
@@ -1195,13 +1878,25 @@ body{padding-bottom:90px!important;}
   }
 
   function wire(){
-    $("#btnSound")?.addEventListener("click", ()=>{ state.soundOn = !state.soundOn; updateSoundUI(); });
-    $("#btnSilence")?.addEventListener("click", ()=>{ state.soundOn = false; updateSoundUI(); });
-    $("#btnSoundOn")?.addEventListener("click", ()=>{ state.soundOn = true; updateSoundUI(); if((state.newLeads||[]).length>0) tripleBeep(); });
+    $("#btnSound")?.addEventListener("click", ()=>{
+      state.soundOn = !state.soundOn;
+      updateSoundUI();
+    });
+
+    $("#btnSilence")?.addEventListener("click", ()=>{
+      state.soundOn = false;
+      updateSoundUI();
+    });
+
+    $("#btnSoundOn")?.addEventListener("click", ()=>{
+      state.soundOn = true;
+      updateSoundUI();
+      if((state.newLeadsAll||[]).length > 0) tripleBeep();
+    });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
-    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
-    $("#btnRefreshWho")?.addEventListener("click", refreshUsers);
+    $("#btnRefreshNew")?.addEventListener("click", ()=> refreshNewLeads().catch(console.error));
+    $("#btnRefreshWho")?.addEventListener("click", ()=> refreshUsers().catch(console.error));
 
     $("#btnGet")?.addEventListener("click", modalGetEquipes);
 
@@ -1221,33 +1916,26 @@ body{padding-bottom:90px!important;}
       });
     });
 
-    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
-    $("#btnQueue")?.addEventListener("click", modalQueue);
-    $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
+    $("#btnBatch")?.addEventListener("click", ()=> modalBatchTransfer().catch(console.error));
+
+    // fila: chip/botão inferior
+    $("#btnQueueBottom")?.addEventListener("click", ()=> modalQueue().catch(console.error));
+
+    $("#btnHideUsers")?.addEventListener("click", ()=> modalHideUsers().catch(console.error));
 
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
-        const order = (state.queue.order||[]).slice();
+        const q = await fetchQueue();
+        const order = (q.order||[]).slice();
         if(order.length===0) return;
-
         const nextId = order.shift();
         order.push(nextId);
-
-        state.queue.order = order;
-        renderQueue();
-
-        const nm = (CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId);
-        setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
-
-        if(state.savingNext) return;
-        state.savingNext = true;
-        try{
-          const dealId = state.queue.dealId || (await fetchQueue()).dealId;
-          await saveQueue(dealId, { order, hiddenUsers: state.queue.hiddenUsers||[] });
-        }finally{
-          state.savingNext = false;
-        }
-      }catch(err){ console.error(err); }
+        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+        await refreshQueue();
+        setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()}`);
+      }catch(err){
+        console.error(err);
+      }
     });
 
     $("#btnQueueReset")?.addEventListener("click", async ()=>{
@@ -1255,20 +1943,36 @@ body{padding-bottom:90px!important;}
         const q = await fetchQueue();
         await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
         await refreshQueue();
-      }catch(err){ console.error(err); }
+      }catch(err){
+        console.error(err);
+      }
     });
 
+    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
       const ou = e.target.closest("[data-open-user]");
 
-      if(g) modalPickLead(g.getAttribute("data-grab"));
+      if(g){
+        const id = g.getAttribute("data-grab");
+        modalPickLead(id);
+      }
       if(d){
         const id = d.getAttribute("data-discard");
-        (async ()=>{ try{ await actionDiscardLead(id); await hardRefreshAll(); }catch(err){ console.error(err);} })();
+        (async ()=>{
+          try{
+            await actionDiscardLead(id);
+            await hardRefreshAll();
+          }catch(err){
+            console.error(err);
+          }
+        })();
       }
-      if(ou) modalManageUser(ou.getAttribute("data-open-user"));
+      if(ou){
+        const uid = ou.getAttribute("data-open-user");
+        modalManageUser(uid);
+      }
     });
   }
 
@@ -1276,10 +1980,9 @@ body{padding-bottom:90px!important;}
   // Start
   // =========================
   async function start(){
-    markSentinel(`JS iniciou ✅ • BUILD ${BUILD}`, true);
-
     if(!CONFIG.WEBHOOK){
-      markSentinel("⚠️ CONFIG.WEBHOOK vazio", false);
+      const sentinel = document.getElementById("cgd-sentinel");
+      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
       return;
     }
 
@@ -1288,14 +1991,12 @@ body{padding-bottom:90px!important;}
     wire();
     updateSoundUI();
 
-    try{ await fetchLeadStatusMap(); }catch(_){}
-
     await hardRefreshAll();
 
-    setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
-    setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
-    setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
-    setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
+    setInterval(()=> refreshNewLeads().catch(()=>{}), CONFIG.REFRESH_NEW_LEADS_MS);
+    setInterval(()=> refreshStats().catch(()=>{}),    CONFIG.REFRESH_STATS_MS);
+    setInterval(()=> refreshQueue().catch(()=>{}),    CONFIG.REFRESH_QUEUE_MS);
+    setInterval(()=> refreshUsers().catch(()=>{}),    CONFIG.REFRESH_WHO_MS);
   }
 
   if(document.readyState === "loading"){
