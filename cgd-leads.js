@@ -2,16 +2,6 @@
    - SEM storage do navegador (somente RAM)
    - Layout/estética MANTIDOS
 */
-var __CGD_VER = "v2026-02-18-LEADS-05";
-var __SENT = document.getElementById("cgd-sentinel");
-function __sent(msg, ok){
-  try{
-    if(!__SENT) return;
-    __SENT.style.background = ok ? "#ecfff1" : "#fff";
-    __SENT.style.borderColor = ok ? "rgba(0,160,60,.35)" : "rgba(0,0,0,.12)";
-    __SENT.textContent = msg;
-  }catch(_){}
-}
 
 window.addEventListener("error", function(e){
   __sent("❌ Erro JS: " + (e && (e.message||e.error) || e), false);
@@ -23,7 +13,16 @@ window.addEventListener("unhandledrejection", function(e){
 __sent("JS iniciou ✅ " + __CGD_VER, true);
 (function(){
   "use strict";
-
+var __CGD_VER = "v2026-02-18-LEADS-05";
+var __SENT = document.getElementById("cgd-sentinel");
+function __sent(msg, ok){
+  try{
+    if(!__SENT) return;
+    __SENT.style.background = ok ? "#ecfff1" : "#fff";
+    __SENT.style.borderColor = ok ? "rgba(0,160,60,.35)" : "rgba(0,0,0,.12)";
+    __SENT.textContent = msg;
+  }catch(_){}
+}
   const BUILD = "2026-02-18-LEADS-04";
 
   // =========================
