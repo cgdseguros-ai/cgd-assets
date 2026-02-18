@@ -13,6 +13,9 @@ window.addEventListener("unhandledrejection", function(e){
 __sent("JS iniciou ✅ " + __CGD_VER, true);
 (function(){
   "use strict";
+window.__CGD_LEADS_READY = false;
+window.__CGD_LEADS_LASTERR = null;
+
 var __CGD_VER = "v2026-02-18-LEADS-05";
 var __SENT = document.getElementById("cgd-sentinel");
 function __sent(msg, ok){
