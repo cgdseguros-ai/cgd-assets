@@ -9,6 +9,7 @@
 */
 (function(){
   "use strict";
+   window.__CGD_BUILD__ = "2026-02-18 12:xx v1";
 
   // =========================
   // CONFIG — AJUSTE AQUI
