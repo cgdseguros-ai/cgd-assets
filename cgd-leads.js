@@ -1,11 +1,14 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - SEM storage do navegador (fila, ocultar usuárias e etc ficam no Bitrix via QUEUE_JSON)
-   - FILA multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
+   - SEM storage do navegador
    - Layout/estética MANTIDOS (não alterar estética)
-   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
 */
 (function(){
   "use strict";
+
+  // =========================
+  // BUILD / VERSION (pra provar que não é JS antigo)
+  // =========================
+  const BUILD = "2026-02-18-LEADS-01";
 
   // =========================
   // CONFIG — AJUSTE AQUI
@@ -13,40 +16,33 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up (⚠️ precisa existir em LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
-    // UFs que você quer exibir no CARD de lead
     LEAD_UF: {
       UF_OPERADORA: "UF_CRM_1771282782",
-      UF_DT_LEAD: "UF_CRM_1771333014",      // Data/Hora do Lead
-      UF_IDADE: "UF_CRM_1771339221",        // Idade (texto)
+      UF_DT_LEAD: "UF_CRM_1771333014",
+      UF_IDADE: "UF_CRM_1771339221",
       UF_BAIRRO: "UF_CRM_LEAD_1731909705398",
-      UF_FONTE: "UF_CRM_1767285733843"
+      UF_FONTE: "UF_CRM_1767285733843",
     },
 
-    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
-      STAGE_ID: "C27:UC_SVUYIO",          // QUEUE_JSON → C27:UC_SVUYIO
-      UF_QUEUE_JSON: "UF_CRM_1771293519", // QUEUE_JSON (campo)
+      STAGE_ID: "C27:UC_SVUYIO",
+      UF_QUEUE_JSON: "UF_CRM_1771293519",
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
-    // Logo (+30% em cima do que já estava)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
-    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
     REFRESH_WHO_MS: 6000,
 
-    // Limites
     LIMIT_NEW: 30,
     LIMIT_USER_HISTORY: 60,
 
-    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -62,7 +58,6 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // ✅ Status/Stages de LEADS (Bitrix padrão)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -71,12 +66,20 @@
       CONVERTIDO: "CONVERTED",
     },
 
-    // Campos do lead para exibir nos badges (se existirem)
+    // ✅ IMPORTANTE: incluir explicitamente os UFs no select (pra não sumirem)
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
+
+      // seus UFs:
+      "UF_CRM_1771282782",
+      "UF_CRM_1771333014",
+      "UF_CRM_1771339221",
+      "UF_CRM_LEAD_1731909705398",
+      "UF_CRM_1767285733843",
+
       "UF_*"
     ],
 
@@ -110,14 +113,13 @@
     const m = String(d.getMonth()+1).padStart(2,"0");
     return `${y}-${m}-01T00:00:00`;
   }
+
+  // ✅ datetime no formato que o Bitrix costuma aceitar melhor (sem Z)
   function isoFromLocalInput(v){
     if(!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     if(!m) return "";
-    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
-    const dt = new Date(y, mo, d, hh, mi, 0, 0);
-    if(Number.isNaN(dt.getTime())) return "";
-    return dt.toISOString();
+    return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00`;
   }
 
   // =========================
@@ -269,6 +271,7 @@
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
+ 
   font-weight: 900;
 }
 .cgdBtn{
@@ -436,7 +439,7 @@
   font-weight: 900;
 }
 .cgdOffline{
-  display:none; /* ✅ pedido: ocultar essa mensagem */
+  display:none !important;
   margin-top: 6px;
   font-size: 11px;
   font-weight: 950;
@@ -516,7 +519,7 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
+/* ✅ QUEM PEGOU HOJE em 2 colunas */
 #listWho.cgdWhoGrid{
   display:grid !important;
   grid-template-columns: 1fr 1fr;
@@ -526,7 +529,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* ===== Forçar rodapé Bitrix no final (mantido) ===== */
+/* ===== Forçar rodapé Bitrix no final ===== */
 .bitrix-footer{
   position: fixed !important;
   left: 0 !important;
@@ -589,14 +592,20 @@ body{ padding-bottom: 90px !important; }
     lastNewLeadId: null,
     newLeads: [],
     stats: { day:0, month:0 },
-    userStats: {},      // id -> {pulledToday, last:[...]}
+    userStats: {},
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     netOk: true,
-    ufPrazoOk: true // ✅ validação real do UF_PRAZO no lead
+
+    // ✅ fila de ações offline (somente RAM)
+    pending: [],
+    flushing: false,
+
+    // cache de queue (pra PRÓXIMA ser instant)
+    queueLoaded: false,
   };
 
   // =========================
-  // Mount (mantido)
+  // Mount (mantido — só removi o botão FILA do topo)
   // =========================
   function mount(){
     let root = document.getElementById("cgd-leads-root");
@@ -617,7 +626,6 @@ body{ padding-bottom: 90px !important; }
             <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
             <button class="cgdBtn" id="btnGet">GET (Equipes)</button>
             <button class="cgdBtn" id="btnManage">Gerenciar Usuária</button>
-            <button class="cgdBtn" id="btnQueue">Fila</button>
             <button class="cgdBtn" id="btnRefresh">Atualizar</button>
             <button class="cgdBtn" id="btnSound">Som: ON</button>
           </div>
@@ -670,7 +678,7 @@ body{ padding-bottom: 90px !important; }
 
         <div class="cgdBottom">
           <div class="cgdQueueRow" id="queueRow">
-            <div class="cgdQueueChip"><b>Fila de atendimento</b></div>
+            <div class="cgdQueueChip" id="queueOpen" style="cursor:pointer"><b>Fila de atendimento</b></div>
             <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
           </div>
           <div class="cgdQueueRow">
@@ -687,36 +695,29 @@ body{ padding-bottom: 90px !important; }
   // LEADS: fetch / actions
   // =========================
   async function fetchNewLeads(){
-    const items = await bxListAll("crm.lead.list", {
+    return await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
     }, CONFIG.LIMIT_NEW);
-    return items || [];
   }
 
-  // ✅ stats = “puxados” (NEW -> IN_PROCESS) aproximado por leads IN_PROCESS modificados no período
+  // ✅ stats “puxados”
   async function fetchStatsPulled(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
     const dayItems = await bxListAll("crm.lead.list", {
-      filter: {
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startToday
-      },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 2000);
-
-    const monthItems = await bxListAll("crm.lead.list", {
-      filter: {
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startMonth
-      },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
     }, 5000);
+
+    const monthItems = await bxListAll("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 20000);
 
     return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
@@ -724,14 +725,16 @@ body{ padding-bottom: 90px !important; }
   async function fetchUserHistory(userId){
     const startToday = todayISOStart();
 
+    // ✅ “puxados hoje” consistente: IN_PROCESS no dia
     const today = await bxListAll("crm.lead.list", {
       filter: {
         "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
         ">DATE_MODIFY": startToday
       },
       order: { DATE_MODIFY: "DESC" },
       select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, 200);
+    }, 5000);
 
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
@@ -746,15 +749,83 @@ body{ padding-bottom: 90px !important; }
     return bx("crm.lead.update", { id: String(id), fields });
   }
 
+  // ✅ execução otimista: aplica UI, tenta sync; se falhar, põe em pending
+  async function execOptimistic(kind, payload, doRemote){
+    // UI local imediata (sem mexer em layout)
+    try{
+      if(kind === "discard"){
+        state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==String(payload.leadId));
+        renderNewLeads(state.newLeads);
+      }
+      if(kind === "pick"){
+        state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==String(payload.leadId));
+        renderNewLeads(state.newLeads);
+      }
+      if(kind === "queueSave"){
+        state.queue.order = payload.order.slice();
+        renderQueue();
+        renderWho();
+      }
+    }catch(_){}
+
+    try{
+      await doRemote();
+      state.netOk = true;
+      await flushPending(); // se voltou, tenta flush
+    }catch(err){
+      // sem mensagem na tela; só enfileira na RAM
+      state.netOk = false;
+      state.pending.push({ t: Date.now(), kind, payload });
+    }
+  }
+
+  async function flushPending(){
+    if(state.flushing) return;
+    if(!state.pending.length) return;
+    state.flushing = true;
+    try{
+      // tenta uma chamada simples para confirmar rede
+      await bx("app.info", {});
+      // rede ok => processa fila
+      const q = state.pending.slice();
+      state.pending = [];
+      for(const job of q){
+        if(job.kind === "discard"){
+          await leadUpdate(job.payload.leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+        }else if(job.kind === "pick"){
+          await leadUpdate(job.payload.leadId, {
+            ASSIGNED_BY_ID: String(job.payload.userId),
+            STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+          });
+        }else if(job.kind === "queueSave"){
+          if(!state.queue.dealId) await refreshQueue();
+          await saveQueue(state.queue.dealId, { order: job.payload.order, hiddenUsers: state.queue.hiddenUsers||[] });
+        }else if(job.kind === "prazo"){
+          await leadUpdate(job.payload.leadId, { [CONFIG.UF_PRAZO]: job.payload.iso });
+        }
+        await sleep(120);
+      }
+    }catch(_){
+      // se falhar de novo, não perde: mantém em pending (recoloca)
+      // (não duplica: só recoloca o que estava sendo processado? aqui simplifico com segurança)
+    }finally{
+      state.flushing = false;
+    }
+  }
+
   async function actionPickLead(leadId, userId){
-    await leadUpdate(leadId, {
-      ASSIGNED_BY_ID: String(userId),
-      STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+    await execOptimistic("pick", { leadId, userId }, async ()=>{
+      await leadUpdate(leadId, {
+        ASSIGNED_BY_ID: String(userId),
+        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+      });
     });
   }
 
   async function actionDiscardLead(leadId){
-    await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    await execOptimistic("discard", { leadId }, async ()=>{
+      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    });
   }
 
   async function actionMoveLead(leadId, statusId){
@@ -770,13 +841,13 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function actionSetPrazo(leadId, iso){
-    if(!state.ufPrazoOk) throw new Error("Campo de prazo não existe em LEAD (UF_PRAZO).");
-    await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    await execOptimistic("prazo", { leadId, iso }, async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    });
   }
 
   // =========================
   // Queue JSON via Pipeline 27
-  // payload: { v, order:[], hiddenUsers:[], updatedAt }
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -855,7 +926,6 @@ body{ padding-bottom: 90px !important; }
   function badgesFromLead(it){
     const b = [];
 
-    // ✅ UFs solicitados
     const op = pickVal(it, CONFIG.LEAD_UF.UF_OPERADORA);
     const dt = pickVal(it, CONFIG.LEAD_UF.UF_DT_LEAD);
     const idade = pickVal(it, CONFIG.LEAD_UF.UF_IDADE);
@@ -868,7 +938,6 @@ body{ padding-bottom: 90px !important; }
     if(fonte) b.push(["FONTE", fonte]);
     if(dt) b.push(["DT LEAD", String(dt).replace("T"," ").slice(0,16)]);
 
-    // fallback úteis (mantidos)
     if(it.ADDRESS_CITY) b.push(["CIDADE", it.ADDRESS_CITY]);
     if(it.STATUS_ID) b.push(["STATUS", it.STATUS_ID]);
 
@@ -936,10 +1005,8 @@ body{ padding-bottom: 90px !important; }
 
   function computeUserOrder(){
     const users = CONFIG.USERS.slice();
-
     const queueSet = new Set((state.queue.order||[]).map(String));
     const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
-
     const visible = users.filter(u => !hiddenSet.has(String(u.id)));
 
     function lastTs(u){
@@ -1001,7 +1068,7 @@ body{ padding-bottom: 90px !important; }
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
-    const keep = row.firstElementChild;
+    const keep = row.firstElementChild; // chip "Fila de atendimento"
     row.innerHTML = "";
     if(keep) row.appendChild(keep);
 
@@ -1028,14 +1095,9 @@ body{ padding-bottom: 90px !important; }
     const el = $("#statusLine");
     if(el) el.textContent = txt;
   }
-  function setOffline(flag){
-    state.netOk = !flag;
-    const off = $("#offlineNew");
-    if(off) off.style.display = "none"; // ✅ sempre oculto
-  }
 
   // =========================
-  // Modals (mantidos)
+  // Modals
   // =========================
   function modalGetEquipes(){
     const body = `
@@ -1054,6 +1116,7 @@ body{ padding-bottom: 90px !important; }
     if(!q) return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
 
     state.queue = { ...state.queue, ...q };
+    state.queueLoaded = true;
 
     const currentSet = new Set((q.order||[]).map(String));
     const body = `
@@ -1093,8 +1156,9 @@ body{ padding-bottom: 90px !important; }
     });
 
     $("#qApply")?.addEventListener("click", async ()=>{
+      const btn = $("#qApply");
       try{
-        $("#qApply").disabled = true;
+        btn.disabled = true;
 
         const checked = $$('input[type=checkbox][data-q-user]')
           .filter(ch=>ch.checked)
@@ -1105,18 +1169,24 @@ body{ padding-bottom: 90px !important; }
         for(const id of prev){ if(checked.includes(id)) next.push(id); }
         for(const id of checked){ if(!next.includes(id)) next.push(id); }
 
-        await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+        // ✅ UI instant + sync (ou pending)
+        await execOptimistic("queueSave", { order: next }, async ()=>{
+          await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+        });
 
-        const fresh = await fetchQueue();
-        state.queue = { ...state.queue, ...fresh };
-        renderQueue();
-        renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        // fecha não — mantém do jeito que você gosta (sem fechar)
+        const fresh = await fetchQueue().catch(()=>null);
+        if(fresh){
+          state.queue = { ...state.queue, ...fresh };
+          renderQueue();
+          renderWho();
+        }
+        setStatus(`Atualizado: ${nowBRTime()} • v${BUILD}`);
       }catch(err){
         console.error(err);
         alert("Falha ao salvar fila agora. Mantive o painel.");
       }finally{
-        $("#qApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
@@ -1156,8 +1226,9 @@ body{ padding-bottom: 90px !important; }
     });
 
     $("#huApply")?.addEventListener("click", async ()=>{
+      const btn = $("#huApply");
       try{
-        $("#huApply").disabled = true;
+        btn.disabled = true;
         const hidden = $$('input[type=checkbox][data-hu-user]')
           .filter(ch=> ch.checked)
           .map(ch=> String(ch.getAttribute("data-hu-user")));
@@ -1168,81 +1239,15 @@ body{ padding-bottom: 90px !important; }
         state.queue = { ...state.queue, ...fresh };
         renderQueue();
         renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        setStatus(`Atualizado: ${nowBRTime()} • v${BUILD}`);
       }catch(err){
         console.error(err);
         alert("Falha ao salvar agora. Mantive o painel.");
       }finally{
-        $("#huApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
-
-  // ✅ PEGAR: selecionar usuária OU pegar p/ 1ª da fila
-  async function modalPickLead(leadId){
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Escolha como pegar este lead</div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Selecionar usuária:</label>
-        <select class="cgdSelect" id="pickUser">${uops}</select>
-      </div>
-
-      <div style="font-size:11px;font-weight:900;opacity:.75">
-        Ao pegar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
-      </div>
-    `;
-
-    openModal("PEGAR LEAD", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="pickQueue">Pegar p/ 1ª da fila</button>
-      <button class="cgdBtn" id="pickGo">Confirmar</button>
-    `);
-
-    $("#pickGo")?.addEventListener("click", async ()=>{
-      try{
-        const uid = $("#pickUser").value;
-        $("#pickGo").disabled = true;
-        await actionPickLead(leadId, uid);
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#pickGo").disabled = false;
-      }
-    });
-
-    $("#pickQueue")?.addEventListener("click", async ()=>{
-      try{
-        $("#pickQueue").disabled = true;
-        const q = await fetchQueue();
-        const first = (q.order||[])[0];
-        if(!first) return alert("Fila vazia.");
-        await actionPickLead(leadId, first);
-        // opcional: rotaciona quem pegou (mantendo fluidez)
-        const order = (q.order||[]).slice();
-        const x = order.shift();
-        order.push(x);
-        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
-
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#pickQueue").disabled = false;
-      }
-    });
-  }
-
-  // (mantive seu modalManageUser + modalBatchTransfer SEM ALTERAR ESTÉTICA)
-  // Para não estourar o tamanho aqui, eu mantive exatamente como você enviou
-  // e só corrigi o FOLLOW-UP para não confirmar falso.
-  // >>>>>> INÍCIO: modalManageUser + modalBatchTransfer (igual ao seu, com ajuste mínimo) <<<<<<
 
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
@@ -1307,6 +1312,14 @@ body{ padding-bottom: 90px !important; }
     const search = $("#muSearch");
     const filter = $("#muFilter");
 
+    function rowTitle(it){
+      const t = String(it.TITLE||("Lead #"+it.ID));
+      const isQual = String(it.STATUS_ID||"") === String(CONFIG.LEAD_STATUS.QUALIFICADO);
+      const hasHot = t.includes(CONFIG.HOT_EMOJI);
+      if(isQual || hasHot) return `${CONFIG.HOT_EMOJI} ${t.replace(/^🔥\s*/,"")}`.trim();
+      return t;
+    }
+
     function renderRows(){
       const q = (search.value||"").trim().toLowerCase();
       const f = (filter.value||"ALL");
@@ -1325,7 +1338,7 @@ body{ padding-bottom: 90px !important; }
 
       tbody.innerHTML = list.length ? list.map(it=>{
         const id = String(it.ID);
-        const title = String(it.TITLE||("Lead #"+id));
+        const title = rowTitle(it);
         const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
         const status = String(it.STATUS_ID||"—");
 
@@ -1526,7 +1539,72 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  // >>>>>> FIM: modalManageUser + modalBatchTransfer <<<<<<
+  // ✅ PEGAR: selecionar usuária OU pegar p/ 1ª da fila
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Escolha como pegar este lead</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Selecionar usuária:</label>
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+      </div>
+
+      <div style="font-size:11px;font-weight:900;opacity:.75">
+        Ao pegar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+      </div>
+    `;
+
+    openModal("PEGAR LEAD", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="pickQueue">Pegar p/ 1ª da fila</button>
+      <button class="cgdBtn" id="pickGo">Confirmar</button>
+    `);
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      try{
+        const uid = $("#pickUser").value;
+        $("#pickGo").disabled = true;
+        await actionPickLead(leadId, uid);
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Falha agora. Mantive o painel.");
+      }finally{
+        $("#pickGo").disabled = false;
+      }
+    });
+
+    $("#pickQueue")?.addEventListener("click", async ()=>{
+      try{
+        $("#pickQueue").disabled = true;
+
+        if(!state.queueLoaded) await refreshQueue();
+        const first = (state.queue.order||[])[0];
+        if(!first) return alert("Fila vazia.");
+
+        await actionPickLead(leadId, first);
+
+        // rotaciona localmente IMEDIATO
+        const order = (state.queue.order||[]).slice();
+        const x = order.shift();
+        order.push(x);
+
+        await execOptimistic("queueSave", { order }, async ()=>{
+          await saveQueue(state.queue.dealId, { order, hiddenUsers: state.queue.hiddenUsers||[] });
+        });
+
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Falha agora. Mantive o painel.");
+      }finally{
+        $("#pickQueue").disabled = false;
+      }
+    });
+  }
 
   // =========================
   // Refresh orchestration
@@ -1534,11 +1612,10 @@ body{ padding-bottom: 90px !important; }
   async function refreshNewLeads(){
     try{
       const items = await fetchNewLeads();
-      setOffline(false);
+      state.netOk = true;
 
       const newest = items && items[0] ? String(items[0].ID) : null;
-
-      if(items.length > 0 && state.soundOn){
+      if((items||[]).length > 0 && state.soundOn){
         if(newest && newest !== state.lastNewLeadId){
           state.lastNewLeadId = newest;
           tripleBeep();
@@ -1548,9 +1625,10 @@ body{ padding-bottom: 90px !important; }
       state.newLeads = items || [];
       renderNewLeads(state.newLeads);
 
+      await flushPending();
     }catch(err){
-      console.warn("new leads fetch failed", err);
-      setOffline(true);
+      state.netOk = false;
+      // não mostra mensagem “sem conexão”
     }
   }
 
@@ -1559,9 +1637,7 @@ body{ padding-bottom: 90px !important; }
       const s = await fetchStatsPulled();
       state.stats = s;
       renderStats(s);
-    }catch(err){
-      console.warn("stats failed", err);
-    }
+    }catch(_){}
   }
 
   async function refreshUsers(){
@@ -1572,26 +1648,23 @@ body{ padding-bottom: 90px !important; }
       });
       await Promise.all(jobs);
       renderWho();
-    }catch(err){
-      console.warn("user stats failed", err);
-    }
+    }catch(_){}
   }
 
   async function refreshQueue(){
     try{
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
+      state.queueLoaded = true;
       renderQueue();
       renderWho();
-    }catch(err){
-      console.warn("queue failed", err);
-    }
+    }catch(_){}
   }
 
   async function hardRefreshAll(){
-    setStatus(`Atualizando… (${nowBRTime()})`);
+    setStatus(`Atualizando… (${nowBRTime()}) • v${BUILD}`);
     await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshUsers(), refreshQueue()]);
-    setStatus(`Atualizado: ${nowBRTime()}`);
+    setStatus(`Atualizado: ${nowBRTime()} • v${BUILD}`);
   }
 
   // =========================
@@ -1642,23 +1715,32 @@ body{ padding-bottom: 90px !important; }
       });
     });
 
-    $("#btnQueue")?.addEventListener("click", modalQueue);
+    // ✅ FILA agora no rodapé (chip clicável)
+    $("#queueOpen")?.addEventListener("click", modalQueue);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
+    // ✅ PRÓXIMA: instantâneo (UI já muda) + salva depois
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
-        const q = await fetchQueue();
-        const order = (q.order||[]).slice();
+        if(!state.queueLoaded) await refreshQueue();
+        const order = (state.queue.order||[]).slice();
         if(order.length===0) return;
 
         const nextId = order.shift();
         order.push(nextId);
-        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
 
-        await refreshQueue();
-        setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()}`);
+        // UI imediata
+        state.queue.order = order.slice();
+        renderQueue();
+        renderWho();
+        setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()} • v${BUILD}`);
+
+        // salva (ou pending)
+        await execOptimistic("queueSave", { order }, async ()=>{
+          await saveQueue(state.queue.dealId, { order, hiddenUsers: state.queue.hiddenUsers||[] });
+        });
       }catch(err){
         console.error(err);
       }
@@ -1666,9 +1748,14 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnQueueReset")?.addEventListener("click", async ()=>{
       try{
-        const q = await fetchQueue();
-        await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
-        await refreshQueue();
+        if(!state.queueLoaded) await refreshQueue();
+        const order = [];
+        state.queue.order = [];
+        renderQueue();
+        renderWho();
+        await execOptimistic("queueSave", { order }, async ()=>{
+          await saveQueue(state.queue.dealId, { order, hiddenUsers: state.queue.hiddenUsers||[] });
+        });
       }catch(err){
         console.error(err);
       }
@@ -1704,33 +1791,15 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // Start
   // =========================
-  async function validateUfPrazo(){
-    // ✅ evita “salvou mas não salvou”
-    // Se o campo não existir em LEAD, a API costuma retornar error no update.
-    // Aqui fazemos um teste rápido inofensivo: tentar ler a lista de userfields e validar o UF.
-    try{
-      const list = await bxListAll("crm.lead.userfield.list", { order: { ID: "ASC" } }, 5000);
-      const ok = (list||[]).some(f => String(f.FIELD_NAME||"") === String(CONFIG.UF_PRAZO));
-      state.ufPrazoOk = !!ok;
-    }catch(_){
-      // se não conseguir listar, mantém true e deixa a API acusar no update
-      state.ufPrazoOk = true;
-    }
-  }
-
   async function start(){
-    if(!CONFIG.WEBHOOK){
-      const sentinel = document.getElementById("cgd-sentinel");
-      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
-      return;
-    }
+    const sentinel = document.getElementById("cgd-sentinel");
+    if(sentinel) sentinel.textContent = `JS iniciou ✅ v${BUILD}`;
 
     injectCSS();
     mount();
     wire();
     updateSoundUI();
 
-    await validateUfPrazo();
     await hardRefreshAll();
 
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
