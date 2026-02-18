@@ -48,8 +48,8 @@
     REFRESH_WHO_MS: 9000,
 
     LIMIT_NEW_DISPLAY: 30,
-    LIMIT_NEW_FETCH_MAX: 4000,     // pode subir se precisar
-    LIMIT_USER_HISTORY_PAGE: 40,   // para ABRIR abrir rápido
+    LIMIT_NEW_FETCH_MAX: 6000,     // aumentei pra garantir pegar tudo em NOVO LEAD
+    LIMIT_USER_HISTORY_PAGE: 50,
 
     USERS: [
       { name:"ALINE", id:15 },
@@ -98,7 +98,6 @@
 
     HOT_EMOJI: "🔥",
 
-    // ✅ URLs corretas
     GET_LINKS: [
       { label: "EQ. DELTA", url: "https://getcgdcorretora.bitrix24.site/equipedelta/" },
       { label: "EQ. BETA",  url: "https://getcgdcorretora.bitrix24.site/equipebeta/" },
@@ -127,7 +126,6 @@
     const d = new Date();
     return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-01T00:00:00`;
   }
-
   function isoFromLocalInput(v){
     if(!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
@@ -161,7 +159,6 @@
     if(!dt) return "";
     return `${dt.getFullYear()}-${pad2(dt.getMonth()+1)}-${pad2(dt.getDate())}`;
   }
-
   function leadDisplayName(it){
     const n = [it.NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
     if(n) return n;
@@ -169,11 +166,10 @@
     if(t) return t;
     return `Lead #${it.ID}`;
   }
-
   function getUF(it, key){ return it ? it[key] : null; }
 
   // =========================
-  // Bitrix client — FIX PAGINAÇÃO (CRÍTICO)
+  // Bitrix client + pagination
   // =========================
   function toPairs(prefix, obj, out){
     out = out || [];
@@ -210,7 +206,7 @@
     const data = await resp.json().catch(()=> ({}));
     if(!resp.ok) throw new Error(`HTTP ${resp.status} em ${method}`);
     if(data && data.error) throw new Error(data.error_description || data.error);
-    return data; // <- devolve TUDO (result/total/next)
+    return data;
   }
 
   async function bx(method, params={}){
@@ -218,7 +214,6 @@
     return data.result;
   }
 
-  // Paginação universal Bitrix (usa data.next quando existir)
   async function bxListAll(method, params, max=2000){
     let start = 0;
     let out = [];
@@ -238,7 +233,6 @@
     return { items: out.slice(0, max), total: (total===null ? out.length : total) };
   }
 
-  // Pega só total rápido (sem puxar tudo)
   async function bxTotalOnly(method, params){
     const data = await bxRaw(method, { ...params, start: 0 });
     const total = (typeof data.total === "number") ? data.total : (Array.isArray(data.result) ? data.result.length : 0);
@@ -277,7 +271,7 @@
   }
 
   // =========================
-  // UI/CSS (mantido do seu padrão)
+  // UI/CSS (mantido)
   // =========================
   function injectCSS(){
     const st = document.createElement("style");
@@ -290,7 +284,7 @@
   --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
   min-height: calc(100vh - 60px);
-  padding: 10px 12px 110px;
+  padding: 10px 12px 118px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
   color: var(--text);
   background:
@@ -317,6 +311,7 @@
 .cgdPill{ border:1px solid var(--border); background: rgba(255,255,255,.78); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; }
 .cgdBtn{ cursor:pointer; border:1px solid rgba(30,40,70,.14); background: rgba(255,255,255,.86); border-radius:999px; padding:7px 12px; font-size:12px; font-weight:950; }
 .cgdBtn:active{ transform: translateY(1px); }
+
 .cgdGrid{ margin-top:12px; display:grid; grid-template-columns: 1.05fr 1.95fr; gap:12px; }
 .cgdCol{ border:1px solid var(--border); border-radius: var(--radius); background: rgba(255,255,255,.62); box-shadow: var(--shadow); overflow:hidden; min-height:68vh; display:flex; flex-direction:column; }
 .cgdColHead{ padding:10px 12px; background: rgba(255,255,255,.78); border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
@@ -324,6 +319,7 @@
 .cgdColHead .hSub{ font-size:11px; color: var(--muted); font-weight:800; margin-top:2px; width:100%; }
 .cgdColHead .hActions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 .cgdList{ padding:10px; display:flex; flex-direction:column; gap:10px; overflow:auto; min-height:0; }
+
 .cgdCard{ border:1px solid var(--border); border-radius:16px; background: var(--card2); box-shadow: 0 8px 20px rgba(20,30,60,.08); padding:10px; }
 .cgdCardRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
 .cgdLeadName{ font-weight:950; font-size:14px; line-height:1.2; word-break:break-word; flex:1 1 auto; }
@@ -334,17 +330,25 @@
 .cgdMiniBtn.primary{ background: rgba(120,210,255,.25); }
 .cgdMiniBtn.danger{ background: rgba(255,80,120,.16); border-color: rgba(255,80,120,.30); }
 
+/* ✅ BARRA INFERIOR EM 2 LINHAS (sem quebrar em 3) */
 .cgdBottom{
   position: fixed; left:0; right:0; bottom:0; z-index:80;
   background: rgba(255,255,255,.76);
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(30,40,70,.14);
-  padding: 10px 12px;
-  display:flex; flex-direction:column; gap:10px;
+  padding: 8px 12px;
+  display:flex; flex-direction:column; gap:8px;
 }
-.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.cgdQueueChip{ border:1px solid rgba(30,40,70,.14); background: rgba(255,255,255,.9); border-radius:999px; padding:7px 10px; font-weight:950; font-size:12px; }
-.cgdStatusLine{ font-size:11px; color: rgba(18,26,40,.60); font-weight:900; }
+.cgdBottomLine{
+  display:flex; align-items:center; gap:8px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.cgdBottomLine::-webkit-scrollbar{ height:8px; }
+.cgdBottomLine::-webkit-scrollbar-thumb{ background: rgba(30,40,70,.18); border-radius: 999px; }
+.cgdQueueChip{ border:1px solid rgba(30,40,70,.14); background: rgba(255,255,255,.9); border-radius:999px; padding:7px 10px; font-weight:950; font-size:12px; white-space:nowrap; }
+.cgdStatusLine{ font-size:11px; color: rgba(18,26,40,.60); font-weight:900; white-space:nowrap; }
 
 #listWho.cgdWhoGrid{ display:grid !important; grid-template-columns: 1fr 1fr; gap:10px; }
 @media (max-width: 1100px){ #listWho.cgdWhoGrid{ grid-template-columns:1fr; } }
@@ -363,7 +367,7 @@
 .cgdTable th{ text-align:left; font-weight:950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom:0; }
 
-body{ padding-bottom: 110px !important; }
+body{ padding-bottom: 118px !important; }
 `;
     document.head.appendChild(st);
   }
@@ -408,20 +412,21 @@ body{ padding-bottom: 110px !important; }
     soundOn: true,
     lastNewLeadId: null,
 
-    // ✅ agora temos items + total REAL
     newLeadsAll: [],
     newLeadsTotal: 0,
     newLeadsShown: [],
 
     stats: { day:0, month:0 },
-    userStats: {},
+
+    // cache em RAM (não storage)
+    userCounts: {},     // { userId: { emAtendimento, qualificado } }
     lastServedUserName: "—",
 
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] }
   };
 
   // =========================
-  // Queue JSON (cache dealId)
+  // Queue JSON (shared by Bitrix)
   // =========================
   async function ensureQueueDeal(){
     const r = await bxListAll("crm.deal.list", {
@@ -480,7 +485,6 @@ body{ padding-bottom: 110px !important; }
       id: String(dealId),
       fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
     });
-    // atualiza RAM (sem re-fetch)
     state.queue.order = next.order;
     state.queue.hiddenUsers = next.hiddenUsers;
     state.queue.updatedAt = next.updatedAt;
@@ -500,19 +504,16 @@ body{ padding-bottom: 110px !important; }
     await leadUpdate(leadId, { ASSIGNED_BY_ID: String(userId), STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO });
   }
 
-  // ✅ PRÓXIMA DISPONÍVEL rápida: UI instant + salva sem re-fetch
   async function nextAvailableFast(){
     const order = (state.queue.order||[]).slice();
     if(order.length === 0) throw new Error("Fila vazia");
     const nextId = order.shift();
     order.push(nextId);
 
-    // atualiza UI já
     state.queue.order = order;
     renderQueue();
     renderBottomInfo();
 
-    // salva em segundo plano
     await saveQueue(state.queue.dealId, { order, hiddenUsers: state.queue.hiddenUsers||[] });
   }
 
@@ -534,7 +535,6 @@ body{ padding-bottom: 110px !important; }
     await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
   }
 
-  // ✅ FOLLOW-UP: cria negócio e se falhar mostra o erro real
   async function createFollowUpDealFromLead(leadId, userId, isoPrazo){
     const stage = CONFIG.DEAL_PIPELINE17.STAGE_BY_USER[String(userId)];
     if(!stage) throw new Error(`Sem STAGE_ID da pipeline 17 para user ${userId}`);
@@ -560,10 +560,9 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Fetch: NOVOS LEADS (total real + páginas)
+  // Fetch: NOVOS LEADS
   // =========================
   async function fetchNewLeadsAll(){
-    // ✅ retorna items + total REAL do Bitrix
     const r = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
@@ -573,7 +572,6 @@ body{ padding-bottom: 110px !important; }
     return r;
   }
 
-  // Stats (puxados) — usa TOTAL rápido
   async function fetchStatsPulled(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
@@ -593,7 +591,6 @@ body{ padding-bottom: 110px !important; }
     return { day, month };
   }
 
-  // ABRIR rápido: pega só primeira página do histórico + counts via total
   async function fetchUserCounts(userId){
     const emAtendimento = await bxTotalOnly("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
@@ -622,7 +619,7 @@ body{ padding-bottom: 110px !important; }
     return items;
   }
 
-  async function searchLeadsByKeyword(userId, keyword, limit=200){
+  async function searchLeadsByKeyword(userId, keyword, limit=300){
     const kw = String(keyword||"").trim();
     if(!kw) return [];
     const a = await bxListAll("crm.lead.list", {
@@ -710,12 +707,9 @@ body{ padding-bottom: 110px !important; }
   }
 
   function renderQueue(){
-    const row = $("#queueRow");
+    const row = $("#queueLine");
     if(!row) return;
-
-    const btn = $("#btnQueueBottom");
     row.innerHTML = "";
-    if(btn) row.appendChild(btn);
 
     const order = state.queue.order || [];
     if(order.length === 0){
@@ -738,7 +732,7 @@ body{ padding-bottom: 110px !important; }
   function renderBottomInfo(){
     const lastEl = $("#lastServed");
     const nextEl = $("#nextInQueue");
-    if(lastEl) lastEl.textContent = `Último atendimento: ${state.lastServedUserName || "—"}`;
+    if(lastEl) lastEl.textContent = `Último: ${state.lastServedUserName || "—"}`;
 
     const order = state.queue.order || [];
     const nextId = order[0];
@@ -750,6 +744,33 @@ body{ padding-bottom: 110px !important; }
   function setStatus(txt){
     const el = $("#statusLine");
     if(el) el.textContent = txt;
+  }
+
+  function renderWhoCards(){
+    const list = $("#listWho");
+    if(!list) return;
+    list.innerHTML = "";
+
+    CONFIG.USERS.forEach(u=>{
+      const cnt = state.userCounts[String(u.id)] || { emAtendimento:"—", qualificado:"—" };
+
+      const card = document.createElement("div");
+      card.className = "cgdCard";
+      card.innerHTML = `
+        <div class="cgdCardRow">
+          <div class="cgdLeadName">${esc(u.name)}</div>
+          <div style="font-weight:950; font-size:12px; opacity:.7">USER ${esc(u.id)}</div>
+        </div>
+        <div class="cgdBadges">
+          <span class="cgdBadge">EM ATENDIMENTO: ${esc(cnt.emAtendimento)}</span>
+          <span class="cgdBadge">QUALIFICADO: ${esc(cnt.qualificado)}</span>
+        </div>
+        <div class="cgdActions">
+          <button class="cgdMiniBtn primary" data-open-user="${esc(u.id)}">ABRIR</button>
+        </div>
+      `;
+      list.appendChild(card);
+    });
   }
 
   // =========================
@@ -767,7 +788,6 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalQueue(){
-    // abre rápido e carrega
     openModal("FILA DE ATENDIMENTO", `<div style="font-weight:900;opacity:.7">Carregando…</div>`, `<button class="cgdBtn" data-close-modal>Fechar</button>`, { modalWidthPx: 1100 });
 
     let q;
@@ -841,7 +861,6 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalBatchTransfer(){
-    // ✅ usa todos os NOVO LEAD (state.newLeadsAll) já paginados
     const all = (state.newLeadsAll || []).slice();
 
     const ops = Array.from(new Set(all.map(it => String(getUF(it, CONFIG.UF_OPERADORA)||"").trim()).filter(Boolean))).sort();
@@ -875,7 +894,7 @@ body{ padding-bottom: 110px !important; }
           <tr>
             <th style="width:70px">Sel.</th>
             <th>Lead</th>
-            <th style="width:370px">Info</th>
+            <th style="width:390px">Info</th>
           </tr>
         </thead>
         <tbody id="btTbody"></tbody>
@@ -908,6 +927,8 @@ body{ padding-bottom: 110px !important; }
       `;
     }
 
+    function stageName(id){ return CONFIG.LEAD_STATUS_NAME[String(id||"")] || String(id||"—"); }
+
     function draw(list){
       countEl.textContent = String(list.length);
       tbody.innerHTML = list.length ? list.map(it=>`
@@ -915,7 +936,7 @@ body{ padding-bottom: 110px !important; }
           <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
           <td>
             <b>${esc(leadDisplayName(it))}</b>
-            <div style="opacity:.65;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STAGE: ${esc(CONFIG.LEAD_STATUS_NAME[String(it.STATUS_ID||"")]||String(it.STATUS_ID||"—"))}</div>
+            <div style="opacity:.65;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STAGE: ${esc(stageName(it.STATUS_ID))}</div>
           </td>
           <td>${infoCol(it)}</td>
         </tr>
@@ -953,7 +974,7 @@ body{ padding-bottom: 110px !important; }
         $("#btDo").disabled = true;
         for(const id of ids){
           await actionPickLead(id, toId);
-          await sleep(90);
+          await sleep(80);
         }
         closeModal();
         await hardRefreshAll();
@@ -967,14 +988,11 @@ body{ padding-bottom: 110px !important; }
     });
   }
 
-  // ✅ ABRIR mais rápido: abre modal já + carrega depois
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
-    openModal(`ABRIR • ${u.name} (${u.id})`, `
-      <div style="font-weight:900;opacity:.75">Carregando dados…</div>
-    `, `<button class="cgdBtn" data-close-modal>Fechar</button>`, { modalWidthPx: 1200 });
+    openModal(`ABRIR • ${u.name} (${u.id})`, `<div style="font-weight:900;opacity:.75">Carregando…</div>`, `<button class="cgdBtn" data-close-modal>Fechar</button>`, { modalWidthPx: 1200 });
 
     let counts, history;
     try{
@@ -1017,8 +1035,8 @@ body{ padding-bottom: 110px !important; }
           <tr>
             <th>Lead</th>
             <th style="width:220px">Stage</th>
-            <th style="width:390px">FOLLOW-UP</th>
-            <th style="width:360px">Ações</th>
+            <th style="width:420px">FOLLOW-UP</th>
+            <th style="width:420px">Ações</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -1077,6 +1095,8 @@ body{ padding-bottom: 110px !important; }
               <select class="cgdSelect" data-move-to="${esc(id)}">${userOptions}</select>
               <button class="cgdBtn" data-do-transfer="${esc(id)}">Transferir</button>
               <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificar 🔥</button>
+              <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
+              <button class="cgdBtn" data-move-stage="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
             </div>
           </td>
         </tr>`;
@@ -1121,7 +1141,6 @@ body{ padding-bottom: 110px !important; }
           if(!iso) return alert("Preencha data/hora corretamente.");
           sp.disabled = true;
 
-          // salva prazo + cria deal (mostra erro real se falhar)
           await actionSetPrazo(leadId, iso);
           try{
             await createFollowUpDealFromLead(leadId, u.id, iso);
@@ -1168,10 +1187,9 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Who / last served calc
+  // Who / last served
   // =========================
   async function refreshLastServedUser(){
-    // pega o último lead que virou IN_PROCESS hoje e descobre o responsável
     try{
       const data = await bxRaw("crm.lead.list", {
         filter: { ">DATE_MODIFY": todayISOStart(), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO },
@@ -1184,9 +1202,20 @@ body{ padding-bottom: 110px !important; }
       const uid = String(it.ASSIGNED_BY_ID||"");
       const u = CONFIG.USERS.find(x=> String(x.id)===uid);
       state.lastServedUserName = u ? u.name : (`USER ${uid}`);
-    }catch(_){
-      // mantém anterior
-    }
+    }catch(_){}
+  }
+
+  async function refreshUserCountsAll(){
+    const tasks = CONFIG.USERS.map(async (u)=>{
+      try{
+        const c = await fetchUserCounts(u.id);
+        state.userCounts[String(u.id)] = c;
+      }catch(_){
+        state.userCounts[String(u.id)] = { emAtendimento:"—", qualificado:"—" };
+      }
+    });
+    await Promise.allSettled(tasks);
+    renderWhoCards();
   }
 
   // =========================
@@ -1205,7 +1234,6 @@ body{ padding-bottom: 110px !important; }
         tripleBeep();
       }
     }
-
     renderNewLeads(state.newLeadsShown);
   }
 
@@ -1228,7 +1256,8 @@ body{ padding-bottom: 110px !important; }
       refreshNewLeads(),
       refreshStats(),
       refreshQueue(),
-      refreshLastServedUser()
+      refreshLastServedUser(),
+      refreshUserCountsAll()
     ]);
     renderBottomInfo();
     setStatus(`Atualizado: ${nowBR()}`);
@@ -1255,7 +1284,7 @@ body{ padding-bottom: 110px !important; }
             <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
             <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
             <button class="cgdBtn" id="btnGet">GET (Equipes)</button>
-            <button class="cgdBtn" id="btnQueueBottom"><b>Fila de atendimento</b></button>
+            <button class="cgdBtn" id="btnQueueTop"><b>Fila de atendimento</b></button>
             <button class="cgdBtn" id="btnBatch">Transferir em lote</button>
             <button class="cgdBtn" id="btnRefresh">Atualizar</button>
           </div>
@@ -1277,28 +1306,25 @@ body{ padding-bottom: 110px !important; }
           <section class="cgdCol">
             <div class="cgdColHead">
               <div style="width:100%">
-                <div class="hTitle">AÇÕES RÁPIDAS</div>
-                <div class="hSub">Abrir card da usuária e FOLLOW-UP</div>
+                <div class="hTitle">USUÁRIAS</div>
+                <div class="hSub">Abrir card, follow-up e mover etapas</div>
               </div>
               <div class="hActions">
-                <button class="cgdBtn" id="btnManage">Gerenciar Usuária</button>
+                <button class="cgdBtn" id="btnRefreshUsers">Atualizar usuárias</button>
               </div>
             </div>
-            <div class="cgdList cgdWhoGrid" id="listWho">
-              <div style="opacity:.7;font-weight:900">Use “Gerenciar Usuária”.</div>
-            </div>
+            <div class="cgdList cgdWhoGrid" id="listWho"></div>
           </section>
         </div>
 
+        <!-- ✅ BARRA INFERIOR 2 LINHAS -->
         <div class="cgdBottom">
-          <div class="cgdQueueRow" id="queueRow"></div>
+          <div class="cgdBottomLine" id="queueLine"></div>
 
-          <div class="cgdQueueRow" style="justify-content:space-between">
-            <div class="cgdQueueChip" id="lastServed">Último atendimento: —</div>
+          <div class="cgdBottomLine" id="bottomLine2">
+            <button class="cgdBtn" id="btnQueueBottom"><b>Fila de atendimento</b></button>
+            <div class="cgdQueueChip" id="lastServed">Último: —</div>
             <div class="cgdQueueChip" id="nextInQueue">Próxima: —</div>
-          </div>
-
-          <div class="cgdQueueRow">
             <button class="cgdBtn" id="btnNext">Próxima disponível</button>
             <div class="cgdStatusLine" id="statusLine">Atualizado: —</div>
           </div>
@@ -1309,24 +1335,18 @@ body{ padding-bottom: 110px !important; }
 
   function wire(){
     $("#btnGet")?.addEventListener("click", modalGetEquipes);
+    $("#btnQueueTop")?.addEventListener("click", ()=> modalQueue().catch(console.error));
     $("#btnQueueBottom")?.addEventListener("click", ()=> modalQueue().catch(console.error));
     $("#btnBatch")?.addEventListener("click", ()=> modalBatchTransfer().catch(console.error));
     $("#btnRefresh")?.addEventListener("click", ()=> hardRefreshAll().catch(console.error));
+    $("#btnRefreshUsers")?.addEventListener("click", ()=> refreshUserCountsAll().catch(console.error));
 
-    $("#btnManage")?.addEventListener("click", ()=>{
-      const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-      openModal("GERENCIAR USUÁRIA", `
-        <div class="cgdRow">
-          <label style="font-weight:950">Selecione:</label>
-          <select class="cgdSelect" id="muSel">${opts}</select>
-          <button class="cgdBtn" id="muOpen">Abrir</button>
-        </div>
-      `);
-      $("#muOpen")?.addEventListener("click", ()=>{
-        const id = $("#muSel").value;
-        closeModal();
-        modalManageUser(id);
-      });
+    // ABRIR por card
+    document.addEventListener("click", (e)=>{
+      const btn = e.target.closest("[data-open-user]");
+      if(!btn) return;
+      const id = btn.getAttribute("data-open-user");
+      modalManageUser(id);
     });
 
     // pegar lead
@@ -1335,7 +1355,6 @@ body{ padding-bottom: 110px !important; }
       if(!g) return;
       const leadId = g.getAttribute("data-grab");
 
-      // modal simples: pegar para próxima da fila ou selecionar usuária
       const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
       openModal("PEGAR LEAD", `
         <div style="font-weight:950;margin-bottom:10px">Escolha como pegar este lead</div>
@@ -1356,8 +1375,6 @@ body{ padding-bottom: 110px !important; }
           const nextId = state.queue.order[0];
           if(!nextId) return alert("Fila vazia.");
           await actionPickLead(leadId, nextId);
-
-          // rotaciona fila rápido
           await nextAvailableFast();
           closeModal();
           await hardRefreshAll();
@@ -1407,13 +1424,13 @@ body{ padding-bottom: 110px !important; }
     injectCSS();
     mount();
     wire();
-
     await hardRefreshAll();
 
     setInterval(()=> refreshNewLeads().catch(()=>{}), CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(()=> refreshStats().catch(()=>{}), CONFIG.REFRESH_STATS_MS);
     setInterval(()=> refreshQueue().catch(()=>{}), CONFIG.REFRESH_QUEUE_MS);
     setInterval(()=> refreshLastServedUser().catch(()=>{}), CONFIG.REFRESH_WHO_MS);
+    setInterval(()=> refreshUserCountsAll().catch(()=>{}), 12000);
   }
 
   if(document.readyState === "loading"){
