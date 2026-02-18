@@ -51,7 +51,6 @@
     // ✅ Pipeline 17 (FOLLOW-UP) — Negócios (CATEGORY_ID = 17)
     PIPE17: {
       CATEGORY_ID: 17,
-      // colunas (stages) por usuária (STATUS_ID)
       STAGE_BY_USER: {
         813: "C17:PREPARATION", // MANUELA
         841: "C17:PREPAYMENT_INVOIC", // MARIA CLARA
@@ -69,15 +68,12 @@
         815: "C17:UC_ZT6WEB", // GABRIEL
       },
 
-      // UFs (Negócio) usados no FOLLOW-UP (você passou)
-      UF_OBS: "UF_CRM_691385BE7D33D", // onde vai o bloco com dados do lead
+      UF_OBS: "UF_CRM_691385BE7D33D",
       UF_PRAZO: "UF_CRM_1768175087",
-      // os abaixo você pediu como auto preenchidos/ocultos.
       UF_URGENCIA: "UF_CRM_1768174982",
       UF_ETAPA_TAREFA: "UF_CRM_1768179977089",
       UF_COLAB: "UF_CRM_1770327799",
 
-      // Valores a setar (se o seu Bitrix usar IDs numéricos, troque aqui)
       FIXED: {
         URGENCIA: "NORMAL",
         ETAPA: "AGUARDANDO",
@@ -101,7 +97,6 @@
         { id: "UC_9WOK6Y", name: "Aguardando pagamento" },
         { id: "WON", name: "Negócios Fechados" },
       ],
-      // Etapas que exigem campos
       NEEDS_MONEY_FROM: new Set([
         "PREPARATION",
         "PREPAYMENT_INVOICE",
@@ -113,13 +108,9 @@
       ]),
     },
 
-    // ✅ Refresh
     REFRESH_MS: 120000, // 2 min
-
-    // ✅ UI
     TITLE: "PAINEL DE LEADS - CGD CORRETORA",
 
-    // ✅ Links GET (topo)
     GET_LINKS: [
       { label: "EQUIPE DELTA", url: "https://getcgdcorretora.bitrix24.site/equipedelta/" },
       { label: "EQUIPE ALPHA", url: "https://getcgdcorretora.bitrix24.site/equipealpha/" },
@@ -138,7 +129,7 @@
   if (!root) {
     root = document.createElement("div");
     root.id = ROOT_ID;
-    document.body.appendChild(root);
+    (document.body || document.documentElement).appendChild(root);
   }
 
   let sentinel = document.getElementById(SENT_ID);
@@ -341,22 +332,17 @@
     } catch (_) {}
   }
 
-  let queue = readJSON(LS.QUEUE, []); // [userId...]
-  let hiddenUsers = new Set(readJSON(LS.HIDDEN_USERS, [])); // userId
-  let availUsers = new Set(readJSON(LS.AVAIL_USERS, CFG.USERS.map((u) => u.id))); // default tudo disponível
+  let queue = readJSON(LS.QUEUE, []);
+  let hiddenUsers = new Set(readJSON(LS.HIDDEN_USERS, []));
+  let availUsers = new Set(readJSON(LS.AVAIL_USERS, CFG.USERS.map((u) => u.id)));
   let isSilent = !!readJSON(LS.SILENT, false);
 
   const today = nowKey();
-  let dailyStats = {
-    day: today,
-    byUser: {},
-  };
+  let dailyStats = { day: today, byUser: {} };
 
   function resetDailyIfNeeded() {
     const k = nowKey();
-    if (dailyStats.day !== k) {
-      dailyStats = { day: k, byUser: {} };
-    }
+    if (dailyStats.day !== k) dailyStats = { day: k, byUser: {} };
   }
 
   function statUser(id) {
@@ -407,6 +393,8 @@
 
   const style = document.createElement("style");
   style.textContent = `
+#cgd-app, #cgd-app *{ box-sizing: border-box; }
+
 #cgd-app{
   --bg:#f6f7fb;
   --card:#fff;
@@ -416,6 +404,7 @@
   --radius: 16px;
   --shadow: 0 10px 30px rgba(2,6,23,.08);
 
+  width:100%;
   min-height:100vh;
   background: var(--bg);
   color: var(--text);
@@ -443,9 +432,7 @@
   align-items:center;
   gap:10px;
 }
-#cgd-title .dot{
-  width:10px;height:10px;border-radius:999px;background:#111827;
-}
+#cgd-title .dot{ width:10px;height:10px;border-radius:999px;background:#111827; }
 
 #cgd-top .right{
   display:flex; align-items:center; gap:10px; flex-wrap:wrap;
@@ -461,14 +448,8 @@
 }
 .btn:hover{ box-shadow: 0 8px 18px rgba(2,6,23,.08); transform: translateY(-1px); }
 .btn:active{ transform: translateY(0px); }
-.btn.primary{
-  background: #e8f0ff;
-  border-color: rgba(59,130,246,.35);
-}
-.btn.danger{
-  background: #ffecec;
-  border-color: rgba(239,68,68,.35);
-}
+.btn.primary{ background: #e8f0ff; border-color: rgba(59,130,246,.35); }
+.btn.danger{ background: #ffecec; border-color: rgba(239,68,68,.35); }
 .btn.small{ padding:6px 10px; border-radius:10px; font-weight:900; font-size:12px; }
 
 .badge{
@@ -484,13 +465,17 @@
 }
 
 #cgd-wrap{
+  width:100%;
+  max-width:none;
   display:grid;
-  grid-template-columns: 35% 65%;
+  grid-template-columns: minmax(360px, 35%) 1fr;
   gap: 12px;
   padding: 12px;
+  align-items:start;
 }
 
 .panel{
+  width:100%;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -501,21 +486,13 @@
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display:flex;
-  align-items:flex-start;
+  align-items:center;
   justify-content:space-between;
   gap:10px;
 }
-.p-hdr > div:first-child{ flex:1; min-width:0; }
-.p-hdr .h{
-  font-weight: 950;
-}
-.p-hdr .sub{
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 800;
-  line-height: 1.25;
-}
-.p-body{ padding: 12px; }
+.p-hdr .h{ font-weight: 950; }
+.p-hdr .sub{ font-size: 12px; color: var(--muted); font-weight: 800; }
+.p-body{ padding: 12px; width:100%; }
 
 .leadCard{
   border: 1px solid var(--border);
@@ -527,9 +504,7 @@
   gap:8px;
   margin-bottom: 10px;
 }
-.leadTop{
-  display:flex; align-items:center; justify-content:space-between; gap:10px;
-}
+.leadTop{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .leadName{ font-weight: 950; }
 .pills{ display:flex; gap:6px; flex-wrap:wrap; }
 .pill{
@@ -541,9 +516,7 @@
   color: rgba(15,23,42,.9);
   background: rgba(2,6,23,.03);
 }
-.ctaRow{
-  display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-end;
-}
+.ctaRow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
 .sel{
   border:1px solid var(--border);
   border-radius: 12px;
@@ -566,32 +539,23 @@
   gap:10px;
   margin-bottom:10px;
 }
-.alertBox .a{
-  font-weight: 950;
-}
-.alertBox .b{
-  font-size: 12px;
-  font-weight: 900;
-  color: rgba(15,23,42,.75);
-}
+.alertBox .a{ font-weight: 950; }
+.alertBox .b{ font-size: 12px; font-weight: 900; color: rgba(15,23,42,.75); }
 
 #userGrid{
+  width:100%;
   display:grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 .userCard{
+  width:100%;
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 10px;
   background: #fff;
 }
-.userRow{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-}
+.userRow{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .userName{ font-weight: 950; }
 .kpis{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 .kpi{ font-size: 11px; font-weight: 950; border:1px solid var(--border); border-radius:999px; padding:4px 8px; background: rgba(2,6,23,.03); }
@@ -604,11 +568,7 @@
   flex-direction:column;
   gap:6px;
 }
-.miniLine{
-  font-size: 12px;
-  font-weight: 900;
-  color: rgba(15,23,42,.88);
-}
+.miniLine{ font-size: 12px; font-weight: 900; color: rgba(15,23,42,.88); }
 .miniLine span{ color: var(--muted); font-weight: 900; }
 
 #cgd-bottom{
@@ -625,9 +585,7 @@
   gap:10px;
   flex-wrap:wrap;
 }
-.queueBox{
-  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-}
+.queueBox{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .queueTag{
   display:inline-flex; align-items:center; gap:8px;
   padding: 8px 10px; border:1px solid var(--border); border-radius: 14px;
@@ -636,20 +594,8 @@
 }
 .queueTag .mini{ font-size:11px; font-weight: 950; color: var(--muted); }
 
-.modalBack{
-  position:fixed; inset:0; background: rgba(2,6,23,.55);
-  display:flex; align-items:center; justify-content:center;
-  z-index: 1000;
-}
-.modal{
-  width:min(980px, calc(100vw - 22px));
-  max-height: calc(100vh - 22px);
-  overflow:auto;
-  background:#fff;
-  border-radius: 18px;
-  border:1px solid rgba(255,255,255,.18);
-  box-shadow: 0 30px 80px rgba(2,6,23,.35);
-}
+.modalBack{ display:none; } /* (só pra não “ganhar” do inline style) */
+
 .modalHdr{
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
@@ -659,12 +605,7 @@
 .modalBody{ padding: 14px; }
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom: 10px; }
 .field label{ font-size: 12px; font-weight: 950; color: rgba(15,23,42,.85); }
-.input{
-  border:1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-weight: 900;
-}
+.input{ border:1px solid var(--border); border-radius: 12px; padding: 10px 12px; font-weight: 900; }
 .sep{ border:none; border-top:1px solid var(--border); margin: 12px 0; }
 .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .tableLike{ display:flex; flex-direction:column; gap:10px; }
@@ -683,8 +624,10 @@
   document.head.appendChild(style);
 
   /* =============================
-   * 6) MODAL
+   * 6) MODAL (BLINDADO)
    * ============================= */
+
+  const MODAL_Z = 2147483647;
 
   function closeModal() {
     const b = document.getElementById("cgd-modal-back");
@@ -693,26 +636,67 @@
 
   function openModal(title, html) {
     closeModal();
+
     const back = document.createElement("div");
-    back.className = "modalBack";
     back.id = "cgd-modal-back";
-    back.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true">
-        <div class="modalHdr">
-          <div class="t">${esc(title)}</div>
-          <div class="row">
-            <button class="btn" id="cgd-modal-close">Fechar</button>
-          </div>
+
+    // ✅ inline style pra Bitrix não “matar” o modal
+    back.style.cssText = [
+      "position:fixed",
+      "left:0",
+      "top:0",
+      "right:0",
+      "bottom:0",
+      "inset:0",
+      "background:rgba(2,6,23,.55)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      `z-index:${MODAL_Z}`,
+      "padding:10px",
+    ].join(";");
+
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.style.cssText = [
+      "width:min(980px, calc(100vw - 22px))",
+      "max-height:calc(100vh - 22px)",
+      "overflow:auto",
+      "background:#fff",
+      "border-radius:18px",
+      "border:1px solid rgba(255,255,255,.18)",
+      "box-shadow:0 30px 80px rgba(2,6,23,.35)",
+    ].join(";");
+
+    modal.innerHTML = `
+      <div class="modalHdr">
+        <div class="t">${esc(title)}</div>
+        <div class="row">
+          <button class="btn" id="cgd-modal-close">Fechar</button>
         </div>
-        <div class="modalBody">${html}</div>
       </div>
+      <div class="modalBody">${html}</div>
     `;
+
     back.addEventListener("click", (e) => {
       if (e.target === back) closeModal();
     });
-    document.body.appendChild(back);
-    back.querySelector("#cgd-modal-close").onclick = closeModal;
+
+    back.appendChild(modal);
+
+    // ✅ garante body
+    const host = document.body || document.documentElement;
+    host.appendChild(back);
+
+    const btn = modal.querySelector("#cgd-modal-close");
+    if (btn) btn.onclick = closeModal;
   }
+
+  // ✅ debug manual: abra console e rode window.cgdModalTest()
+  window.cgdModalTest = function () {
+    openModal("TESTE MODAL", `<div class="badge">Se você está vendo isso, modal OK ✅</div>`);
+  };
 
   /* =============================
    * 7) CORE ACTIONS
@@ -1019,6 +1003,7 @@
         };
 
         if (prazo) fields[CFG.PIPE17.UF_PRAZO] = prazo;
+
         if (CFG.PIPE17.UF_URGENCIA) fields[CFG.PIPE17.UF_URGENCIA] = CFG.PIPE17.FIXED.URGENCIA;
         if (CFG.PIPE17.UF_ETAPA_TAREFA) fields[CFG.PIPE17.UF_ETAPA_TAREFA] = CFG.PIPE17.FIXED.ETAPA;
         if (CFG.PIPE17.UF_COLAB) fields[CFG.PIPE17.UF_COLAB] = "";
@@ -1177,7 +1162,7 @@
    * 9) CONVERTIDOS (Pipeline 0)
    * ============================= */
 
-  function openConvertidos(userId /* opcional */) {
+  function openConvertidos(userId) {
     const isPerUser = Number.isFinite(Number(userId));
     const userName = isPerUser ? getUserNameById(Number(userId)) : "GERAL";
 
@@ -1332,7 +1317,7 @@
   }
 
   /* =============================
-   * 10) FILA — modal disponível/indisponível
+   * 10) FILA — modal selecionar disponível/indisponível
    * ============================= */
 
   function openQueueManager() {
@@ -1350,6 +1335,7 @@
 
       <div class="row">
         <button class="btn primary" id="qmSave">Salvar</button>
+        <button class="btn" id="qmBuild">Montar fila (com disponíveis)</button>
         <button class="btn" id="qmClear">Zerar fila</button>
       </div>
 
@@ -1373,14 +1359,29 @@
       `;
     }).join("");
 
-    document.getElementById("qmSave").onclick = () => {
+    function getCheckedSet() {
       const set = new Set();
       box.querySelectorAll("input[data-av]").forEach((i) => {
         if (i.checked) set.add(Number(i.dataset.av));
       });
+      return set;
+    }
+
+    document.getElementById("qmSave").onclick = () => {
+      const set = getCheckedSet();
       setAvailUsers(set);
       ensureQueueValid();
       status.textContent = "OK ✅ Disponibilidade salva.";
+      renderBottom();
+      renderRightUsers();
+    };
+
+    document.getElementById("qmBuild").onclick = () => {
+      const set = getCheckedSet();
+      setAvailUsers(set);
+      const arr = Array.from(set).map(Number);
+      setQueue(arr);
+      status.textContent = "OK ✅ Fila montada com as disponíveis.";
       renderBottom();
       renderRightUsers();
     };
@@ -1414,7 +1415,6 @@
       </div>
 
       <div id="cgd-wrap">
-        <!-- LEFT -->
         <div class="panel">
           <div class="p-hdr">
             <div>
@@ -1438,7 +1438,6 @@
           </div>
         </div>
 
-        <!-- RIGHT -->
         <div class="panel">
           <div class="p-hdr">
             <div>
@@ -1469,111 +1468,98 @@
   if (sentinel) setSent("JS iniciou ✅");
 
   /* =============================
-   * 12) EVENTS (delegation — Bitrix DOM-safe)
+   * 12) EVENTS
    * ============================= */
 
-  function onDocClick(e) {
-    const t = e.target;
+  document.getElementById("btnRefresh").onclick = () => refreshAll(true);
+  document.getElementById("btnLeftRefresh").onclick = () => refreshLeft(true);
+  document.getElementById("btnRightRefresh").onclick = () => refreshRight(true);
 
-    if (t.closest("#btnRefresh")) return refreshAll(true);
-    if (t.closest("#btnLeftRefresh")) return refreshLeft(true);
-    if (t.closest("#btnRightRefresh")) return refreshRight(true);
+  document.getElementById("btnSilent").onclick = () => {
+    setSilent(!isSilent);
+    document.getElementById("btnSilent").textContent = isSilent ? "Som: OFF" : "Som: ON";
+  };
 
-    if (t.closest("#btnSilent")) {
-      setSilent(!isSilent);
-      const b = document.getElementById("btnSilent");
-      if (b) b.textContent = isSilent ? "Som: OFF" : "Som: ON";
-      return;
-    }
+  document.getElementById("btnSilenceAlert").onclick = () => {
+    setSilent(true);
+    document.getElementById("btnSilent").textContent = "Som: OFF";
+  };
 
-    if (t.closest("#btnSilenceAlert")) {
-      setSilent(true);
-      const b = document.getElementById("btnSilent");
-      if (b) b.textContent = "Som: OFF";
-      return;
-    }
+  document.getElementById("btnQueueMgr").onclick = openQueueManager;
 
-    if (t.closest("#btnQueueMgr")) return openQueueManager();
-
-    if (t.closest("#btnGetLinks")) {
-      openModal("GET • Equipes", `
-        <div class="small muted">Abrir os painéis GET em nova aba.</div>
-        <hr class="sep"/>
-        <div class="tableLike">
-          ${CFG.GET_LINKS.map(
-            (x) => `
-            <div class="selLeadRow">
-              <div class="left">
-                <div style="font-weight:950">${esc(x.label)}</div>
-                <div class="small muted">${esc(x.url)}</div>
-              </div>
-              <div class="right">
-                <a class="btn primary" href="${esc(x.url)}" target="_blank" rel="noopener">Abrir</a>
-              </div>
+  document.getElementById("btnUserManager").onclick = () => {
+    openModal("Selecionar Usuária", `
+      <div class="small muted">Escolha uma usuária para abrir o painel de ações.</div>
+      <hr class="sep"/>
+      <div class="tableLike">
+        ${CFG.USERS.map(
+          (u) => `
+          <div class="selLeadRow">
+            <div class="left">
+              <div style="font-weight:950">${esc(u.name)}</div>
+              <div class="small muted">ID: ${esc(u.id)}</div>
             </div>
-          `
-          ).join("")}
-        </div>
-      `);
-      return;
-    }
-
-    if (t.closest("#btnUserManager")) {
-      openModal("Selecionar Usuária", `
-        <div class="small muted">Escolha uma usuária para abrir o painel de ações (Item 8).</div>
-        <hr class="sep"/>
-        <div class="tableLike">
-          ${CFG.USERS.map(
-            (u) => `
-            <div class="selLeadRow">
-              <div class="left">
-                <div style="font-weight:950">${esc(u.name)}</div>
-                <div class="small muted">ID: ${esc(u.id)}</div>
-              </div>
-              <div class="right">
-                <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
-              </div>
+            <div class="right">
+              <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
             </div>
-          `
-          ).join("")}
-        </div>
-      `);
+          </div>
+        `
+        ).join("")}
+      </div>
+    `);
+
+    document.querySelectorAll("button[data-um]").forEach((b) => {
+      b.onclick = () => openUserManager(Number(b.dataset.um));
+    });
+  };
+
+  document.getElementById("btnGetLinks").onclick = () => {
+    openModal("GET • Equipes", `
+      <div class="small muted">Abrir os painéis GET em nova aba.</div>
+      <hr class="sep"/>
+      <div class="tableLike">
+        ${CFG.GET_LINKS.map(
+          (x) => `
+          <div class="selLeadRow">
+            <div class="left">
+              <div style="font-weight:950">${esc(x.label)}</div>
+              <div class="small muted">${esc(x.url)}</div>
+            </div>
+            <div class="right">
+              <a class="btn primary" href="${esc(x.url)}" target="_blank" rel="noopener">Abrir</a>
+            </div>
+          </div>
+        `
+        ).join("")}
+      </div>
+    `);
+  };
+
+  document.getElementById("btnBatch").onclick = () => openBatchTransfer();
+  document.getElementById("btnToggleHideUsers").onclick = () => openHideUsers();
+
+  document.getElementById("btnResetQueue").onclick = () => {
+    if (!confirm("Resetar a fila?")) return;
+    setQueue([]);
+    renderBottom();
+    renderRightUsers();
+  };
+
+  document.getElementById("btnNextAvail").onclick = () => {
+    ensureQueueValid();
+    if (!queue.length) {
+      alert("Fila vazia. Abra FILA e clique em “Montar fila (com disponíveis)”.");
       return;
     }
-
-    const umBtn = t.closest("button[data-um], button[data-openUm]");
-    if (umBtn) return openUserManager(Number(umBtn.dataset.um || umBtn.dataset.openum));
-
-    if (t.closest("#btnBatch")) return openBatchTransfer();
-    if (t.closest("#btnToggleHideUsers")) return openHideUsers();
-
-    if (t.closest("#btnResetQueue")) {
-      if (!confirm("Resetar a fila?")) return;
-      setQueue([]);
-      renderBottom();
-      renderRightUsers();
-      return;
-    }
-
-    if (t.closest("#btnNextAvail")) {
-      ensureQueueValid();
-      if (!queue.length) {
-        alert("Fila vazia. Abra FILA e marque usuárias disponíveis.");
-        return;
-      }
-      const q = queue.slice();
-      q.push(q.shift());
-      setQueue(q);
-      renderBottom();
-      renderRightUsers();
-      return;
-    }
-  }
-
-  document.addEventListener("click", onDocClick, true);
+    const q = queue.slice();
+    q.push(q.shift());
+    setQueue(q);
+    renderBottom();
+    renderRightUsers();
+  };
 
   /* =============================
-   * 13) HIDE USERS (cards do lado direito)
+   * 13) HIDE USERS
    * ============================= */
 
   function openHideUsers() {
@@ -1666,4 +1652,386 @@
               <input type="checkbox" data-bt="${esc(l.ID)}" />
               <div>
                 <div style="font-weight:950">${esc(L.name)}</div>
-                <div class="small
+                <div class="small muted">
+                  Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+      `;
+      })
+      .join("");
+
+    box.querySelectorAll("input[data-bt]").forEach((i) => {
+      i.onchange = () => {
+        const id = Number(i.dataset.bt);
+        if (i.checked) chosen.add(id);
+        else chosen.delete(id);
+      };
+    });
+
+    document.getElementById("btGo").onclick = async () => {
+      try {
+        const userId = Number(document.getElementById("btUser").value);
+        const ids = Array.from(chosen);
+        if (!ids.length) return (status.textContent = "Selecione ao menos 1 lead.");
+
+        status.textContent = `Transferindo ${ids.length}…`;
+
+        for (let idx = 0; idx < ids.length; idx++) {
+          await doPickLead(ids[idx], userId);
+          status.textContent = `Transferindo… (${idx + 1}/${ids.length})`;
+          await sleep(150);
+        }
+
+        status.textContent = "OK ✅ Transferência em lote concluída.";
+        await refreshAll(true);
+      } catch (e) {
+        status.textContent = `Erro: ${String(e.message || e)}`;
+      }
+    };
+  }
+
+  /* =============================
+   * 15) RENDER LEFT
+   * ============================= */
+
+  function renderLeadCard(lead) {
+    const L = leadLine(lead);
+    const id = Number(lead.ID);
+    const canMove = String(lead.STATUS_ID) !== String(CFG.LEAD_STATUS.NEW);
+
+    return `
+      <div class="leadCard" data-lead="${esc(id)}">
+        <div class="leadTop">
+          <div class="leadName">${esc(L.name)}</div>
+          <div class="pills">
+            <span class="pill">OPERADORA: ${esc(L.op)}</span>
+            <span class="pill">DATA/HORA: ${esc(fmtDT(L.dt))}</span>
+            <span class="pill">IDADE: ${esc(L.idade)}</span>
+            <span class="pill">FONTE: ${esc(L.fonte)}</span>
+            <span class="pill">BAIRRO: ${esc(L.bairro)}</span>
+          </div>
+        </div>
+
+        <div class="ctaRow">
+          <button class="btn danger" data-discard="${esc(id)}">DESCARTAR</button>
+          <button class="btn primary" data-pick="${esc(id)}">PEGAR</button>
+
+          ${
+            canMove
+              ? `
+              <select class="sel" data-moveSel="${esc(id)}">
+                ${stageOptionsHTML(lead.STATUS_ID)}
+              </select>
+              <button class="btn" data-moveBtn="${esc(id)}">MOVER PARA</button>
+            `
+              : ``
+          }
+
+          <span class="small muted">ID: ${esc(id)}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  async function bindLeftActions() {
+    const box = document.getElementById("leadList");
+
+    box.querySelectorAll("button[data-discard]").forEach((b) => {
+      b.onclick = async () => {
+        const id = Number(b.dataset.discard);
+        if (!confirm("Descartar este lead? (vai para Lead descartado/JUNK)")) return;
+        try {
+          b.disabled = true;
+          await doDiscardLead(id);
+          await refreshAll(true);
+        } catch (e) {
+          alert(`Erro: ${String(e.message || e)}`);
+        } finally {
+          b.disabled = false;
+        }
+      };
+    });
+
+    box.querySelectorAll("button[data-pick]").forEach((b) => {
+      b.onclick = async () => {
+        const leadId = Number(b.dataset.pick);
+        try {
+          const front = getFrontUser();
+          if (!front) {
+            alert("Fila vazia. Clique em FILA e depois em “Montar fila (com disponíveis)”.");
+            return;
+          }
+
+          const uName = getUserNameById(front);
+          const lead = await getLead(leadId);
+          const L = leadLine(lead);
+
+          openModal(`PEGAR • ${uName}`, `
+            <div class="small muted">
+              Ao confirmar, o lead será atribuído para <b>${esc(uName)}</b> e mudará para <b>EM ATENDIMENTO</b>.
+              <br/>A usuária volta automaticamente para o <b>final da fila</b>.
+            </div>
+
+            <hr class="sep"/>
+
+            <div class="badge">Lead: ${esc(L.name)} • ID ${esc(leadId)}</div>
+
+            <div class="small muted" style="margin-top:10px">
+              Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b>
+            </div>
+
+            <hr class="sep"/>
+
+            <div class="row">
+              <button class="btn primary" id="pkGo">Confirmar transferência</button>
+            </div>
+
+            <div class="small" id="pkStatus"></div>
+          `);
+
+          document.getElementById("pkGo").onclick = async () => {
+            const st = document.getElementById("pkStatus");
+            try {
+              st.textContent = "Transferindo…";
+              await doPickLead(leadId, front);
+              st.textContent = "OK ✅";
+              closeModal();
+              await refreshAll(true);
+            } catch (e) {
+              st.textContent = `Erro: ${String(e.message || e)}`;
+            }
+          };
+        } catch (e) {
+          alert(`Erro: ${String(e.message || e)}`);
+        }
+      };
+    });
+
+    box.querySelectorAll("button[data-moveBtn]").forEach((b) => {
+      b.onclick = async () => {
+        const leadId = Number(b.dataset.moveBtn);
+        const sel = box.querySelector(`select[data-moveSel="${String(leadId).replace(/"/g, '\\"')}"]`);
+        const to = sel ? String(sel.value) : null;
+        if (!to) return;
+
+        try {
+          b.disabled = true;
+          await doMoveLead(leadId, to);
+          await refreshAll(true);
+        } catch (e) {
+          alert(`Erro: ${String(e.message || e)}`);
+        } finally {
+          b.disabled = false;
+        }
+      };
+    });
+  }
+
+  /* =============================
+   * 16) RENDER RIGHT
+   * ============================= */
+
+  function computeUserOrder() {
+    resetDailyIfNeeded();
+
+    const pulled = [];
+    const never = [];
+
+    for (const u of CFG.USERS) {
+      const st = dailyStats.byUser[String(u.id)];
+      if (st && st.pulled > 0) pulled.push({ id: u.id, last: st.last2[0]?.dt || "" });
+      else never.push({ id: u.id });
+    }
+
+    pulled.sort((a, b) => {
+      const da = new Date(a.last).getTime();
+      const db = new Date(b.last).getTime();
+      return (isNaN(db) ? 0 : db) - (isNaN(da) ? 0 : da);
+    });
+
+    ensureQueueValid();
+    const q = queue.slice();
+    const inQueueSet = new Set(q.map(Number));
+    const pulledIds = new Set(pulled.map((x) => Number(x.id)));
+
+    const out = [];
+    for (const p of pulled) out.push(Number(p.id));
+    for (const id of q) if (!pulledIds.has(Number(id))) out.push(Number(id));
+    for (const n of never) {
+      if (!pulledIds.has(Number(n.id)) && !inQueueSet.has(Number(n.id))) out.push(Number(n.id));
+    }
+    return out;
+  }
+
+  function renderRightUsers() {
+    const grid = document.getElementById("userGrid");
+    const order = computeUserOrder();
+
+    grid.innerHTML =
+      order
+        .filter((id) => !hiddenUsers.has(Number(id)))
+        .map((id) => {
+          const u = CFG.USERS.find((x) => Number(x.id) === Number(id));
+          if (!u) return "";
+          const st = statUser(id);
+          const l1 = st.last2[0];
+          const l2 = st.last2[1];
+
+          return `
+          <div class="userCard">
+            <div class="userRow">
+              <div class="userName">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
+              <div class="kpis">
+                <span class="kpi">puxados hoje: ${esc(st.pulled)}</span>
+                <button class="btn small" data-openUm="${esc(u.id)}">Abrir</button>
+              </div>
+            </div>
+
+            <div class="miniLead">
+              <div class="miniLine">
+                <span>Último:</span> ${esc(l1 ? l1.name : "-")}
+                <span>•</span> ${esc(l1 ? l1.op : "-")}
+                <span>•</span> ${esc(l1 ? fmtDT(l1.dt) : "-")}
+              </div>
+              <div class="miniLine">
+                <span>Anterior:</span> ${esc(l2 ? l2.name : "-")}
+                <span>•</span> ${esc(l2 ? l2.op : "-")}
+                <span>•</span> ${esc(l2 ? fmtDT(l2.dt) : "-")}
+              </div>
+            </div>
+          </div>
+        `;
+        })
+        .join("") || `<div class="small muted">Sem cards.</div>`;
+
+    grid.querySelectorAll("button[data-openUm]").forEach((b) => {
+      b.onclick = () => openUserManager(Number(b.dataset.openUm));
+    });
+  }
+
+  /* =============================
+   * 17) RENDER BOTTOM
+   * ============================= */
+
+  function renderBottom() {
+    ensureQueueValid();
+
+    const box = document.getElementById("queueBox");
+    const q = queue.slice();
+
+    if (!q.length) {
+      box.innerHTML = `
+        <span class="badge">Fila de atendimento</span>
+        <span class="small muted">
+          Fila vazia. Clique em <b>Fila</b> e depois em <b>Montar fila (com disponíveis)</b>.
+        </span>
+      `;
+      return;
+    }
+
+    box.innerHTML = `
+      <span class="badge">Fila de atendimento</span>
+      ${q
+        .map((id, idx) => {
+          const u = getUserNameById(id);
+          const pos = idx === 0 ? "PRÓXIMA" : `#${idx + 1}`;
+          return `
+            <span class="queueTag">
+              ${esc(u)}
+              <span class="mini">${esc(pos)}</span>
+            </span>
+          `;
+        })
+        .join("")}
+    `;
+  }
+
+  /* =============================
+   * 18) ALERT
+   * ============================= */
+
+  let alertTimer = null;
+  function setAlertOn(hasNew) {
+    const box = document.getElementById("alertBox");
+    if (!box) return;
+
+    if (hasNew) {
+      box.style.display = "flex";
+      if (!alertTimer) {
+        alertTimer = setInterval(() => {
+          box.style.opacity = box.style.opacity === "0.55" ? "1" : "0.55";
+        }, 350);
+      }
+      beep();
+    } else {
+      box.style.display = "none";
+      box.style.opacity = "1";
+      if (alertTimer) {
+        clearInterval(alertTimer);
+        alertTimer = null;
+      }
+    }
+  }
+
+  /* =============================
+   * 19) REFRESH
+   * ============================= */
+
+  async function refreshLeft(force) {
+    const leadBox = document.getElementById("leadList");
+    leadBox.innerHTML = `<div class="small muted">Carregando…</div>`;
+
+    const leads = await listLeads(
+      { STATUS_ID: CFG.LEAD_STATUS.NEW },
+      null,
+      { DATE_CREATE: "DESC" },
+      120
+    );
+
+    cachedNewLeads = leads;
+    setAlertOn(leads.length > 0);
+
+    leadBox.innerHTML =
+      leads.map(renderLeadCard).join("") || `<div class="small muted">Sem novos leads.</div>`;
+
+    await bindLeftActions();
+  }
+
+  async function refreshRight(force) {
+    renderRightUsers();
+    renderBottom();
+
+    resetDailyIfNeeded();
+    const dayTotal = Object.values(dailyStats.byUser).reduce((a, x) => a + (x.pulled || 0), 0);
+    document.getElementById("kpiDay").textContent = `Leads do dia: ${dayTotal}`;
+    document.getElementById("kpiMonth").textContent = `Leads do mês: 0`;
+  }
+
+  async function refreshAll(force) {
+    try {
+      ensureQueueValid();
+      await refreshLeft(force);
+      await refreshRight(force);
+    } catch (e) {
+      console.error(e);
+      const leadBox = document.getElementById("leadList");
+      if (leadBox) leadBox.innerHTML = `<div class="small muted">Erro: ${esc(String(e.message || e))}</div>`;
+    }
+  }
+
+  /* =============================
+   * 20) AUTO-REFRESH
+   * ============================= */
+
+  ensureQueueValid();
+  renderBottom();
+  renderRightUsers();
+  refreshAll(true).catch(console.error);
+
+  setInterval(() => {
+    refreshAll(false).catch(console.error);
+  }, CFG.REFRESH_MS);
+})();
