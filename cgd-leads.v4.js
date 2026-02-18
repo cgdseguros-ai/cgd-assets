@@ -1,4 +1,4 @@
-/*! cgd-leads.v3.js — Painel de Leads CGD (GitHub/Bitrix friendly) */
+/*! cgd-leads.v4.js — Painel de Leads CGD (GitHub/Bitrix friendly) */
 (function () {
   "use strict";
 
