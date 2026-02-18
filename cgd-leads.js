@@ -1,3 +1,4 @@
+
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - Sem localStorage (contagens, histórico, fila e “puxados hoje” vêm do Bitrix)
    - Fila multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
