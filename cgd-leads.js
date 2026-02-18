@@ -30,7 +30,7 @@
       JUNK: "JUNK", // Lead descartado (system)
     },
 
-    // ✅ Usuárias (fila + KPI + modais)
+    // ✅ Usuárias
     USERS: [
       { id: 15, name: "ALINE" },
       { id: 19, name: "ADRIANA" },
@@ -69,7 +69,7 @@
       },
 
       UF_OBS: "UF_CRM_691385BE7D33D",
-      UF_PRAZO: "UF_CRM_1768175087", // ✅ PRAZO
+      UF_PRAZO: "UF_CRM_1768175087",
       UF_URGENCIA: "UF_CRM_1768174982",
       UF_ETAPA_TAREFA: "UF_CRM_1768179977089",
       UF_COLAB: "UF_CRM_1770327799",
@@ -108,14 +108,20 @@
       ]),
     },
 
-    // ✅ Atualizações
-    REFRESH_MS: 20000,     // refresh “completo”
-    FAST_POLL_MS: 8000,    // checagem rápida de novo lead (barata)
-    TITLE: "PAINEL DE LEADS - CGD CORRETORA",
+    // ✅ Mais rápido (não precisa F5)
+    REFRESH_MS: 15000, // 15s
 
-    // ✅ Logo (redonda) — topo
+    // ✅ Alarmes
+    ALERT_BEEP_EVERY_MS: 3500, // repete enquanto existir NOVO LEAD
+    ALERT_FLASH_EVERY_MS: 350,
+
+    // ✅ UI
+    TITLE: "PAINEL DE LEADS - CGD CORRETORA",
     LOGO_URL:
       "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
+
+    // ✅ BUILD (para você ver na hora se atualizou)
+    BUILD: "BUILD 2026-02-18 21:00",
 
     GET_LINKS: [
       { label: "EQUIPE DELTA", url: "https://getcgdcorretora.bitrix24.site/equipedelta/" },
@@ -123,6 +129,9 @@
       { label: "EQUIPE BETA", url: "https://getcgdcorretora.bitrix24.site/equipebeta/" },
     ],
   };
+
+  // expõe para o loader “carimbar”
+  window.CGD_LEADS_BUILD = CFG.BUILD;
 
   /* =============================
    * 1) ROOT + SENTINEL
@@ -193,18 +202,17 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // ✅ Prazo (datetime-local) -> formato Bitrix (YYYY-MM-DD HH:MM:SS)
-  function toBitrixDateTime(dtLocalValue) {
-    // dtLocalValue: "YYYY-MM-DDTHH:MM"
-    if (!dtLocalValue) return "";
-    const v = String(dtLocalValue).trim();
+  // datetime-local -> "YYYY-MM-DD HH:MM" (Bitrix costuma aceitar)
+  function dtLocalToBitrix(v) {
+    // v pode ser "YYYY-MM-DDTHH:MM"
     if (!v) return "";
-    // garante segundos
-    const parts = v.split("T");
-    if (parts.length !== 2) return v.replace("T", " ");
-    const date = parts[0];
-    const time = parts[1].length === 5 ? parts[1] + ":00" : parts[1];
-    return `${date} ${time}`;
+    const s = String(v).trim();
+    if (!s) return "";
+    if (s.includes("T")) {
+      const [d, t] = s.split("T");
+      return `${d} ${t}`;
+    }
+    return s;
   }
 
   /* =============================
@@ -335,6 +343,8 @@
     HIDDEN_USERS: "cgd_leads_hidden_users_v2",
     AVAIL_USERS: "cgd_leads_avail_users_v2",
     SILENT: "cgd_leads_silent_v2",
+    STATS: "cgd_leads_stats_v2",
+    LAST_NEW_COUNT: "cgd_leads_last_new_count_v2",
   };
 
   function readJSON(k, fallback) {
@@ -358,11 +368,12 @@
   let isSilent = !!readJSON(LS.SILENT, false);
 
   const today = nowKey();
-  let dailyStats = { day: today, byUser: {} };
+  let dailyStats = readJSON(LS.STATS, { day: today, byUser: {} });
 
   function resetDailyIfNeeded() {
     const k = nowKey();
     if (dailyStats.day !== k) dailyStats = { day: k, byUser: {} };
+    writeJSON(LS.STATS, dailyStats);
   }
 
   function statUser(id) {
@@ -408,61 +419,7 @@
   }
 
   /* =============================
-   * 5) AUDIO (unlock)
-   * ============================= */
-
-  let audioCtx = null;
-  let audioUnlocked = false;
-
-  function unlockAudioOnce() {
-    if (audioUnlocked) return;
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      // resume no gesto
-      audioCtx.resume && audioCtx.resume().catch(() => {});
-      audioUnlocked = true;
-    } catch (_) {
-      audioUnlocked = false;
-    }
-  }
-
-  ["click", "touchstart", "keydown"].forEach((ev) => {
-    window.addEventListener(
-      ev,
-      () => {
-        unlockAudioOnce();
-      },
-      { once: true, passive: true }
-    );
-  });
-
-  function beep() {
-    if (isSilent) return;
-    if (!audioUnlocked || !audioCtx) return;
-    try {
-      const o = audioCtx.createOscillator();
-      const g = audioCtx.createGain();
-      o.connect(g);
-      g.connect(audioCtx.destination);
-      o.type = "square";
-      o.frequency.value = 980;
-      g.gain.value = 0.045;
-      o.start();
-      setTimeout(() => {
-        o.stop();
-      }, 160);
-    } catch (_) {}
-  }
-
-  function beepTriple() {
-    if (isSilent) return;
-    beep();
-    setTimeout(beep, 220);
-    setTimeout(beep, 440);
-  }
-
-  /* =============================
-   * 6) UI (CSS)
+   * 5) UI (CSS)
    * ============================= */
 
   const style = document.createElement("style");
@@ -477,6 +434,8 @@
   --muted: rgba(15,23,42,.65);
   --radius: 16px;
   --shadow: 0 10px 30px rgba(2,6,23,.08);
+  --danger: rgba(239,68,68,.16);
+  --brand: rgba(59,130,246,.14);
 
   width:100%;
   min-height:100vh;
@@ -485,13 +444,12 @@
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
 }
 
-/* ====== TOP ====== */
 #cgd-top{
   position: sticky;
   top: 0;
   z-index: 50;
   background: rgba(255,255,255,.92);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   padding: 10px 12px;
   display:flex;
@@ -506,16 +464,15 @@
   display:flex;
   align-items:center;
   gap:10px;
-  min-width: 260px;
-}
-#cgd-title .logo{
-  width:34px;height:34px;border-radius:999px;
-  border:1px solid rgba(0,0,0,.12);
-  box-shadow: 0 10px 18px rgba(2,6,23,.10);
-  object-fit: cover;
-  background:#fff;
+  min-width: 0;
 }
 #cgd-title .dot{ width:10px;height:10px;border-radius:999px;background:#111827; }
+#cgd-title .ttl{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 58vw; }
+#cgd-title .logo{
+  width:28px;height:28px;border-radius:999px; object-fit:cover;
+  border:1px solid rgba(20,30,60,.18);
+  box-shadow: 0 8px 18px rgba(2,6,23,.08);
+}
 
 #cgd-top .right{
   display:flex; align-items:center; gap:10px; flex-wrap:wrap;
@@ -529,9 +486,9 @@
   border-radius: 12px;
   font-weight: 800;
   cursor:pointer;
-  transition: transform .12s ease, box-shadow .12s ease;
+  transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
 }
-.btn:hover{ box-shadow: 0 8px 18px rgba(2,6,23,.08); transform: translateY(-1px); }
+.btn:hover{ box-shadow: 0 10px 22px rgba(2,6,23,.10); transform: translateY(-1px); }
 .btn:active{ transform: translateY(0px); }
 .btn.primary{ background: #e8f0ff; border-color: rgba(59,130,246,.35); }
 .btn.danger{ background: #ffecec; border-color: rgba(239,68,68,.35); }
@@ -547,14 +504,14 @@
   border:1px solid var(--border);
   font-weight: 900;
   font-size: 12px;
+  max-width: 100%;
 }
 
-/* ====== LAYOUT ====== */
 #cgd-wrap{
   width:100%;
   max-width:none;
   display:grid;
-  grid-template-columns: minmax(420px, 38%) 1fr;
+  grid-template-columns: minmax(360px, 35%) 1fr;
   gap: 12px;
   padding: 12px;
   align-items:start;
@@ -569,7 +526,6 @@
   overflow:hidden;
 }
 
-/* ====== HEADER DOS PAINÉIS (corrige “mal formatado”) ====== */
 .p-hdr{
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
@@ -578,35 +534,34 @@
   justify-content:space-between;
   gap:10px;
 }
-.p-hdr > .leftInfo{ flex:1; min-width:0; }
-.p-hdr .h{ font-weight: 950; font-size: 14px; line-height: 1.25; }
-.p-hdr .sub{ font-size: 12px; color: var(--muted); font-weight: 800; margin-top: 2px; line-height: 1.25; }
+.p-hdr .left{
+  flex: 1;
+  min-width: 0;
+}
+.p-hdr .h{ font-weight: 950; }
+.p-hdr .sub{ font-size: 12px; color: var(--muted); font-weight: 800; line-height: 1.25; margin-top: 2px; }
+.p-hdr .right{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+
 .p-body{ padding: 12px; width:100%; }
 
 .leadCard{
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px;
+  padding: 10px;
   background: #fff;
   display:flex;
   flex-direction:column;
-  gap:10px;
+  gap:8px;
   margin-bottom: 10px;
 }
 .leadName{
-  font-weight: 980;
-  font-size: 18px;
+  font-weight: 950;
+  font-size: 14px;
   line-height: 1.2;
   white-space: normal;
   word-break: break-word;
 }
-.leadTop{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:10px;
-}
-.pills{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+.pills{ display:flex; gap:6px; flex-wrap:wrap; }
 .pill{
   font-size: 11px;
   font-weight: 950;
@@ -624,37 +579,29 @@
   font-weight: 900;
   background:#fff;
 }
-
 .small{ font-size: 12px; color: var(--muted); font-weight: 800; }
 .muted{ color: var(--muted); }
 
 .alertBox{
-  border: 2px solid rgba(236,72,153,.28);
-  background: rgba(236,72,153,.10);
-  padding: 12px;
+  border: 2px solid rgba(239,68,68,.35);
+  background: rgba(239,68,68,.10);
+  padding: 10px;
   border-radius: 14px;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:10px;
   margin-bottom:10px;
-  position: sticky;
-  top: 64px;
-  z-index: 30;
+  box-shadow: 0 14px 36px rgba(239,68,68,.14);
 }
-
-/* alarme mais chamativo */
-@keyframes cgdPulse {
-  0% { transform: translateZ(0) scale(1); box-shadow: 0 0 0 rgba(236,72,153,.0); }
-  50% { transform: translateZ(0) scale(1.01); box-shadow: 0 0 0 6px rgba(236,72,153,.12); }
-  100% { transform: translateZ(0) scale(1); box-shadow: 0 0 0 rgba(236,72,153,.0); }
-}
-.alertOn .alertBox{
-  animation: cgdPulse 0.75s ease-in-out infinite;
-  border-color: rgba(236,72,153,.55);
-}
-.alertBox .a{ font-weight: 980; font-size: 14px; }
+.alertBox .a{ font-weight: 950; }
 .alertBox .b{ font-size: 12px; font-weight: 900; color: rgba(15,23,42,.78); }
+.alertPulse{ animation: cgdPulse 1.2s ease-in-out infinite; }
+@keyframes cgdPulse{
+  0%{ transform: translateY(0px); }
+  50%{ transform: translateY(-1px); }
+  100%{ transform: translateY(0px); }
+}
 
 #userGrid{
   width:100%;
@@ -666,18 +613,18 @@
   width:100%;
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px;
+  padding: 10px;
   background: #fff;
 }
 .userRow{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.userName{ font-weight: 980; }
-.kpis{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.userName{ font-weight: 950; min-width: 0; overflow:hidden; text-overflow: ellipsis; }
+.kpis{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
 .kpi{ font-size: 11px; font-weight: 950; border:1px solid var(--border); border-radius:999px; padding:4px 8px; background: rgba(2,6,23,.03); }
 
 .miniLead{
   border-top: 1px dashed rgba(20,30,60,.18);
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
   display:flex;
   flex-direction:column;
   gap:6px;
@@ -690,8 +637,8 @@
   bottom: 0;
   z-index: 40;
   padding: 10px 12px;
-  background: rgba(255,255,255,.92);
-  backdrop-filter: blur(8px);
+  background: rgba(255,255,255,.94);
+  backdrop-filter: blur(10px);
   border-top: 1px solid var(--border);
   display:flex;
   align-items:center;
@@ -708,23 +655,18 @@
 }
 .queueTag .mini{ font-size:11px; font-weight: 950; color: var(--muted); }
 
-/* ====== MODAL (evita cortar) ====== */
 .modalHdr{
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   display:flex; align-items:center; justify-content:space-between; gap:10px;
   position: sticky;
   top: 0;
-  background: rgba(255,255,255,.92);
-  backdrop-filter: blur(6px);
+  background: rgba(255,255,255,.95);
+  backdrop-filter: blur(10px);
   z-index: 2;
 }
-.modalHdr .t{ font-weight: 980; }
-.modalBody{
-  padding: 14px;
-  overflow-x: hidden;
-  max-width: 100%;
-}
+.modalHdr .t{ font-weight: 950; }
+.modalBody{ padding: 14px; }
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom: 10px; }
 .field label{ font-size: 12px; font-weight: 950; color: rgba(15,23,42,.85); }
 .input{ border:1px solid var(--border); border-radius: 12px; padding: 10px 12px; font-weight: 900; }
@@ -732,23 +674,28 @@
 .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .tableLike{ display:flex; flex-direction:column; gap:10px; }
 .selLeadRow{
-  border:1px solid var(--border); border-radius: 14px; padding:12px;
+  border:1px solid var(--border); border-radius: 14px; padding:10px;
   display:flex; gap:10px; align-items:flex-start; justify-content:space-between;
 }
 .selLeadRow .left{ flex:1; min-width: 240px; }
-.selLeadRow .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.selLeadRow .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+
+.cardBox{
+  border:1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(2,6,23,.02);
+}
 
 @media (max-width: 1024px){
   #cgd-wrap{ grid-template-columns: 1fr; }
   #userGrid{ grid-template-columns: 1fr; }
-  .leadTop{ flex-direction:column; align-items:flex-start; }
-  .pills{ justify-content:flex-start; }
 }
-  `;
+`;
   document.head.appendChild(style);
 
   /* =============================
-   * 7) MODAL (BLINDADO)
+   * 6) MODAL (BLINDADO)
    * ============================= */
 
   const MODAL_Z = 2147483647;
@@ -763,6 +710,8 @@
 
     const back = document.createElement("div");
     back.id = "cgd-modal-back";
+
+    // ✅ inline style (Bitrix-safe)
     back.style.cssText = [
       "position:fixed",
       "left:0",
@@ -775,15 +724,16 @@
       "align-items:center",
       "justify-content:center",
       `z-index:${MODAL_Z}`,
-      "padding:10px",
+      "padding:12px",
+      "pointer-events:auto",
     ].join(";");
 
     const modal = document.createElement("div");
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
     modal.style.cssText = [
-      "width:min(1040px, calc(100vw - 22px))",
-      "max-height:calc(100vh - 22px)",
+      "width:min(980px, calc(100vw - 24px))",
+      "max-height:calc(100vh - 24px)",
       "overflow:auto",
       "background:#fff",
       "border-radius:18px",
@@ -806,18 +756,22 @@
     });
 
     back.appendChild(modal);
-    (document.body || document.documentElement).appendChild(back);
+
+    // ✅ anexa no documentElement para escapar de containers do Bitrix
+    const host = document.documentElement || document.body;
+    host.appendChild(back);
 
     const btn = modal.querySelector("#cgd-modal-close");
     if (btn) btn.onclick = closeModal;
   }
 
+  // debug manual
   window.cgdModalTest = function () {
     openModal("TESTE MODAL", `<div class="badge">Se você está vendo isso, modal OK ✅</div>`);
   };
 
   /* =============================
-   * 8) CORE ACTIONS
+   * 7) CORE ACTIONS
    * ============================= */
 
   async function doPickLead(leadId, userId) {
@@ -837,8 +791,9 @@
     const dt = String(lead[CFG.UF_DT_LEAD] || lead.DATE_CREATE || lead.DATE_MODIFY || "");
     const st = statUser(userId);
     st.pulled += 1;
-    st.last2.unshift({ name, op, dt, id: leadId });
+    st.last2.unshift({ name, op, dt, id: Number(leadId) });
     st.last2 = st.last2.slice(0, 2);
+    writeJSON(LS.STATS, dailyStats);
 
     return lead;
   }
@@ -894,100 +849,101 @@
     return Number(queue[0]);
   }
 
+  function beep(pattern) {
+    if (isSilent) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.type = "sine";
+      g.gain.value = 0.08;
+
+      const seq = Array.isArray(pattern) && pattern.length ? pattern : [880, 660, 880];
+      let i = 0;
+
+      function step() {
+        if (i >= seq.length) {
+          try {
+            o.stop();
+          } catch (_) {}
+          ctx.close().catch(() => {});
+          return;
+        }
+        o.frequency.value = Number(seq[i]) || 880;
+        i++;
+        setTimeout(step, 140);
+      }
+
+      o.start();
+      step();
+    } catch (_) {}
+  }
+
   /* =============================
-   * 9) MODAL “GERENCIAR USUÁRIA”
+   * 8) MODAL “GERENCIAR USUÁRIA”
    * ============================= */
 
   let currentUserId = null;
 
   function openUserManager(userId) {
     currentUserId = Number(userId);
+    const uName = getUserNameById(currentUserId);
+    const st = statUser(currentUserId);
 
-    const stLocal = statUser(currentUserId);
-    const pulledHtml = `
-      <div class="badge">Puxados hoje: ${esc(stLocal.pulled || 0)}</div>
-      <div class="tableLike" style="margin-top:10px">
-        ${(stLocal.last2 || [])
-          .map((x) => {
-            return `
-            <div class="selLeadRow">
-              <div class="left">
-                <div style="font-weight:980">${esc(x.name || "-")}</div>
-                <div class="small muted">Operadora: <b>${esc(x.op || "-")}</b> • Data/Hora: <b>${esc(
-              fmtDT(x.dt)
-            )}</b> • Lead ID: <b>${esc(x.id || "-")}</b></div>
-              </div>
-              <div class="right">
-                <button class="btn" data-openLead="${esc(x.id || "")}">Abrir Lead</button>
-              </div>
-            </div>
-          `;
-          })
-          .join("") || `<div class="small muted">Sem histórico ainda.</div>`}
-      </div>
-    `;
-
-    openModal(`USUÁRIA • ${getUserNameById(currentUserId)}`, `
-      <div class="small muted">
-        Aqui você controla os <b>LEADS EM ANDAMENTO</b> da usuária (exceto “PERDIDO”) e cria <b>FOLLOW-UP</b> na Pipeline 17.
-        <br/>🔊 Se o som não tocar, clique uma vez no painel para “liberar áudio” (regra do navegador).
-      </div>
-
-      <hr class="sep"/>
-
-      <div style="display:grid; gap:12px; grid-template-columns: 1fr 1fr;">
-        <div>
-          <div class="field">
-            <label>Buscar lead por palavra (nome do cliente)</label>
-            <input class="input" id="umSearch" placeholder="Ex.: Maria, João, Carlos..." />
+    openModal(`USUÁRIA • ${uName}`, `
+      <div class="cardBox">
+        <div class="row" style="justify-content:space-between; gap:12px">
+          <div class="small muted">
+            Controle de <b>LEADS EM ANDAMENTO</b> (exceto “PERDIDO”) e criação de <b>FOLLOW-UP</b> (Pipeline 17).
           </div>
-
-          <div class="row" style="justify-content:space-between">
-            <div class="badge" id="umCount">0 leads</div>
-            <div class="row">
-              <button class="btn" id="umReload">Atualizar</button>
-              <button class="btn primary" id="umBatchFollow">FOLLOW-UP em lote</button>
-              <button class="btn" id="umConvertidos">CONVERTIDOS (Pipeline 0)</button>
-            </div>
+          <div class="row">
+            <span class="badge">Puxados hoje: ${esc(st.pulled)}</span>
+            <button class="btn" id="umReload">Atualizar</button>
           </div>
-
-          <hr class="sep" />
-
-          <div id="umList" class="tableLike">
-            <div class="small muted">Clique em “Atualizar”.</div>
-          </div>
-
-          <div class="small" id="umStatus"></div>
         </div>
 
-        <div>
-          <div class="h" style="font-weight:980;margin-bottom:6px">Histórico • puxados hoje</div>
-          ${pulledHtml}
+        <hr class="sep"/>
+
+        <div class="row" style="justify-content:space-between">
+          <div style="flex:1; min-width:240px">
+            <div class="small muted" style="margin-bottom:6px"><b>Últimos puxados hoje</b></div>
+            <div class="small muted">
+              1) ${esc(st.last2[0]?.name || "-")} • ${esc(st.last2[0]?.op || "-")} • ${esc(
+      st.last2[0]?.dt ? fmtDT(st.last2[0]?.dt) : "-"
+    )} • ID ${esc(st.last2[0]?.id || "-")}
+              <br/>
+              2) ${esc(st.last2[1]?.name || "-")} • ${esc(st.last2[1]?.op || "-")} • ${esc(
+      st.last2[1]?.dt ? fmtDT(st.last2[1]?.dt) : "-"
+    )} • ID ${esc(st.last2[1]?.id || "-")}
+            </div>
+          </div>
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn primary" id="umBatchFollow">FOLLOW-UP em lote</button>
+            <button class="btn" id="umConvertidos">CONVERTIDOS (Pipeline 0)</button>
+          </div>
         </div>
       </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Buscar lead por palavra (nome do cliente)</label>
+        <input class="input" id="umSearch" placeholder="Ex.: Maria, João, Carlos..." />
+      </div>
+
+      <div class="row" style="justify-content:space-between">
+        <div class="badge" id="umCount">0 leads</div>
+        <div class="small muted" id="umHint">Clique em “Atualizar” para carregar.</div>
+      </div>
+
+      <hr class="sep" />
+
+      <div id="umList" class="tableLike">
+        <div class="small muted">Clique em “Atualizar”.</div>
+      </div>
+
+      <div class="small" id="umStatus"></div>
     `);
-
-    // bind “Abrir Lead” do histórico
-    document.querySelectorAll("button[data-openLead]").forEach((b) => {
-      b.onclick = async () => {
-        const id = Number(b.dataset.openLead || 0);
-        if (!id) return;
-        try {
-          const lead = await getLead(id);
-          const L = leadLine(lead);
-          openModal(`LEAD • ${esc(L.name)}`, `
-            <div class="badge">ID ${esc(id)} • Status: ${esc(stageLeadName(lead.STATUS_ID))}</div>
-            <hr class="sep"/>
-            <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(
-            fmtDT(L.dt)
-          )}</b> • Idade: <b>${esc(L.idade)}</b></div>
-            <div class="small muted">Fonte: <b>${esc(L.fonte)}</b> • Bairro: <b>${esc(L.bairro)}</b></div>
-          `);
-        } catch (e) {
-          alert(`Erro ao abrir lead: ${String(e.message || e)}`);
-        }
-      };
-    });
 
     const elReload = document.getElementById("umReload");
     const elSearch = document.getElementById("umSearch");
@@ -999,7 +955,6 @@
 
     async function load() {
       elStatus.textContent = "Carregando…";
-
       leads = await listLeads(
         {
           ASSIGNED_BY_ID: currentUserId,
@@ -1010,7 +965,6 @@
         { DATE_MODIFY: "DESC" },
         200
       );
-
       elStatus.textContent = `OK • ${leads.length} leads`;
       render();
     }
@@ -1027,11 +981,11 @@
             return `
             <div class="selLeadRow">
               <div class="left">
-                <div style="font-weight:980">${esc(L.name)}</div>
+                <div style="font-weight:950">${esc(L.name)}</div>
                 <div class="small muted">
                   Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • Status: <b>${esc(
               stageLeadName(l.STATUS_ID)
-            )}</b> • ID <b>${esc(l.ID)}</b>
+            )}</b> • ID ${esc(l.ID)}
                 </div>
               </div>
               <div class="right">
@@ -1085,7 +1039,7 @@
       });
     }
 
-    elReload.onclick = () => load().catch((e) => (elStatus.textContent = `Erro: ${String(e.message || e)}`));
+    elReload.onclick = load;
     elSearch.oninput = render;
 
     document.getElementById("umBatchFollow").onclick = () => openFollowUpBatch(currentUserId, leads);
@@ -1099,14 +1053,16 @@
     const L = leadLine(lead);
 
     openModal(`FOLLOW-UP • ${getUserNameById(userId)}`, `
-      <div class="small muted">
-        Será criado um <b>NEGÓCIO</b> na Pipeline 17 na coluna da usuária, com os dados do lead em OBS.
+      <div class="cardBox">
+        <div class="small muted">
+          Será criado um <b>NEGÓCIO</b> na Pipeline 17 (coluna da usuária), com os dados do lead em OBS.
+        </div>
+        <hr class="sep"/>
+        <div class="badge">Cliente: ${esc(L.name)} • Operadora: ${esc(L.op)} • Lead ID ${esc(lead.ID)}</div>
       </div>
 
-      <hr class="sep"/>
-
-      <div class="field">
-        <label>Nome do cliente</label>
+      <div class="field" style="margin-top:12px">
+        <label>Nome do cliente (título do FOLLOW-UP)</label>
         <input class="input" id="fuTitle" value="${esc(L.name)}" />
       </div>
 
@@ -1118,7 +1074,7 @@
       <div class="field">
         <label>Prazo (UF_CRM_1768175087)</label>
         <input class="input" id="fuPrazo" type="datetime-local" />
-        <div class="small muted">Escolha data e hora. O sistema envia em formato Bitrix.</div>
+        <div class="small muted">Formato correto: selecione data e hora.</div>
       </div>
 
       <div class="row">
@@ -1129,14 +1085,14 @@
     `);
 
     document.getElementById("fuGo").onclick = async () => {
-      const st = document.getElementById("fuStatus");
+      const stEl = document.getElementById("fuStatus");
       try {
-        st.textContent = "Criando…";
+        stEl.textContent = "Criando…";
 
         const title = String(document.getElementById("fuTitle").value || "").trim() || L.name;
         const extra = String(document.getElementById("fuExtra").value || "").trim();
         const prazoLocal = String(document.getElementById("fuPrazo").value || "").trim();
-        const prazo = toBitrixDateTime(prazoLocal);
+        const prazo = dtLocalToBitrix(prazoLocal);
 
         const obsBlock =
           `CLIENTE: ${L.name}\n` +
@@ -1159,27 +1115,29 @@
         };
 
         if (prazo) fields[CFG.PIPE17.UF_PRAZO] = prazo;
+
         if (CFG.PIPE17.UF_URGENCIA) fields[CFG.PIPE17.UF_URGENCIA] = CFG.PIPE17.FIXED.URGENCIA;
         if (CFG.PIPE17.UF_ETAPA_TAREFA) fields[CFG.PIPE17.UF_ETAPA_TAREFA] = CFG.PIPE17.FIXED.ETAPA;
         if (CFG.PIPE17.UF_COLAB) fields[CFG.PIPE17.UF_COLAB] = "";
 
         await createDeal(fields);
-        st.textContent = "OK ✅ FOLLOW-UP criado na Pipeline 17.";
+
+        stEl.textContent = "OK ✅ FOLLOW-UP criado na Pipeline 17.";
       } catch (e) {
-        st.textContent = `Erro: ${String(e.message || e)}`;
+        stEl.textContent = `Erro: ${String(e.message || e)}`;
       }
     };
   }
 
   function openFollowUpBatch(userId, leadsInMemory) {
     openModal(`FOLLOW-UP EM LOTE • ${getUserNameById(userId)}`, `
-      <div class="small muted">
-        Selecione leads, defina prazo base e (opcional) intervalo.
+      <div class="cardBox">
+        <div class="small muted">
+          Selecione leads (da lista atual da usuária) e defina prazo. Opcional: intervalo entre criações.
+        </div>
       </div>
 
-      <hr class="sep"/>
-
-      <div class="field">
+      <div class="field" style="margin-top:12px">
         <label>Buscar lead (na lista)</label>
         <input class="input" id="fbSearch" placeholder="Digite..." />
       </div>
@@ -1229,10 +1187,8 @@
                 <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
                   <input type="checkbox" data-chk="${esc(l.ID)}" ${checked} />
                   <div>
-                    <div style="font-weight:980">${esc(L.name)}</div>
-                    <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(
-              fmtDT(L.dt)
-            )}</b> • ID <b>${esc(l.ID)}</b></div>
+                    <div style="font-weight:950">${esc(L.name)}</div>
+                    <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}</div>
                   </div>
                 </label>
               </div>
@@ -1256,16 +1212,16 @@
     document.getElementById("fbGo").onclick = async () => {
       try {
         const prazoLocal = String(document.getElementById("fbPrazo").value || "").trim();
-        const prazoBase = toBitrixDateTime(prazoLocal);
-        if (!prazoBase) return (elStatus.textContent = "Preencha o prazo base (data e hora).");
+        const prazoBase = dtLocalToBitrix(prazoLocal);
+        if (!prazoBase) return (elStatus.textContent = "Preencha o prazo (data e hora).");
 
         const step = Number(document.getElementById("fbStep").value || 0);
+
         const ids = Array.from(chosen);
         if (!ids.length) return (elStatus.textContent = "Selecione ao menos 1 lead.");
 
         elStatus.textContent = `Criando ${ids.length} follow-ups…`;
 
-        // converte para Date para somar minutos
         const base = new Date(prazoLocal);
         const canParse = !isNaN(base.getTime());
 
@@ -1279,7 +1235,7 @@
             const local = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(
               d.getHours()
             )}:${pad2(d.getMinutes())}`;
-            prazo = toBitrixDateTime(local);
+            prazo = dtLocalToBitrix(local);
           }
 
           const obsBlock =
@@ -1319,7 +1275,7 @@
   }
 
   /* =============================
-   * 10) CONVERTIDOS (Pipeline 0)
+   * 9) CONVERTIDOS (Pipeline 0)
    * ============================= */
 
   function openConvertidos(userId) {
@@ -1332,17 +1288,17 @@
     };
 
     openModal(`CONVERTIDOS • PIPELINE 0 • ${userName}`, `
-      <div class="small muted">
-        ${
-          isPerUser
-            ? `Mostrando <b>NEGÓCIOS</b> da usuária <b>${esc(userName)}</b> na Pipeline 0 (exceto <b>Negócios Fechados</b>).`
-            : `Mostrando <b>NEGÓCIOS</b> recentes da Pipeline 0 (exceto <b>Negócios Fechados</b>).`
-        }
+      <div class="cardBox">
+        <div class="small muted">
+          ${
+            isPerUser
+              ? `Mostrando <b>NEGÓCIOS</b> da usuária <b>${esc(userName)}</b> (exceto <b>Negócios Fechados</b>).`
+              : `Mostrando <b>NEGÓCIOS</b> recentes da Pipeline 0 (exceto <b>Negócios Fechados</b>).`
+          }
+        </div>
       </div>
 
-      <hr class="sep"/>
-
-      <div class="field">
+      <div class="field" style="margin-top:12px">
         <label>Buscar (título)</label>
         <input class="input" id="cvSearch" placeholder="Digite..." />
       </div>
@@ -1354,7 +1310,7 @@
         </select>
         <div class="small muted">
           A partir de <b>Em digitação de proposta</b> pede Valor/Moeda e Operadora Fechada.
-          Em <b>Negócios Fechados</b> pede Data de Fechamento (e o card some).
+          Em <b>Negócios Fechados</b> pede Data de Fechamento (e o card some da lista).
         </div>
       </div>
 
@@ -1381,16 +1337,12 @@
             (d) => `
         <div class="selLeadRow">
           <div class="left">
-            <div style="font-weight:980">${esc(d.TITLE || `Deal ${d.ID}`)}</div>
+            <div style="font-weight:950">${esc(d.TITLE || `Deal ${d.ID}`)}</div>
             <div class="small muted">
-              Etapa: <b>${esc(stageName(d.STAGE_ID))}</b> • ID <b>${esc(d.ID)}</b> • Resp: <b>${esc(
-              getUserNameById(d.ASSIGNED_BY_ID)
-            )}</b>
+              Etapa: <b>${esc(stageName(d.STAGE_ID))}</b> • ID ${esc(d.ID)} • Resp: ${esc(getUserNameById(d.ASSIGNED_BY_ID))}
             </div>
             <div class="small muted">
-              Valor: <b>${esc(d.OPPORTUNITY || "-")}</b> ${esc(d.CURRENCY_ID || "")} • Última mod.: <b>${esc(
-              fmtDT(d.DATE_MODIFY)
-            )}</b>
+              Valor: ${esc(d.OPPORTUNITY || "-")} ${esc(d.CURRENCY_ID || "")} • Última mod.: ${esc(fmtDT(d.DATE_MODIFY))}
             </div>
           </div>
           <div class="right">
@@ -1446,13 +1398,15 @@
 
             st.textContent = "Movendo…";
             await updateDeal(id, fields);
+
             st.textContent = "OK ✅ Recarregando…";
 
             const extraFilter = { "!STAGE_ID": "WON" };
             if (isPerUser) extraFilter.ASSIGNED_BY_ID = Number(userId);
 
-            deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 180, extraFilter);
+            deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 160, extraFilter);
             await render();
+
             st.textContent = "OK ✅";
           } catch (e) {
             st.textContent = `Erro: ${String(e.message || e)}`;
@@ -1471,7 +1425,7 @@
         const extraFilter = { "!STAGE_ID": "WON" };
         if (isPerUser) extraFilter.ASSIGNED_BY_ID = Number(userId);
 
-        deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 180, extraFilter);
+        deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 160, extraFilter);
         st.textContent = `OK • ${deals.length} negócios`;
         await render();
       } catch (e) {
@@ -1481,41 +1435,20 @@
   }
 
   /* =============================
-   * 11) FILA — modal
+   * 10) FILA — modal
    * ============================= */
 
   function openQueueManager() {
-    ensureQueueValid();
-
     openModal("FILA • Disponibilidade", `
-      <div class="small muted">
-        Marque quem está <b>DISPONÍVEL</b>. Somente essas entram na fila.
-        A fila roda em ordem e quem <b>PEGA</b> vai para o final automaticamente.
+      <div class="cardBox">
+        <div class="small muted">
+          Marque quem está <b>DISPONÍVEL</b>. Somente essas entram na fila.
+          A fila roda em ordem e quem <b>PEGA</b> vai para o final automaticamente.
+        </div>
       </div>
 
       <hr class="sep"/>
 
-      <div class="badge">Fila atual: ${esc(queue.length)} usuária(s)</div>
-      <div class="tableLike" style="margin-top:10px">
-        ${queue
-          .map((id, idx) => {
-            const u = getUserNameById(id);
-            const pos = idx === 0 ? "PRÓXIMA" : `#${idx + 1}`;
-            return `
-              <div class="selLeadRow">
-                <div class="left">
-                  <div style="font-weight:980">${esc(u)} <span class="small muted">(${esc(id)})</span></div>
-                  <div class="small muted">Posição: <b>${esc(pos)}</b></div>
-                </div>
-              </div>
-            `;
-          })
-          .join("") || `<div class="small muted">Fila vazia.</div>`}
-      </div>
-
-      <hr class="sep"/>
-
-      <div class="h" style="font-weight:980;margin-bottom:8px">Disponibilidade</div>
       <div id="qmList" class="tableLike"></div>
 
       <hr class="sep"/>
@@ -1539,7 +1472,7 @@
           <div class="left">
             <label style="display:flex; gap:10px; align-items:center; cursor:pointer">
               <input type="checkbox" data-av="${esc(u.id)}" ${chk}/>
-              <div style="font-weight:980">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
+              <div style="font-weight:950">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
             </label>
           </div>
         </div>
@@ -1583,20 +1516,20 @@
   }
 
   /* =============================
-   * 12) APP UI
+   * 11) APP UI
    * ============================= */
 
   root.innerHTML = `
     <div id="cgd-app">
       <div id="cgd-top">
         <div id="cgd-title">
-          <img class="logo" src="${esc(CFG.LOGO_URL)}" alt="CGD" />
+          <img class="logo" alt="CGD" src="${esc(CFG.LOGO_URL)}" />
           <span class="dot"></span>
-          <span>${esc(CFG.TITLE)}</span>
+          <span class="ttl">${esc(CFG.TITLE)}</span>
+          <span class="badge">${esc(CFG.BUILD)}</span>
         </div>
         <div class="right">
           <span class="badge" id="kpiDay">Leads do dia: 0</span>
-          <span class="badge" id="kpiMonth">Leads do mês: 0</span>
           <button class="btn" id="btnGetLinks">GET (Equipes)</button>
           <button class="btn" id="btnUserManager">Gerenciar Usuária</button>
           <button class="btn" id="btnQueueMgr">Fila</button>
@@ -1606,13 +1539,13 @@
       </div>
 
       <div id="cgd-wrap">
-        <div class="panel">
+        <div class="panel" id="leftPanel">
           <div class="p-hdr">
-            <div class="leftInfo">
+            <div class="left">
               <div class="h">NOVOS LEADS • PENDENTES</div>
               <div class="sub">Somente status: <b>NOVO LEAD</b></div>
             </div>
-            <div class="row">
+            <div class="right">
               <button class="btn primary" id="btnBatch">Transferir em lote</button>
               <button class="btn" id="btnLeftRefresh">Atualizar</button>
             </div>
@@ -1620,11 +1553,8 @@
           <div class="p-body">
             <div class="alertBox" id="alertBox" style="display:none">
               <div>
-                <div class="a">🚨 NOVO LEAD • ATENÇÃO</div>
-                <div class="b">Alerta sonoro + piscante enquanto existir lead em “NOVO LEAD”.</div>
-                <div class="small muted" id="audioHint" style="margin-top:4px;display:none">
-                  Dica: clique uma vez no painel para liberar áudio (regra do navegador).
-                </div>
+                <div class="a">🚨 NOVO LEAD</div>
+                <div class="b">Alerta sonoro + piscante (enquanto existir lead em “NOVO LEAD”).</div>
               </div>
               <button class="btn" id="btnSilenceAlert">Silenciar</button>
             </div>
@@ -1634,11 +1564,11 @@
 
         <div class="panel">
           <div class="p-hdr">
-            <div class="leftInfo">
+            <div class="left">
               <div class="h">QUEM PEGOU HOJE</div>
               <div class="sub">Cards por usuária (ordem: última que puxou → fila → fora da fila)</div>
             </div>
-            <div class="row">
+            <div class="right">
               <button class="btn" id="btnToggleHideUsers">Ocultar usuárias</button>
               <button class="btn" id="btnRightRefresh">Atualizar</button>
             </div>
@@ -1652,7 +1582,7 @@
       <div id="cgd-bottom">
         <div class="queueBox" id="queueBox"></div>
         <div class="row">
-          <button class="btn" id="btnResetQueue">Resetar</button>
+          <button class="btn danger" id="btnResetQueue">Resetar</button>
           <button class="btn primary" id="btnNextAvail">Próxima disponível</button>
         </div>
       </div>
@@ -1662,7 +1592,7 @@
   if (sentinel) setSent("JS iniciou ✅");
 
   /* =============================
-   * 13) EVENTS
+   * 12) EVENTS
    * ============================= */
 
   document.getElementById("btnRefresh").onclick = () => refreshAll(true);
@@ -1677,22 +1607,23 @@
   document.getElementById("btnSilenceAlert").onclick = () => {
     setSilent(true);
     document.getElementById("btnSilent").textContent = "Som: OFF";
-    stopAlarm();
   };
 
   document.getElementById("btnQueueMgr").onclick = openQueueManager;
 
   document.getElementById("btnUserManager").onclick = () => {
     openModal("Selecionar Usuária", `
-      <div class="small muted">Escolha uma usuária para abrir o painel de ações.</div>
+      <div class="cardBox">
+        <div class="small muted">Escolha uma usuária para abrir o painel de ações.</div>
+      </div>
       <hr class="sep"/>
       <div class="tableLike">
         ${CFG.USERS.map(
           (u) => `
           <div class="selLeadRow">
             <div class="left">
-              <div style="font-weight:980">${esc(u.name)}</div>
-              <div class="small muted">ID: <b>${esc(u.id)}</b></div>
+              <div style="font-weight:950">${esc(u.name)}</div>
+              <div class="small muted">ID: ${esc(u.id)}</div>
             </div>
             <div class="right">
               <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
@@ -1710,14 +1641,16 @@
 
   document.getElementById("btnGetLinks").onclick = () => {
     openModal("GET • Equipes", `
-      <div class="small muted">Abrir os painéis GET em nova aba.</div>
+      <div class="cardBox">
+        <div class="small muted">Abrir os painéis GET em nova aba.</div>
+      </div>
       <hr class="sep"/>
       <div class="tableLike">
         ${CFG.GET_LINKS.map(
           (x) => `
           <div class="selLeadRow">
             <div class="left">
-              <div style="font-weight:980">${esc(x.label)}</div>
+              <div style="font-weight:950">${esc(x.label)}</div>
               <div class="small muted">${esc(x.url)}</div>
             </div>
             <div class="right">
@@ -1754,13 +1687,13 @@
   };
 
   /* =============================
-   * 14) HIDE USERS
+   * 13) HIDE USERS
    * ============================= */
 
   function openHideUsers() {
     openModal("Ocultar usuárias (cards do lado direito)", `
-      <div class="small muted">
-        Marque para <b>ocultar</b> o card da usuária no painel da direita.
+      <div class="cardBox">
+        <div class="small muted">Marque para <b>ocultar</b> o card da usuária no painel da direita.</div>
       </div>
       <hr class="sep"/>
       <div id="huList" class="tableLike"></div>
@@ -1778,7 +1711,7 @@
           <div class="left">
             <label style="display:flex; gap:10px; align-items:center; cursor:pointer">
               <input type="checkbox" data-hu="${esc(u.id)}" ${chk}/>
-              <div style="font-weight:980">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
+              <div style="font-weight:950">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
             </label>
           </div>
         </div>
@@ -1797,10 +1730,19 @@
   }
 
   /* =============================
-   * 15) BATCH TRANSFER (com filtro)
+   * 14) BATCH TRANSFER (com filtro operadora + contagem)
    * ============================= */
 
   let cachedNewLeads = [];
+
+  function uniqOperatorsFromLeads(leads) {
+    const set = new Set();
+    (leads || []).forEach((l) => {
+      const op = String(l[CFG.UF_OPERADORA] || "").trim();
+      if (op) set.add(op);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
 
   function openBatchTransfer() {
     if (!cachedNewLeads.length) {
@@ -1808,42 +1750,41 @@
       return;
     }
 
-    const ops = Array.from(
-      new Set(
-        cachedNewLeads
-          .map((l) => String(l[CFG.UF_OPERADORA] || "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
+    const ops = uniqOperatorsFromLeads(cachedNewLeads);
 
     openModal("TRANSFERIR EM LOTE", `
-      <div class="small muted">
-        Selecione leads e escolha para quem transferir.
-        Ao transferir: <b>ASSIGNED_BY_ID</b> muda e o lead vira <b>EM ATENDIMENTO</b>.
+      <div class="cardBox">
+        <div class="small muted">
+          Selecione leads e escolha para quem transferir.
+          <br/>Ao transferir: <b>ASSIGNED_BY_ID</b> muda e o lead vira <b>EM ATENDIMENTO</b>.
+        </div>
       </div>
 
       <hr class="sep"/>
 
-      <div class="row" style="justify-content:space-between;align-items:flex-end">
-        <div class="field" style="min-width:320px;flex:1">
-          <label>Transferir para usuária</label>
-          <select class="sel" id="btUser" style="width:100%">
-            ${CFG.USERS.map((u) => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("")}
-          </select>
+      <div class="row" style="justify-content:space-between">
+        <div style="flex:1; min-width:240px">
+          <div class="field">
+            <label>Filtrar por operadora</label>
+            <select class="sel" id="btOper">
+              <option value="">(Todas)</option>
+              ${ops.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}
+            </select>
+          </div>
         </div>
 
-        <div class="field" style="min-width:260px">
-          <label>Filtrar por operadora</label>
-          <select class="sel" id="btOp">
-            <option value="">Todas</option>
-            ${ops.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}
-          </select>
+        <div style="flex:1; min-width:240px">
+          <div class="field">
+            <label>Transferir para usuária</label>
+            <select class="sel" id="btUser">
+              ${CFG.USERS.map((u) => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("")}
+            </select>
+          </div>
         </div>
-
-        <div class="badge" id="btCount">0 lead(s)</div>
       </div>
 
-      <div class="row">
+      <div class="row" style="justify-content:space-between">
+        <span class="badge" id="btCount">0 leads listados</span>
         <button class="btn primary" id="btGo">Transferir selecionados</button>
       </div>
 
@@ -1855,38 +1796,40 @@
 
     const box = document.getElementById("btList");
     const status = document.getElementById("btStatus");
-    const count = document.getElementById("btCount");
-    const opSel = document.getElementById("btOp");
+    const btCount = document.getElementById("btCount");
     let chosen = new Set();
 
-    function render() {
-      const op = String(opSel.value || "");
-      const list = cachedNewLeads.filter((l) => !op || String(l[CFG.UF_OPERADORA] || "") === op);
-      count.textContent = `${list.length} lead(s)`;
+    function renderList() {
+      const opFilter = String(document.getElementById("btOper").value || "").trim();
+      const list = cachedNewLeads.filter((l) => {
+        if (!opFilter) return true;
+        return String(l[CFG.UF_OPERADORA] || "").trim() === opFilter;
+      });
 
-      box.innerHTML = list
-        .map((l) => {
-          const L = leadLine(l);
-          const checked = chosen.has(Number(l.ID)) ? "checked" : "";
-          return `
-            <div class="selLeadRow">
-              <div class="left">
-                <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
-                  <input type="checkbox" data-bt="${esc(l.ID)}" ${checked}/>
-                  <div>
-                    <div style="font-weight:980">${esc(L.name)}</div>
-                    <div class="small muted">
-                      Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID <b>${esc(
-            l.ID
-          )}</b>
+      btCount.textContent = `${list.length} leads listados`;
+
+      box.innerHTML =
+        list
+          .map((l) => {
+            const L = leadLine(l);
+            const checked = chosen.has(Number(l.ID)) ? "checked" : "";
+            return `
+              <div class="selLeadRow">
+                <div class="left">
+                  <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
+                    <input type="checkbox" data-bt="${esc(l.ID)}" ${checked}/>
+                    <div>
+                      <div style="font-weight:950">${esc(L.name)}</div>
+                      <div class="small muted">
+                        Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}
+                      </div>
                     </div>
-                  </div>
-                </label>
+                  </label>
+                </div>
               </div>
-            </div>
-          `;
-        })
-        .join("");
+            `;
+          })
+          .join("") || `<div class="small muted">Nenhum lead nesse filtro.</div>`;
 
       box.querySelectorAll("input[data-bt]").forEach((i) => {
         i.onchange = () => {
@@ -1897,8 +1840,7 @@
       });
     }
 
-    opSel.onchange = render;
-    render();
+    document.getElementById("btOper").onchange = renderList;
 
     document.getElementById("btGo").onclick = async () => {
       try {
@@ -1916,50 +1858,39 @@
 
         status.textContent = "OK ✅ Transferência em lote concluída.";
         await refreshAll(true);
+        closeModal();
       } catch (e) {
         status.textContent = `Erro: ${String(e.message || e)}`;
       }
     };
+
+    renderList();
   }
 
   /* =============================
-   * 16) RENDER LEFT
+   * 15) RENDER LEFT
    * ============================= */
 
   function renderLeadCard(lead) {
     const L = leadLine(lead);
     const id = Number(lead.ID);
-    const canMove = String(lead.STATUS_ID) !== String(CFG.LEAD_STATUS.NEW);
 
     return `
       <div class="leadCard" data-lead="${esc(id)}">
-        <div class="leadTop">
-          <div class="leadName">${esc(L.name)}</div>
-          <div class="pills">
-            <span class="pill">OPERADORA: ${esc(L.op)}</span>
-            <span class="pill">DATA/HORA: ${esc(fmtDT(L.dt))}</span>
-            <span class="pill">IDADE: ${esc(L.idade)}</span>
-            <span class="pill">FONTE: ${esc(L.fonte)}</span>
-            <span class="pill">BAIRRO: ${esc(L.bairro)}</span>
-          </div>
+        <div class="leadName">${esc(L.name)}</div>
+
+        <div class="pills">
+          <span class="pill">OPERADORA: ${esc(L.op)}</span>
+          <span class="pill">DATA/HORA: ${esc(fmtDT(L.dt))}</span>
+          <span class="pill">IDADE: ${esc(L.idade)}</span>
+          <span class="pill">FONTE: ${esc(L.fonte)}</span>
+          <span class="pill">BAIRRO: ${esc(L.bairro)}</span>
         </div>
 
         <div class="ctaRow">
           <button class="btn danger" data-discard="${esc(id)}">DESCARTAR</button>
           <button class="btn primary" data-pick="${esc(id)}">PEGAR</button>
-
-          ${
-            canMove
-              ? `
-              <select class="sel" data-moveSel="${esc(id)}">
-                ${stageOptionsHTML(lead.STATUS_ID)}
-              </select>
-              <button class="btn" data-moveBtn="${esc(id)}">MOVER</button>
-            `
-              : ``
-          }
-
-          <span class="small muted">ID: <b>${esc(id)}</b></span>
+          <span class="small muted">ID: ${esc(id)}</span>
         </div>
       </div>
     `;
@@ -1986,8 +1917,6 @@
 
     box.querySelectorAll("button[data-pick]").forEach((b) => {
       b.onclick = async () => {
-        unlockAudioOnce();
-
         const leadId = Number(b.dataset.pick);
         try {
           const front = getFrontUser();
@@ -2001,31 +1930,23 @@
           const L = leadLine(lead);
 
           openModal(`PEGAR • ${uName}`, `
-            <div class="badge">Você vai transferir para: <b>${esc(uName)}</b></div>
-
-            <div style="margin-top:10px;padding:12px;border:1px solid rgba(20,30,60,.12);border-radius:14px;background:rgba(2,6,23,.02)">
-              <div style="font-weight:980;font-size:16px">${esc(L.name)}</div>
-              <div class="small muted" style="margin-top:4px">
-                Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID <b>${esc(
-            leadId
-          )}</b>
-              </div>
-              <div class="small muted" style="margin-top:4px">
-                Ao confirmar: status vira <b>EM ATENDIMENTO</b> e a usuária vai para o <b>final da fila</b>.
+            <div class="cardBox">
+              <div class="badge">Lead: ${esc(L.name)} • ID ${esc(leadId)}</div>
+              <div class="small muted" style="margin-top:10px">
+                Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b>
+                <br/>Atribuir para: <b>${esc(uName)}</b> • e mover para <b>EM ATENDIMENTO</b>.
               </div>
             </div>
 
             <hr class="sep"/>
 
-            <div class="row" style="justify-content:flex-end">
-              <button class="btn" id="pkCancel">Cancelar</button>
-              <button class="btn primary" id="pkGo">Confirmar transferência</button>
+            <div class="row" style="justify-content:space-between">
+              <div class="small muted">A usuária volta automaticamente para o <b>final da fila</b>.</div>
+              <button class="btn primary" id="pkGo">Confirmar</button>
             </div>
 
             <div class="small" id="pkStatus"></div>
           `);
-
-          document.getElementById("pkCancel").onclick = closeModal;
 
           document.getElementById("pkGo").onclick = async () => {
             const st = document.getElementById("pkStatus");
@@ -2044,29 +1965,10 @@
         }
       };
     });
-
-    box.querySelectorAll("button[data-moveBtn]").forEach((b) => {
-      b.onclick = async () => {
-        const leadId = Number(b.dataset.moveBtn);
-        const sel = box.querySelector(`select[data-moveSel="${String(leadId)}"]`);
-        const to = sel ? String(sel.value) : null;
-        if (!to) return;
-
-        try {
-          b.disabled = true;
-          await doMoveLead(leadId, to);
-          await refreshAll(true);
-        } catch (e) {
-          alert(`Erro: ${String(e.message || e)}`);
-        } finally {
-          b.disabled = false;
-        }
-      };
-    });
   }
 
   /* =============================
-   * 17) RENDER RIGHT
+   * 16) RENDER RIGHT
    * ============================= */
 
   function computeUserOrder() {
@@ -2148,7 +2050,7 @@
   }
 
   /* =============================
-   * 18) RENDER BOTTOM
+   * 17) RENDER BOTTOM
    * ============================= */
 
   function renderBottom() {
@@ -2185,90 +2087,86 @@
   }
 
   /* =============================
-   * 19) ALERT (mais forte)
+   * 18) ALERT (mais chamativo)
    * ============================= */
 
-  let alertFlashTimer = null;
-  let alertBeepTimer = null;
+  let alertTimer = null;
+  let beepTimer = null;
+  let baseTitle = document.title || "Painel";
+  let lastNewCount = Number(readJSON(LS.LAST_NEW_COUNT, 0) || 0);
 
-  function startAlarm() {
-    document.body.classList.add("alertOn");
-
-    // pisca (opacidade)
-    const box = document.getElementById("alertBox");
-    if (box && !alertFlashTimer) {
-      alertFlashTimer = setInterval(() => {
-        box.style.opacity = box.style.opacity === "0.6" ? "1" : "0.6";
-      }, 280);
+  function stopAlertLoops() {
+    if (alertTimer) {
+      clearInterval(alertTimer);
+      alertTimer = null;
     }
-
-    // beep repetido (a cada 4.5s)
-    if (!alertBeepTimer) {
-      // dica de áudio se não desbloqueou
-      const hint = document.getElementById("audioHint");
-      if (hint) hint.style.display = audioUnlocked ? "none" : "block";
-
-      beepTriple();
-      alertBeepTimer = setInterval(() => {
-        // só apita se som ON e áudio liberado
-        if (!isSilent && audioUnlocked) beepTriple();
-      }, 4500);
+    if (beepTimer) {
+      clearInterval(beepTimer);
+      beepTimer = null;
     }
+    document.title = baseTitle;
+    const lp = document.getElementById("leftPanel");
+    if (lp) lp.style.boxShadow = "";
   }
 
-  function stopAlarm() {
-    document.body.classList.remove("alertOn");
-
-    const box = document.getElementById("alertBox");
-    if (box) box.style.opacity = "1";
-
-    if (alertFlashTimer) {
-      clearInterval(alertFlashTimer);
-      alertFlashTimer = null;
-    }
-    if (alertBeepTimer) {
-      clearInterval(alertBeepTimer);
-      alertBeepTimer = null;
-    }
-  }
-
-  function setAlertOn(hasNew) {
+  function setAlertOn(hasNew, newCount) {
     const box = document.getElementById("alertBox");
     if (!box) return;
 
     if (hasNew) {
       box.style.display = "flex";
-      startAlarm();
+      box.classList.add("alertPulse");
+
+      // borda/sombra no painel esquerdo
+      const lp = document.getElementById("leftPanel");
+      if (lp) lp.style.boxShadow = "0 18px 50px rgba(239,68,68,.18)";
+
+      // title piscando
+      if (!alertTimer) {
+        let t = false;
+        alertTimer = setInterval(() => {
+          t = !t;
+          box.style.opacity = t ? "0.65" : "1";
+          document.title = t ? "🚨 NOVO LEAD — CGD" : baseTitle;
+        }, CFG.ALERT_FLASH_EVERY_MS);
+      }
+
+      // beep: na primeira vez que aumenta a contagem, faz beep forte
+      if (Number(newCount) > Number(lastNewCount)) {
+        beep([880, 988, 880, 660]);
+      }
+
+      // beep repetido enquanto houver novo lead (se som ON)
+      if (!beepTimer) {
+        beepTimer = setInterval(() => {
+          beep([880, 660, 880]);
+        }, CFG.ALERT_BEEP_EVERY_MS);
+      }
+
+      lastNewCount = Number(newCount) || 0;
+      writeJSON(LS.LAST_NEW_COUNT, lastNewCount);
     } else {
       box.style.display = "none";
-      stopAlarm();
+      box.classList.remove("alertPulse");
+      box.style.opacity = "1";
+      stopAlertLoops();
+      lastNewCount = 0;
+      writeJSON(LS.LAST_NEW_COUNT, lastNewCount);
     }
   }
 
   /* =============================
-   * 20) REFRESH (rápido + completo)
+   * 19) REFRESH
    * ============================= */
-
-  let lastNewTopId = null;
 
   async function refreshLeft(force) {
     const leadBox = document.getElementById("leadList");
     leadBox.innerHTML = `<div class="small muted">Carregando…</div>`;
 
-    const leads = await listLeads(
-      { STATUS_ID: CFG.LEAD_STATUS.NEW },
-      null,
-      { DATE_CREATE: "DESC" },
-      200
-    );
+    const leads = await listLeads({ STATUS_ID: CFG.LEAD_STATUS.NEW }, null, { DATE_CREATE: "DESC" }, 200);
 
     cachedNewLeads = leads;
-
-    // guarda topo
-    const topId = leads && leads[0] ? String(leads[0].ID) : null;
-    if (force || lastNewTopId === null) lastNewTopId = topId;
-
-    setAlertOn(leads.length > 0);
+    setAlertOn(leads.length > 0, leads.length);
 
     leadBox.innerHTML =
       leads.map(renderLeadCard).join("") || `<div class="small muted">Sem novos leads.</div>`;
@@ -2283,7 +2181,6 @@
     resetDailyIfNeeded();
     const dayTotal = Object.values(dailyStats.byUser).reduce((a, x) => a + (x.pulled || 0), 0);
     document.getElementById("kpiDay").textContent = `Leads do dia: ${dayTotal}`;
-    document.getElementById("kpiMonth").textContent = `Leads do mês: 0`;
   }
 
   async function refreshAll(force) {
@@ -2298,49 +2195,23 @@
     }
   }
 
-  // ✅ “fast poll” para detectar novo lead sem esperar o refresh completo
-  async function fastPollNewLead() {
-    try {
-      const mini = await listLeads(
-        { STATUS_ID: CFG.LEAD_STATUS.NEW },
-        ["ID", CFG.UF_OPERADORA, CFG.UF_DT_LEAD, "DATE_CREATE", "NAME", "LAST_NAME", "TITLE", "STATUS_ID"],
-        { DATE_CREATE: "DESC" },
-        1
-      );
-
-      const topId = mini && mini[0] ? String(mini[0].ID) : null;
-
-      if (topId && lastNewTopId && topId !== lastNewTopId) {
-        // novo lead entrou -> atualiza coluna da esquerda imediatamente
-        lastNewTopId = topId;
-        await refreshLeft(true);
-      }
-
-      if (!topId && lastNewTopId) {
-        // zerou novos
-        lastNewTopId = null;
-        setAlertOn(false);
-      }
-    } catch (e) {
-      // silencioso (evita poluir console)
-    }
-  }
-
   /* =============================
-   * 21) INIT + AUTO
+   * 20) AUTO-REFRESH + focus
    * ============================= */
 
   ensureQueueValid();
   renderBottom();
   renderRightUsers();
-
   refreshAll(true).catch(console.error);
 
   setInterval(() => {
     refreshAll(false).catch(console.error);
   }, CFG.REFRESH_MS);
 
-  setInterval(() => {
-    fastPollNewLead().catch(() => {});
-  }, CFG.FAST_POLL_MS);
+  // ao voltar pra aba, força refresh
+  document.addEventListener("visibilitychange", () => {
+    try {
+      if (!document.hidden) refreshAll(true).catch(console.error);
+    } catch (_) {}
+  });
 })();
