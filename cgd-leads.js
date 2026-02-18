@@ -1,10 +1,9 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - SEM storage do navegador (fila, ocultar usuárias e etc ficam no Bitrix via QUEUE_JSON)
-   - FILA multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
-   - Layout/estética MANTIDOS (não alterar estética)
-   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
+   - Sem localStorage/sessionStorage
+   - Fila multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
+   - Layout preservado (não mexer na estética)
 */
-(function(){
+(function () {
   "use strict";
 
   // =========================
@@ -13,8 +12,27 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up
+    // Painel de LEADS (Categoria/Pipeline)
+    LEADS_CATEGORY_ID: 17,
+
+    // Campos do lead (mostrar no card)
+    UF_OPERADORA: "UF_CRM_1771282782",
+    UF_DT_LEAD: "UF_CRM_1771333014",     // Data/Hora do Lead
+    UF_IDADE: "UF_CRM_1771339221",       // Idade (texto)
+    UF_BAIRRO: "UF_CRM_LEAD_1731909705398",
+    UF_FONTE: "UF_CRM_1767285733843",
+
+    // Follow-up
     UF_PRAZO: "UF_CRM_1768175087",
+
+    // STAGES (⚠️ PREENCHA com os STAGE_ID reais do Bitrix na categoria 17)
+    STAGES: {
+      NOVO: "C17:NEW",                 // <-- seu stage “NOVO LEAD”
+      EM_ATENDIMENTO: "C17:IN_WORK",   // <-- seu stage “EM ATENDIMENTO”
+      PERDIDO: "C17:LOSE",             // <-- seu stage “PERDIDO”
+      QUALIFICADO: "C17:QUALIFIED",    // <-- seu stage “QUALIFICADO”
+      CONVERTIDO: "C17:WON"            // <-- seu stage “CONVERTIDO”
+    },
 
     // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
@@ -24,111 +42,95 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
-    // Logo (+30% em cima do que já estava)
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
+    // Logo
+    LOGO_URL:
+      "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
     // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
-    REFRESH_WHO_MS: 6000,
 
     // Limites
     LIMIT_NEW: 30,
-    LIMIT_USER_HISTORY: 60,
+    LIMIT_USER_HISTORY: 35,
 
-    // Usuárias do painel
+    // Usuárias (as do painel)
     USERS: [
-      { name:"ALINE", id:15 },
-      { name:"ADRIANA", id:19 },
-      { name:"ANDREYNA", id:17 },
-      { name:"MARIANA", id:23 },
-      { name:"JOSIANE", id:811 },
-      { name:"BRUNA LUISA", id:3081 },
-      { name:"FERNANDA SILVA", id:3083 },
-      { name:"LIVIA ALVES", id:3079 },
-      { name:"NICOLLE BELMONTE", id:3085 },
-      { name:"ANNA CLARA", id:3389 },
-      { name:"GABRIEL", id:815 },
-      { name:"BEATRIZ", id:3387 },
-    ],
-
-    // ✅ Status/Stages de LEADS (Bitrix padrão)
-    // Se você usa nomes customizados, ajuste aqui.
-    LEAD_STATUS: {
-      NOVO_LEAD: "NEW",
-      EM_ATENDIMENTO: "IN_PROCESS",
-      QUALIFICADO: "PROCESSED",
-      PERDIDO: "JUNK",
-      CONVERTIDO: "CONVERTED",
-    },
-
-    // Campos do lead para exibir nos badges (se existirem)
-    // (sem inventar UF — mostramos se vierem do Bitrix)
-    LEAD_SELECT: [
-      "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
-      "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
-      "SOURCE_ID","PHONE","EMAIL",
-      "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
-      "UF_*"
-    ],
-
-    // Badge “quente”
-    HOT_EMOJI: "🔥"
+      { name: "ALINE", id: 15 },
+      { name: "ADRIANA", id: 19 },
+      { name: "ANDREYNA", id: 17 },
+      { name: "MARIANA", id: 23 },
+      { name: "JOSIANE", id: 811 },
+      { name: "BRUNA LUISA", id: 3081 },
+      { name: "FERNANDA SILVA", id: 3083 },
+      { name: "LIVIA ALVES", id: 3079 },
+      { name: "NICOLLE BELMONTE", id: 3085 },
+      { name: "ANNA CLARA", id: 3389 },
+      { name: "GABRIEL", id: 815 },
+      { name: "BEATRIZ", id: 3387 }
+    ]
   };
 
   // =========================
   // Helpers DOM
   // =========================
-  const $ = (q, el=document)=> el.querySelector(q);
-  const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
-  const esc = (s)=> String(s??"").replace(/[&<>"']/g, m => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[m]));
-  const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+  const $ = (q, el = document) => el.querySelector(q);
+  const $$ = (q, el = document) => Array.from(el.querySelectorAll(q));
+  const esc = (s) =>
+    String(s ?? "").replace(/[&<>"']/g, (m) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[m]));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  function nowBRTime(){
-    try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
+  function nowBRTime() {
+    try { return new Date().toLocaleTimeString("pt-BR"); } catch (_) { return ""; }
   }
-  function todayISOStart(){
+  function todayISOStart() {
     const d = new Date();
-    d.setHours(0,0,0,0);
+    d.setHours(0, 0, 0, 0);
     const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da= String(d.getDate()).padStart(2,"0");
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const da = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${da}T00:00:00`;
   }
-  function monthISOStart(){
+  function monthISOStart() {
     const d = new Date();
     const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
+    const m = String(d.getMonth() + 1).padStart(2, "0");
     return `${y}-${m}-01T00:00:00`;
   }
-  function isoFromLocalInput(v){
-    if(!v) return "";
+  function isoFromLocalInput(v) {
+    if (!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-    if(!m) return "";
-    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
+    if (!m) return "";
+    const y = +m[1], mo = +m[2] - 1, d = +m[3], hh = +m[4], mi = +m[5];
     const dt = new Date(y, mo, d, hh, mi, 0, 0);
-    if(Number.isNaN(dt.getTime())) return "";
+    if (Number.isNaN(dt.getTime())) return "";
+    // Bitrix aceita ISO; manter padrão
     return dt.toISOString();
   }
 
   // =========================
-  // Webhook client
+  // Bitrix webhook client
   // =========================
-  function toPairs(prefix, obj, out){
+  function toPairs(prefix, obj, out) {
     out = out || [];
-    if(obj === null || obj === undefined) return out;
-    if(typeof obj === "object" && !Array.isArray(obj)){
-      for(const k of Object.keys(obj)){
+    if (obj === null || obj === undefined) return out;
+
+    if (typeof obj === "object" && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) {
         const key = prefix ? `${prefix}[${k}]` : k;
         toPairs(key, obj[k], out);
       }
       return out;
     }
-    if(Array.isArray(obj)){
-      for(let i=0;i<obj.length;i++){
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
         const key = prefix ? `${prefix}[${i}]` : String(i);
         toPairs(key, obj[i], out);
       }
@@ -138,79 +140,76 @@
     return out;
   }
 
-  async function bx(method, params={}){
+  async function bx(method, params = {}) {
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
-    for(const [k,v] of pairs){ if(k) body.append(k, v); }
+    for (const [k, v] of pairs) if (k) body.append(k, v);
 
     const resp = await fetch(CONFIG.WEBHOOK + method, {
-      method:"POST",
-      headers:{"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
       body
     });
 
-    const data = await resp.json().catch(()=> ({}));
-    if(!resp.ok) throw new Error(`HTTP ${resp.status} em ${method}`);
-    if(data && data.error) throw new Error(data.error_description || data.error);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} em ${method}`);
+    if (data && data.error) throw new Error(data.error_description || data.error);
     return data.result;
   }
 
-  async function bxListAll(method, params, max=200){
+  async function bxListAll(method, params, max = 120) {
     let start = 0;
     let out = [];
-    while(true){
+    while (true) {
       const r = await bx(method, { ...params, start });
-      if(Array.isArray(r)){
+      if (Array.isArray(r)) {
         out = out.concat(r);
         break;
       }
-      if(r && Array.isArray(r.items)){
+      if (r && Array.isArray(r.items)) {
         out = out.concat(r.items);
-        if(!r.next) break;
+        if (!r.next) break;
         start = r.next;
-      }else{
+      } else {
         break;
       }
-      if(out.length >= max) break;
+      if (out.length >= max) break;
     }
     return out.slice(0, max);
   }
 
   // =========================
-  // Audio — 3 bipes (mantido chamativo-controlado)
+  // Audio — 3 bipes (mantido)
   // =========================
-  function tripleBeep(){
-    try{
+  function tripleBeep() {
+    try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if(!AC) return;
+      if (!AC) return;
       const ctx = new AC();
       const t0 = ctx.currentTime;
-
-      const make = (t)=>{
+      const make = (t) => {
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.type = "sine";
         o.frequency.value = 880;
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(0.20, t + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        g.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
         o.connect(g); g.connect(ctx.destination);
         o.start(t);
-        o.stop(t + 0.18);
+        o.stop(t + 0.20);
       };
-
       make(t0 + 0.00);
-      make(t0 + 0.26);
-      make(t0 + 0.52);
-
-      setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 1000);
-    }catch(_){}
+      make(t0 + 0.28);
+      make(t0 + 0.56);
+      setTimeout(() => { try { ctx.close(); } catch (_) {} }, 1200);
+    } catch (_) {}
   }
 
   // =========================
-  // UI / CSS (ESTÉTICA MANTIDA)
+  // UI / CSS (preservado)
   // =========================
-  function injectCSS(){
+  function injectCSS() {
     const css = `
 #cgdApp{
   --radius:18px;
@@ -249,7 +248,7 @@
 }
 .cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
 .cgdLogo{
-  width: 53px; height: 53px; /* +30% (era 41) */
+  width: 53px; height: 53px; /* +30% em cima do que estava */
   border-radius: 999px;
   border: 1px solid rgba(0,0,0,.10);
   object-fit: cover;
@@ -429,15 +428,8 @@
   color: rgba(18,26,40,.60);
   font-weight: 900;
 }
-.cgdOffline{
-  display:none;
-  margin-top: 6px;
-  font-size: 11px;
-  font-weight: 950;
-  color: rgba(160,0,40,.82);
-}
 
-/* ===== Modals modernos (mantidos) ===== */
+/* ===== Modals modernos ===== */
 .cgdModalOverlay{
   position: fixed;
   inset: 0;
@@ -510,17 +502,7 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
-#listWho.cgdWhoGrid{
-  display:grid !important;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-@media (max-width: 1100px){
-  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
-}
-
-/* ===== Forçar rodapé Bitrix no final (mantido) ===== */
+/* ===== Forçar rodapé do Bitrix no final ===== */
 .bitrix-footer{
   position: fixed !important;
   left: 0 !important;
@@ -544,7 +526,7 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // Modal system
   // =========================
-  function openModal(title, bodyHTML, footHTML){
+  function openModal(title, bodyHTML, footHTML) {
     closeModal();
     const ov = document.createElement("div");
     ov.className = "cgdModalOverlay";
@@ -554,25 +536,23 @@ body{ padding-bottom: 90px !important; }
           <div class="cgdModalTitle">${esc(title)}</div>
           <button class="cgdBtn" data-close-modal>Fechar</button>
         </div>
-        <div class="cgdModalBody">${bodyHTML||""}</div>
-        <div class="cgdModalFoot">${footHTML||`<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
+        <div class="cgdModalBody">${bodyHTML || ""}</div>
+        <div class="cgdModalFoot">${footHTML || `<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
       </div>
     `;
-    ov.addEventListener("click", (e)=>{
-      if(e.target === ov) closeModal();
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) closeModal();
       const c = e.target.closest("[data-close-modal]");
-      if(c) closeModal();
+      if (c) closeModal();
     });
     document.body.appendChild(ov);
-    document.addEventListener("keydown", escClose, {capture:true});
+    document.addEventListener("keydown", escClose, { capture: true });
   }
-  function escClose(e){
-    if(e.key === "Escape"){ closeModal(); }
-  }
-  function closeModal(){
+  function escClose(e) { if (e.key === "Escape") closeModal(); }
+  function closeModal() {
     const ov = $(".cgdModalOverlay");
-    if(ov) ov.remove();
-    document.removeEventListener("keydown", escClose, {capture:true});
+    if (ov) ov.remove();
+    document.removeEventListener("keydown", escClose, { capture: true });
   }
 
   // =========================
@@ -582,22 +562,29 @@ body{ padding-bottom: 90px !important; }
     soundOn: true,
     lastNewLeadId: null,
     newLeads: [],
-    stats: { day:0, month:0 },
-    userStats: {},      // id -> {pulledToday, last:[...]}
-    queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    netOk: true
+    stats: { day: 0, month: 0 },
+    userStats: {},
+    queue: { order: [], updatedAt: 0, dealId: null },
+    hiddenUsers: new Set(), // RAM (sem storage)
+    busyNext: false
   };
 
+  function setStatus(txt) {
+    const el = $("#statusLine");
+    if (el) el.textContent = txt;
+  }
+
   // =========================
-  // Mount (mantido)
+  // Mount
   // =========================
-  function mount(){
+  function mount() {
     let root = document.getElementById("cgd-leads-root");
-    if(!root){
+    if (!root) {
       root = document.createElement("div");
       root.id = "cgd-leads-root";
       document.body.prepend(root);
     }
+
     root.innerHTML = `
       <div id="cgdApp">
         <div class="cgdTop">
@@ -608,9 +595,7 @@ body{ padding-bottom: 90px !important; }
           <div class="cgdTopRight">
             <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
             <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
-            <button class="cgdBtn" id="btnGet">GET (Equipes)</button>
             <button class="cgdBtn" id="btnManage">Gerenciar Usuária</button>
-            <button class="cgdBtn" id="btnQueue">Fila</button>
             <button class="cgdBtn" id="btnRefresh">Atualizar</button>
             <button class="cgdBtn" id="btnSound">Som: ON</button>
           </div>
@@ -632,14 +617,11 @@ body{ padding-bottom: 90px !important; }
               <div class="cgdAlertBox" id="alertNew" style="display:none">
                 <div class="txt">
                   🚨 <b>NOVO LEAD</b>
-                  <small>Alarme sonoro enquanto existir lead em “NOVO LEAD”.</small>
+                  <small>Alarme sonoro (3 bipes) enquanto existir lead em “NOVO LEAD”.</small>
                 </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-                  <button class="cgdBtn" id="btnSilence">Silenciar</button>
-                  <button class="cgdBtn" id="btnSoundOn" style="display:none">Ligar som</button>
-                </div>
+                <button class="cgdBtn" id="btnSilence">Silenciar</button>
+                <button class="cgdBtn" id="btnUnsilence">Ligar som</button>
               </div>
-              <div class="cgdOffline" id="offlineNew">Sem conexão agora. Mantendo os dados atuais.</div>
               <div style="opacity:.7;font-weight:900">Carregando…</div>
             </div>
           </section>
@@ -648,14 +630,14 @@ body{ padding-bottom: 90px !important; }
             <div class="cgdColHead">
               <div style="width:100%">
                 <div class="hTitle">QUEM PEGOU HOJE</div>
-                <div class="hSub">Ordenação: última que puxou → fila → fora da fila</div>
+                <div class="hSub">Cards por usuária (ordem: última que puxou → fila → fora da fila)</div>
               </div>
               <div class="hActions">
                 <button class="cgdBtn" id="btnHideUsers">Ocultar usuárias</button>
                 <button class="cgdBtn" id="btnRefreshWho">Atualizar</button>
               </div>
             </div>
-            <div class="cgdList cgdWhoGrid" id="listWho">
+            <div class="cgdList" id="listWho">
               <div style="opacity:.7;font-weight:900">Carregando…</div>
             </div>
           </section>
@@ -664,7 +646,8 @@ body{ padding-bottom: 90px !important; }
         <div class="cgdBottom">
           <div class="cgdQueueRow" id="queueRow">
             <div class="cgdQueueChip"><b>Fila de atendimento</b></div>
-            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
+            <button class="cgdBtn" id="btnQueueBottom">Fila</button>
+            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e depois em Montar fila.</div>
           </div>
           <div class="cgdQueueRow">
             <button class="cgdBtn" id="btnQueueReset">Resetar</button>
@@ -677,201 +660,161 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // LEADS: fetch / actions
+  // Data: NEW LEADS (stage NOVO)
   // =========================
-  async function fetchNewLeads(){
-    const items = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+  async function fetchNewLeads() {
+    const items = await bxListAll("crm.deal.list", {
+      filter: {
+        CATEGORY_ID: CONFIG.LEADS_CATEGORY_ID,
+        STAGE_ID: CONFIG.STAGES.NOVO
+      },
       order: { ID: "DESC" },
-      select: CONFIG.LEAD_SELECT
+      select: [
+        "ID","TITLE","DATE_CREATE","DATE_MODIFY","ASSIGNED_BY_ID","STAGE_ID",
+        CONFIG.UF_OPERADORA,
+        CONFIG.UF_DT_LEAD,
+        CONFIG.UF_IDADE,
+        CONFIG.UF_BAIRRO,
+        CONFIG.UF_FONTE
+      ]
     }, CONFIG.LIMIT_NEW);
+
     return items || [];
   }
 
-  async function fetchStats(){
+  // =========================
+  // Data: STATS (puxados) = stage EM_ATENDIMENTO modificado no dia/mês
+  // =========================
+  async function fetchStatsPulled() {
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
-    const dayItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startToday },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 500);
-
-    const monthItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startMonth },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 1500);
-
-    return { day: (dayItems||[]).length, month: (monthItems||[]).length };
-  }
-
-  async function fetchUserHistory(userId){
-    const startToday = todayISOStart();
-
-    const today = await bxListAll("crm.lead.list", {
+    const dayItems = await bxListAll("crm.deal.list", {
       filter: {
-        "ASSIGNED_BY_ID": String(userId),
+        CATEGORY_ID: CONFIG.LEADS_CATEGORY_ID,
+        STAGE_ID: CONFIG.STAGES.EM_ATENDIMENTO,
         ">DATE_MODIFY": startToday
       },
       order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
+      select: ["ID"]
+    }, 500);
+
+    const monthItems = await bxListAll("crm.deal.list", {
+      filter: {
+        CATEGORY_ID: CONFIG.LEADS_CATEGORY_ID,
+        STAGE_ID: CONFIG.STAGES.EM_ATENDIMENTO,
+        ">DATE_MODIFY": startMonth
+      },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID"]
+    }, 2000);
+
+    return { day: (dayItems || []).length, month: (monthItems || []).length };
+  }
+
+  // =========================
+  // Data: User history (puxados hoje + últimos)
+  // =========================
+  async function fetchUserHistory(userId) {
+    const startToday = todayISOStart();
+
+    const today = await bxListAll("crm.deal.list", {
+      filter: {
+        CATEGORY_ID: CONFIG.LEADS_CATEGORY_ID,
+        ASSIGNED_BY_ID: String(userId),
+        STAGE_ID: CONFIG.STAGES.EM_ATENDIMENTO,
+        ">DATE_MODIFY": startToday
+      },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID","TITLE","DATE_MODIFY","STAGE_ID","ASSIGNED_BY_ID"]
     }, 200);
 
-    const last = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId) },
+    const last = await bxListAll("crm.deal.list", {
+      filter: {
+        CATEGORY_ID: CONFIG.LEADS_CATEGORY_ID,
+        ASSIGNED_BY_ID: String(userId)
+      },
       order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
+      select: ["ID","TITLE","DATE_MODIFY","STAGE_ID","ASSIGNED_BY_ID"]
     }, CONFIG.LIMIT_USER_HISTORY);
 
-    return { pulledToday: (today||[]).length, last: (last||[]) };
-  }
-
-  async function leadUpdate(id, fields){
-    return bx("crm.lead.update", { id: String(id), fields });
-  }
-
-  async function actionPickLead(leadId, userId){
-    // ✅ ao pegar: muda responsável + stage EM ATENDIMENTO
-    await leadUpdate(leadId, {
-      ASSIGNED_BY_ID: String(userId),
-      STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
-    });
-  }
-
-  async function actionDiscardLead(leadId){
-    // ✅ descartar: vai para PERDIDO
-    await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
-  }
-
-  async function actionMoveLead(leadId, statusId){
-    const fields = { STATUS_ID: statusId };
-    if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-      // marca 🔥 no título, sem duplicar
-      const lead = await bx("crm.lead.get", { id: String(leadId) });
-      const t = String(lead?.TITLE||"");
-      if(!t.includes(CONFIG.HOT_EMOJI)){
-        fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
-      }
-    }
-    await leadUpdate(leadId, fields);
-  }
-
-  async function actionSetPrazo(leadId, iso){
-    await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    return { pulledToday: (today || []).length, last: (last || []) };
   }
 
   // =========================
-  // Queue JSON via Pipeline 27 (compartilhado multi-PC)
-  // payload: { v, order:[], hiddenUsers:[], updatedAt }
+  // Queue JSON via Pipeline 27
   // =========================
-  async function ensureQueueDeal(){
+  async function ensureQueueDeal() {
     const items = await bxListAll("crm.deal.list", {
       filter: {
         CATEGORY_ID: CONFIG.QUEUE.CATEGORY_ID,
         STAGE_ID: CONFIG.QUEUE.STAGE_ID,
         "%TITLE": CONFIG.QUEUE.TITLE_KEY
       },
-      order: { ID:"DESC" },
+      order: { ID: "DESC" },
       select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
     }, 5);
 
-    if(items && items[0]) return items[0];
+    if (items && items[0]) return items[0];
 
     const id = await bx("crm.deal.add", {
       fields: {
         CATEGORY_ID: CONFIG.QUEUE.CATEGORY_ID,
         STAGE_ID: CONFIG.QUEUE.STAGE_ID,
         TITLE: `${CONFIG.QUEUE.TITLE_KEY} FILA ATENDIMENTO`,
-        [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v:1, order:[], hiddenUsers:[], updatedAt: Date.now() })
+        [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v: 1, order: [], updatedAt: Date.now() })
       }
     });
-    return bx("crm.deal.get", { id: String(id) });
+
+    const created = await bx("crm.deal.get", { id: String(id) });
+    return created;
   }
 
-  function parseQueue(json){
-    try{
+  function parseQueue(json) {
+    try {
       const o = JSON.parse(json || "{}");
-      const order = Array.isArray(o.order) ? o.order.map(String) : [];
-      const hiddenUsers = Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [];
-      const updatedAt = +o.updatedAt || 0;
-      return { order, hiddenUsers, updatedAt };
-    }catch(_){
-      return { order:[], hiddenUsers:[], updatedAt:0 };
+      return {
+        order: Array.isArray(o.order) ? o.order : [],
+        updatedAt: +o.updatedAt || 0
+      };
+    } catch (_) {
+      return { order: [], updatedAt: 0 };
     }
   }
 
-  async function fetchQueue(){
+  async function fetchQueue() {
     const deal = await ensureQueueDeal();
     const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
     return { dealId: String(deal.ID), ...parseQueue(raw) };
   }
 
-  async function saveQueue(dealId, payload){
-    const next = {
-      v: 1,
-      order: Array.isArray(payload.order) ? payload.order.map(String) : [],
-      hiddenUsers: Array.isArray(payload.hiddenUsers) ? payload.hiddenUsers.map(String) : [],
-      updatedAt: Date.now()
-    };
+  async function saveQueue(dealId, order) {
+    const payload = { v: 1, order: order || [], updatedAt: Date.now() };
     await bx("crm.deal.update", {
       id: String(dealId),
-      fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
+      fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(payload) }
     });
   }
 
   // =========================
-  // Render helpers
+  // Render
   // =========================
-  function leadDisplayName(it){
-    // prioriza TITLE (mantém estética do card)
-    const t = String(it.TITLE||"").trim();
-    if(t) return t;
-    const parts = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String);
-    return parts.join(" ").trim() || `Lead #${it.ID}`;
+  function fmt(v) {
+    const s = String(v ?? "").trim();
+    return s || "—";
   }
-
-  function badgesFromLead(it){
-    const b = [];
-
-    // fonte (SOURCE_ID)
-    if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
-
-    // cidade/bairro aproximado
-    if(it.ADDRESS_CITY) b.push(["CIDADE", it.ADDRESS_CITY]);
-    if(it.ADDRESS_REGION) b.push(["REGIÃO", it.ADDRESS_REGION]);
-
-    // status
-    if(it.STATUS_ID) b.push(["STATUS", it.STATUS_ID]);
-
-    // data/hora (DATE_CREATE)
-    if(it.DATE_CREATE) b.push(["DATA", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
-
-    return b.slice(0, 6);
-  }
-
-  function renderNewLeads(items){
+  function renderNewLeads(items) {
     const list = $("#listNew");
-    if(!list) return;
+    if (!list) return;
 
     const alert = $("#alertNew");
-    const offline = $("#offlineNew");
-    const btnSoundOn = $("#btnSoundOn");
-
     list.innerHTML = "";
-    if(alert) list.appendChild(alert);
-    if(offline) list.appendChild(offline);
+    if (alert) list.appendChild(alert);
 
-    const has = (items||[]).length > 0;
-    if(alert) alert.style.display = has ? "flex" : "none";
+    const has = (items || []).length > 0;
+    if (alert) alert.style.display = has ? "flex" : "none";
 
-    // botões silenciar/ligar som (os 2 aparecem conforme estado)
-    if(btnSoundOn){
-      btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
-    }
-
-    if(!has){
+    if (!has) {
       const empty = document.createElement("div");
       empty.style.opacity = ".75";
       empty.style.fontWeight = "900";
@@ -880,23 +823,32 @@ body{ padding-bottom: 90px !important; }
       return;
     }
 
-    (items||[]).forEach(it=>{
-      const id = String(it.ID||"");
-      const title = leadDisplayName(it);
+    (items || []).forEach((it) => {
+      const id = String(it.ID || "");
+      const title = String(it.TITLE || "").trim() || `Lead #${id}`;
+
+      const operadora = it[CONFIG.UF_OPERADORA];
+      const dtLead = it[CONFIG.UF_DT_LEAD];
+      const idade = it[CONFIG.UF_IDADE];
+      const bairro = it[CONFIG.UF_BAIRRO];
+      const fonte = it[CONFIG.UF_FONTE];
 
       const card = document.createElement("div");
       card.className = "cgdCard";
-
-      const badges = badgesFromLead(it).map(([k,v]) =>
-        `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`
-      ).join("");
-
       card.innerHTML = `
         <div class="cgdCardRow">
           <div class="cgdLeadName">${esc(title)}</div>
           <div style="font-weight:950; font-size:12px; opacity:.7">ID: ${esc(id)}</div>
         </div>
-        <div class="cgdBadges">${badges}</div>
+
+        <div class="cgdBadges">
+          <span class="cgdBadge">OPERADORA: ${esc(fmt(operadora))}</span>
+          <span class="cgdBadge">DATA/HORA: ${esc(fmt(dtLead))}</span>
+          <span class="cgdBadge">IDADE: ${esc(fmt(idade))}</span>
+          <span class="cgdBadge">BAIRRO: ${esc(fmt(bairro))}</span>
+          <span class="cgdBadge">FONTE: ${esc(fmt(fonte))}</span>
+        </div>
+
         <div class="cgdActions">
           <button class="cgdMiniBtn danger" data-discard="${esc(id)}">DESCARTAR</button>
           <button class="cgdMiniBtn primary" data-grab="${esc(id)}">PEGAR</button>
@@ -906,52 +858,49 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  function renderStats(stats){
-    $("#pillDay").textContent = `Leads do dia: ${stats.day||0}`;
-    $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
+  function renderStats(stats) {
+    $("#pillDay").textContent = `Leads do dia: ${stats.day || 0}`;
+    $("#pillMonth").textContent = `Leads do mês: ${stats.month || 0}`;
   }
 
-  // ordenação: ultima que puxou -> fila -> fora
-  function computeUserOrder(){
-    const users = CONFIG.USERS.slice();
-
-    const queueSet = new Set((state.queue.order||[]).map(String));
-    const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
-
-    // remove ocultas
-    const visible = users.filter(u => !hiddenSet.has(String(u.id)));
-
-    // última que puxou = a que tem last[0] mais recente
-    function lastTs(u){
-      const h = state.userStats[u.id];
-      const d = h?.last?.[0]?.DATE_MODIFY;
-      if(!d) return 0;
-      const t = Date.parse(String(d));
-      return Number.isFinite(t) ? t : 0;
-    }
-
-    const inQueue = visible.filter(u => queueSet.has(String(u.id)));
-    const outQueue = visible.filter(u => !queueSet.has(String(u.id)));
-
-    inQueue.sort((a,b)=> lastTs(b)-lastTs(a));
-    outQueue.sort((a,b)=> lastTs(b)-lastTs(a));
-
-    // “últimas que atenderam” = todas ordenadas por lastTs,
-    // mas mantendo a regra “fila primeiro”
-    return inQueue.concat(outQueue);
-  }
-
-  function renderWho(){
+  function renderWho(users) {
     const list = $("#listWho");
-    if(!list) return;
+    if (!list) return;
     list.innerHTML = "";
 
-    const ordered = computeUserOrder();
+    // ordem: última que puxou (por DATE_MODIFY do último item), depois em fila, depois fora
+    const queueSet = new Set((state.queue.order || []).map(String));
 
-    ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, last:[] };
-      const last1 = us.last && us.last[0] ? `Último: ${us.last[0].TITLE || ("#"+us.last[0].ID)}` : "Último: —";
-      const last2 = us.last && us.last[1] ? `Anterior: ${us.last[1].TITLE || ("#"+us.last[1].ID)}` : "Anterior: —";
+    const enriched = users
+      .filter(u => !state.hiddenUsers.has(String(u.id)))
+      .map(u => {
+        const us = state.userStats[u.id] || { pulledToday: 0, last: [] };
+        const lastModify = us.last && us.last[0] && us.last[0].DATE_MODIFY ? us.last[0].DATE_MODIFY : "";
+        return { u, us, lastModify };
+      });
+
+    enriched.sort((a, b) => {
+      // 1) quem tem lastModify mais recente
+      const ta = a.lastModify ? Date.parse(a.lastModify) || 0 : 0;
+      const tb = b.lastModify ? Date.parse(b.lastModify) || 0 : 0;
+      if (tb !== ta) return tb - ta;
+
+      // 2) quem está na fila
+      const qa = queueSet.has(String(a.u.id)) ? 0 : 1;
+      const qb = queueSet.has(String(b.u.id)) ? 0 : 1;
+      if (qa !== qb) return qa - qb;
+
+      // 3) por nome
+      return String(a.u.name).localeCompare(String(b.u.name), "pt-BR");
+    });
+
+    enriched.forEach(({ u, us }) => {
+      const last1 = us.last && us.last[0]
+        ? `Último: ${us.last[0].TITLE || ("#" + us.last[0].ID)}`
+        : "Último: —";
+      const last2 = us.last && us.last[1]
+        ? `Anterior: ${us.last[1].TITLE || ("#" + us.last[1].ID)}`
+        : "Anterior: —";
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -959,7 +908,7 @@ body{ padding-bottom: 90px !important; }
         <div class="cgdCardRow">
           <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
           <div style="display:flex; gap:8px; align-items:center">
-            <span class="cgdBadge">puxados hoje: ${esc(us.pulledToday||0)}</span>
+            <span class="cgdBadge">puxados hoje: ${esc(us.pulledToday || 0)}</span>
             <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
           </div>
         </div>
@@ -968,28 +917,22 @@ body{ padding-bottom: 90px !important; }
       `;
       list.appendChild(card);
     });
-
-    if(ordered.length===0){
-      const empty = document.createElement("div");
-      empty.style.opacity=".75";
-      empty.style.fontWeight="900";
-      empty.textContent="Nenhuma usuária para mostrar (todas ocultas).";
-      list.appendChild(empty);
-    }
   }
 
-  function renderQueue(){
+  function renderQueue() {
     const row = $("#queueRow");
     const hint = $("#queueHint");
-    if(!row || !hint) return;
+    if (!row || !hint) return;
 
-    const keep = row.firstElementChild;
+    const keep = row.firstElementChild; // “Fila de atendimento”
+    const filaBtn = $("#btnQueueBottom");
     row.innerHTML = "";
-    if(keep) row.appendChild(keep);
+    if (keep) row.appendChild(keep);
+    if (filaBtn) row.appendChild(filaBtn);
 
     const order = state.queue.order || [];
-    if(order.length === 0){
-      hint.textContent = "Fila vazia. Clique em Fila e selecione quem entra.";
+    if (order.length === 0) {
+      hint.textContent = "Fila vazia. Clique em Fila e depois em Montar fila.";
       row.appendChild(hint);
       return;
     }
@@ -997,66 +940,87 @@ body{ padding-bottom: 90px !important; }
     hint.textContent = "";
     row.appendChild(hint);
 
-    order.forEach((id, idx)=>{
-      const u = CONFIG.USERS.find(x=> String(x.id)===String(id));
+    order.forEach((id, idx) => {
+      const u = CONFIG.USERS.find((x) => String(x.id) === String(id));
       const chip = document.createElement("div");
       chip.className = "cgdQueueChip";
-      chip.innerHTML = `<b>${esc(u ? u.name : ("USER "+id))}</b> <span style="opacity:.65">#${idx+1}</span>`;
+      chip.innerHTML = `<b>${esc(u ? u.name : ("USER " + id))}</b> <span style="opacity:.65">#${idx + 1}</span>`;
       row.appendChild(chip);
     });
   }
 
-  function setStatus(txt){
-    const el = $("#statusLine");
-    if(el) el.textContent = txt;
+  // =========================
+  // Actions
+  // =========================
+  async function actionAssignAndMove(dealId, userId) {
+    // PEGAR: muda responsável e vai para EM_ATENDIMENTO
+    await bx("crm.deal.update", {
+      id: String(dealId),
+      fields: {
+        ASSIGNED_BY_ID: String(userId),
+        STAGE_ID: CONFIG.STAGES.EM_ATENDIMENTO
+      }
+    });
   }
-  function setOffline(flag){
-    state.netOk = !flag;
-    const off = $("#offlineNew");
-    if(off) off.style.display = flag ? "block" : "none";
+
+  async function actionDiscard(dealId) {
+    await bx("crm.deal.update", {
+      id: String(dealId),
+      fields: {
+        STAGE_ID: CONFIG.STAGES.PERDIDO
+      }
+    });
+  }
+
+  async function actionSetPrazoVerified(dealId, iso) {
+    await bx("crm.deal.update", {
+      id: String(dealId),
+      fields: { [CONFIG.UF_PRAZO]: iso }
+    });
+
+    // confere gravou de verdade (sem “parece que gravou”)
+    const d = await bx("crm.deal.get", { id: String(dealId) });
+    const got = d ? d[CONFIG.UF_PRAZO] : null;
+    if (!got) throw new Error("Follow-up não ficou gravado no Bitrix (campo UF vazio).");
+    return true;
+  }
+
+  async function addFireEmojiIfNeeded(dealId) {
+    const d = await bx("crm.deal.get", { id: String(dealId) });
+    const title = String(d && d.TITLE ? d.TITLE : "").trim();
+    if (title.startsWith("🔥")) return;
+    await bx("crm.deal.update", {
+      id: String(dealId),
+      fields: { TITLE: `🔥 ${title || ("Lead " + dealId)}` }
+    });
   }
 
   // =========================
   // Modals
   // =========================
-  function modalGetEquipes(){
-    const body = `
-      <div style="font-weight:900; opacity:.8; margin-bottom:10px">
-        GET (Equipes) — (atalhos/regras podem ser colocados aqui depois).
-      </div>
-      <div class="cgdRow">
-        <button class="cgdBtn" data-close-modal>Ok</button>
-      </div>
-    `;
-    openModal("GET (Equipes)", body);
-  }
+  async function modalQueue() {
+    const q = await fetchQueue();
+    const current = new Set((q.order || []).map(String));
 
-  // ✅ FILA: checkbox por usuária (sem fechar a cada ação)
-  async function modalQueue(){
-    const q = await fetchQueue().catch(()=>null);
-    if(!q) return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
-
-    state.queue = { ...state.queue, ...q };
-
-    const currentSet = new Set((q.order||[]).map(String));
     const body = `
       <div style="font-weight:950; margin-bottom:10px">Gerenciar fila (sincroniza em todos os PCs)</div>
 
-      <div class="cgdRow" style="margin-bottom:12px">
-        <button class="cgdBtn" id="qAll">Selecionar todas</button>
-        <button class="cgdBtn" id="qNone">Limpar</button>
-        <button class="cgdBtn" id="qApply">Aplicar alterações</button>
+      <div class="cgdRow" style="margin-bottom:10px">
+        <button class="cgdBtn" id="qBuildBtn">Montar fila (todas)</button>
+        <button class="cgdBtn" id="qClearBtn">Esvaziar fila</button>
       </div>
 
       <table class="cgdTable">
         <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
         <tbody id="qTbody">
           ${CONFIG.USERS.map(u=>{
-            const checked = currentSet.has(String(u.id)) ? "checked" : "";
-            return `<tr>
-              <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
-              <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
-            </tr>`;
+            const checked = current.has(String(u.id)) ? "checked" : "";
+            return `
+              <tr>
+                <td><input type="checkbox" data-q-check="${esc(u.id)}" ${checked} /></td>
+                <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
+              </tr>
+            `;
           }).join("")}
         </tbody>
       </table>
@@ -1068,74 +1032,278 @@ body{ padding-bottom: 90px !important; }
 
     openModal("FILA", body, `
       <button class="cgdBtn" data-close-modal>Fechar</button>
+      <button class="cgdBtn" id="qSaveBtn">Salvar fila</button>
     `);
 
-    $("#qAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
-    });
-    $("#qNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = false);
+    $("#qBuildBtn")?.addEventListener("click", ()=>{
+      $$("#qTbody input[type=checkbox]").forEach(ch => { ch.checked = true; });
     });
 
-    $("#qApply")?.addEventListener("click", async ()=>{
+    $("#qClearBtn")?.addEventListener("click", ()=>{
+      $$("#qTbody input[type=checkbox]").forEach(ch => { ch.checked = false; });
+    });
+
+    $("#qSaveBtn")?.addEventListener("click", async ()=>{
       try{
-        $("#qApply").disabled = true;
-
-        const checked = $$('input[type=checkbox][data-q-user]')
-          .filter(ch=>ch.checked)
-          .map(ch=> String(ch.getAttribute("data-q-user")));
-
-        // mantém ordem estável: primeiro quem já estava, depois adicionadas
-        const prev = (q.order||[]).map(String);
-        const next = [];
-        for(const id of prev){ if(checked.includes(id)) next.push(id); }
-        for(const id of checked){ if(!next.includes(id)) next.push(id); }
-
-        await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
-
-        // atualiza sem fechar
-        const fresh = await fetchQueue();
-        q.order = fresh.order;
-        q.hiddenUsers = fresh.hiddenUsers;
-        q.updatedAt = fresh.updatedAt;
-
-        state.queue = { ...state.queue, ...fresh };
-        renderQueue();
-        renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        const selected = $$("#qTbody input[type=checkbox][data-q-check]")
+          .filter(ch => ch.checked)
+          .map(ch => String(ch.getAttribute("data-q-check")));
+        await saveQueue(q.dealId, selected);
+        closeModal();
+        await refreshQueue(); // já atualiza na hora
+        await refreshUsers();
+        setStatus(`Fila salva: ${nowBRTime()}`);
       }catch(err){
         console.error(err);
-        alert("Falha ao salvar fila agora. Mantive o painel.");
-      }finally{
-        $("#qApply").disabled = false;
+        setStatus("Falha ao salvar fila (ver console).");
       }
     });
   }
 
-  // ✅ Ocultar usuárias (SEM storage — salva no Bitrix via QUEUE_JSON.hiddenUsers)
-  async function modalHideUsers(){
-    const q = await fetchQueue().catch(()=>null);
-    if(!q) return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
+  async function modalPickLead(dealId) {
+    const uops = CONFIG.USERS.map(u => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
 
-    const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
-
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
+    openModal("PEGAR LEAD", `
+      <div style="font-weight:950;margin-bottom:10px">Escolha a ação</div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <button class="cgdBtn" id="huNone">Mostrar todas</button>
-        <button class="cgdBtn" id="huApply">Aplicar</button>
+        <button class="cgdBtn" id="pickNext">Pegar para a próxima da fila</button>
       </div>
 
+      <div class="cgdRow" style="margin-bottom:10px">
+        <label style="font-weight:950">Ou selecionar usuária:</label>
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+        <button class="cgdBtn" id="pickGo">Confirmar</button>
+      </div>
+
+      <div style="font-size:11px;font-weight:900;opacity:.75">
+        Ao pegar, o lead muda responsável e vai automaticamente para <b>EM ATENDIMENTO</b>.
+      </div>
+    `);
+
+    $("#pickNext")?.addEventListener("click", async ()=>{
+      try{
+        const q = await fetchQueue();
+        const order = (q.order || []).slice();
+        if(order.length === 0){
+          setStatus("Fila vazia: selecione usuária.");
+          return;
+        }
+        const nextId = String(order[0]); // não consome aqui; só pega para próxima “fluida”
+        await actionAssignAndMove(dealId, nextId);
+        // agora sim consome a fila
+        order.shift();
+        saveQueue(q.dealId, order).catch(()=>{});
+        closeModal();
+        // atualiza rápido sem travar
+        refreshQueue(); refreshNewLeads(); refreshUsers(); refreshStats();
+        setStatus(`Pego para ${nextId} • ${nowBRTime()}`);
+      }catch(err){
+        console.error(err);
+        setStatus("Falha ao pegar (ver console).");
+      }
+    });
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      try{
+        const uid = $("#pickUser").value;
+        await actionAssignAndMove(dealId, uid);
+        closeModal();
+        refreshNewLeads(); refreshUsers(); refreshStats();
+        setStatus(`Pego para ${uid} • ${nowBRTime()}`);
+      }catch(err){
+        console.error(err);
+        setStatus("Falha ao pegar (ver console).");
+      }
+    });
+  }
+
+  async function modalManageUser(userId) {
+    const u = CONFIG.USERS.find(x => String(x.id) === String(userId));
+    if (!u) return;
+
+    let hist;
+    try{
+      hist = await fetchUserHistory(u.id);
+    }catch(err){
+      console.error(err);
+      openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
+      return;
+    }
+
+    const rows = (hist.last || []).map(it=>{
+      const id = String(it.ID);
+      const title = String(it.TITLE || ("Lead #" + id));
+      const dm = (it.DATE_MODIFY || "").replace("T"," ").slice(0,19);
+
+      return `<tr data-row="${esc(id)}">
+        <td style="vertical-align:top">
+          <label style="display:flex;gap:8px;align-items:flex-start">
+            <input type="checkbox" data-sel="${esc(id)}" />
+            <div>
+              <b class="t">${esc(title)}</b>
+              <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")}</div>
+            </div>
+          </label>
+        </td>
+
+        <td style="vertical-align:top">
+          <div class="cgdRow">
+            <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+            <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar prazo</button>
+          </div>
+        </td>
+
+        <td style="vertical-align:top">
+          <div class="cgdRow" style="margin-bottom:8px">
+            <button class="cgdBtn" data-move-stage="${esc(id)}" data-stage="QUALIFICADO">Mover: QUALIFICADO 🔥</button>
+            <button class="cgdBtn" data-move-stage="${esc(id)}" data-stage="PERDIDO">Mover: PERDIDO</button>
+            <button class="cgdBtn" data-move-stage="${esc(id)}" data-stage="CONVERTIDO">Mover: CONVERTIDO</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+
+    const body = `
+      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
+        <div style="font-weight:950">FOLLOW-UP + ações em lote</div>
+        <div class="cgdRow">
+          <input class="cgdInput" id="muSearch" placeholder="Buscar..." />
+          <button class="cgdBtn" id="muRefresh">Atualizar</button>
+        </div>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Puxados hoje: <b>${esc(hist.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Últimos encontrados: <b>${esc((hist.last||[]).length)}</b></div>
+        <button class="cgdBtn" id="muBulkQual">QUALIFICAR selecionados 🔥</button>
+        <button class="cgdBtn" id="muBulkLost">PERDIDO selecionados</button>
+        <button class="cgdBtn" id="muBulkWon">CONVERTIDO selecionados</button>
+      </div>
+
+      <table class="cgdTable" id="muTable">
+        <thead>
+          <tr>
+            <th>Lead</th>
+            <th>FOLLOW-UP (prazo)</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="muTbody">
+          ${rows || `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`}
+        </tbody>
+      </table>
+    `;
+
+    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, body);
+
+    $("#muRefresh")?.addEventListener("click", async ()=>{
+      closeModal();
+      await modalManageUser(userId);
+    });
+
+    $("#muSearch")?.addEventListener("input", (e)=>{
+      const q = String(e.target.value || "").toLowerCase();
+      $$("#muTbody tr").forEach(tr=>{
+        const t = (tr.querySelector("b.t")?.textContent || "").toLowerCase();
+        tr.style.display = t.includes(q) ? "" : "none";
+      });
+    });
+
+    async function bulkMove(stageKey){
+      const ids = $$(`#muTbody input[type=checkbox][data-sel]`)
+        .filter(ch => ch.checked)
+        .map(ch => String(ch.getAttribute("data-sel")));
+      if(ids.length === 0) { setStatus("Selecione pelo menos 1 lead."); return; }
+
+      const stageId =
+        stageKey === "QUALIFICADO" ? CONFIG.STAGES.QUALIFICADO :
+        stageKey === "PERDIDO" ? CONFIG.STAGES.PERDIDO :
+        CONFIG.STAGES.CONVERTIDO;
+
+      try{
+        setStatus(`Movendo ${ids.length}…`);
+        for(const id of ids){
+          await bx("crm.deal.update", { id, fields: { STAGE_ID: stageId } });
+          if(stageKey === "QUALIFICADO"){
+            await addFireEmojiIfNeeded(id);
+            // 🔥 também na lista imediatamente
+            const b = document.querySelector(`tr[data-row="${CSS.escape(id)}"] b.t`);
+            if(b && !b.textContent.trim().startsWith("🔥")) b.textContent = `🔥 ${b.textContent}`;
+          }
+          await sleep(80);
+        }
+        setStatus(`Movidos ✅ ${nowBRTime()}`);
+        refreshUsers(); refreshStats();
+      }catch(err){
+        console.error(err);
+        setStatus("Falha ao mover em lote (ver console).");
+      }
+    }
+
+    $("#muBulkQual")?.addEventListener("click", ()=> bulkMove("QUALIFICADO"));
+    $("#muBulkLost")?.addEventListener("click", ()=> bulkMove("PERDIDO"));
+    $("#muBulkWon")?.addEventListener("click", ()=> bulkMove("CONVERTIDO"));
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const sp = e.target.closest("[data-save-prazo]");
+      const mv = e.target.closest("[data-move-stage]");
+
+      try{
+        if(sp){
+          const dealId = sp.getAttribute("data-save-prazo");
+          const inp = document.querySelector(`input[data-prazo="${CSS.escape(dealId)}"]`);
+          const iso = isoFromLocalInput(inp?.value || "");
+          if(!iso){ setStatus("Preencha data/hora do follow-up."); return; }
+
+          sp.disabled = true;
+          await actionSetPrazoVerified(dealId, iso);
+          setStatus(`FOLLOW-UP gravado ✅ ${nowBRTime()}`);
+          refreshUsers();
+        }
+
+        if(mv){
+          const dealId = mv.getAttribute("data-move-stage");
+          const stageKey = mv.getAttribute("data-stage");
+          const stageId =
+            stageKey === "QUALIFICADO" ? CONFIG.STAGES.QUALIFICADO :
+            stageKey === "PERDIDO" ? CONFIG.STAGES.PERDIDO :
+            CONFIG.STAGES.CONVERTIDO;
+
+          mv.disabled = true;
+          await bx("crm.deal.update", { id: dealId, fields: { STAGE_ID: stageId } });
+          if(stageKey === "QUALIFICADO"){
+            await addFireEmojiIfNeeded(dealId);
+            const b = document.querySelector(`tr[data-row="${CSS.escape(dealId)}"] b.t`);
+            if(b && !b.textContent.trim().startsWith("🔥")) b.textContent = `🔥 ${b.textContent}`;
+          }
+          setStatus(`Movido ✅ ${nowBRTime()}`);
+          refreshUsers(); refreshStats();
+        }
+      }catch(err){
+        console.error(err);
+        setStatus(`Falha ao salvar/mover (ver console).`);
+      }finally{
+        if(sp) sp.disabled = false;
+        if(mv) mv.disabled = false;
+      }
+    });
+  }
+
+  function modalHideUsers() {
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias</div>
       <table class="cgdTable">
-        <thead><tr><th>Oculta</th><th>Usuária</th></tr></thead>
+        <thead><tr><th>Mostrar</th><th>Usuária</th></tr></thead>
         <tbody>
           ${CONFIG.USERS.map(u=>{
-            const checked = hiddenSet.has(String(u.id)) ? "checked" : "";
-            return `<tr>
-              <td style="width:90px"><input type="checkbox" data-hu-user="${esc(u.id)}" ${checked} /></td>
-              <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
-            </tr>`;
+            const shown = !state.hiddenUsers.has(String(u.id));
+            return `
+              <tr>
+                <td><input type="checkbox" data-hu="${esc(u.id)}" ${shown ? "checked" : ""} /></td>
+                <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
+              </tr>
+            `;
           }).join("")}
         </tbody>
       </table>
@@ -1143,418 +1311,74 @@ body{ padding-bottom: 90px !important; }
 
     openModal("OCULTAR USUÁRIAS", body, `
       <button class="cgdBtn" data-close-modal>Fechar</button>
+      <button class="cgdBtn" id="huSave">Aplicar</button>
     `);
 
-    $("#huNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
-    });
-
-    $("#huApply")?.addEventListener("click", async ()=>{
-      try{
-        $("#huApply").disabled = true;
-        const hidden = $$('input[type=checkbox][data-hu-user]')
-          .filter(ch=> ch.checked)
-          .map(ch=> String(ch.getAttribute("data-hu-user")));
-
-        await saveQueue(q.dealId, { order: q.order||[], hiddenUsers: hidden });
-
-        const fresh = await fetchQueue();
-        state.queue = { ...state.queue, ...fresh };
-        renderQueue();
-        renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
-      }catch(err){
-        console.error(err);
-        alert("Falha ao salvar agora. Mantive o painel.");
-      }finally{
-        $("#huApply").disabled = false;
-      }
-    });
-  }
-
-  // ✅ Modal ABRIR (busca, filtro qualificado, lote follow-up e lote mover)
-  async function modalManageUser(userId){
-    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
-    if(!u) return;
-
-    let hist;
-    try{
-      hist = await fetchUserHistory(u.id);
-    }catch(err){
-      return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Falha ao carregar agora. Mantendo painel.</div>`);
-    }
-
-    // UI controls
-    const body = `
-      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">FOLLOW-UP + Transferências + Ações em lote</div>
-        <button class="cgdBtn" id="muRefresh">Atualizar</button>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Puxados hoje: <b>${esc(hist.pulledToday||0)}</b></div>
-        <div class="cgdBadge">Últimos encontrados: <b>${esc((hist.last||[]).length)}</b></div>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <input class="cgdInput" id="muSearch" placeholder="Buscar por palavra-chave…" style="min-width:260px" />
-        <select class="cgdSelect" id="muFilter">
-          <option value="ALL">Todos</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Somente QUALIFICADOS</option>
-        </select>
-        <button class="cgdBtn" id="muAll">Marcar todos</button>
-        <button class="cgdBtn" id="muNone">Desmarcar</button>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <input class="cgdInput" type="datetime-local" id="muBulkDate" />
-        <button class="cgdBtn" id="muBulkPrazo">FOLLOW-UP em lote</button>
-
-        <select class="cgdSelect" id="muMoveTo">
-          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Mover p/ PERDIDO</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
-        </select>
-        <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
-      </div>
-
-      <table class="cgdTable">
-        <thead>
-          <tr>
-            <th style="width:70px">Sel.</th>
-            <th>Lead</th>
-            <th>FOLLOW-UP (1)</th>
-            <th>Transferir (1)</th>
-          </tr>
-        </thead>
-        <tbody id="muTbody"></tbody>
-      </table>
-    `;
-
-    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, body);
-
-    const tbody = $("#muTbody");
-    const search = $("#muSearch");
-    const filter = $("#muFilter");
-
-    function renderRows(){
-      const q = (search.value||"").trim().toLowerCase();
-      const f = (filter.value||"ALL");
-
-      const list = (hist.last||[]).filter(it=>{
-        const t = String(it.TITLE||"").toLowerCase();
-        if(q && !t.includes(q)) return false;
-        if(f!=="ALL" && String(it.STATUS_ID) !== String(f)) return false;
-        return true;
-      });
-
-      const userOptions = CONFIG.USERS
-        .filter(x=> String(x.id)!==String(u.id))
-        .map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`)
-        .join("");
-
-      tbody.innerHTML = list.length ? list.map(it=>{
-        const id = String(it.ID);
-        const title = String(it.TITLE||("Lead #"+id));
-        const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
-        const status = String(it.STATUS_ID||"—");
-
-        return `<tr data-row="${esc(id)}">
-          <td><input type="checkbox" data-sel="${esc(id)}" /></td>
-          <td>
-            <b>${esc(title)}</b>
-            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STATUS: ${esc(status)}</div>
-          </td>
-          <td>
-            <div class="cgdRow">
-              <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
-              <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
-            </div>
-          </td>
-          <td>
-            <div class="cgdRow">
-              <select class="cgdSelect" data-move-to="${esc(id)}">${userOptions}</select>
-              <button class="cgdBtn" data-do-transfer="${esc(id)}">Transferir</button>
-            </div>
-          </td>
-        </tr>`;
-      }).join("") : `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-    }
-
-    renderRows();
-
-    $("#muRefresh")?.addEventListener("click", async ()=>{
+    $("#huSave")?.addEventListener("click", ()=>{
+      const checks = $$(`input[type=checkbox][data-hu]`);
+      state.hiddenUsers = new Set(
+        checks.filter(ch => !ch.checked).map(ch => String(ch.getAttribute("data-hu")))
+      );
       closeModal();
-      await modalManageUser(userId);
-    });
-
-    search?.addEventListener("input", renderRows);
-    filter?.addEventListener("change", renderRows);
-
-    $("#muAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
-    });
-    $("#muNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false);
-    });
-
-    function selectedIds(){
-      return $$('input[type=checkbox][data-sel]')
-        .filter(ch=> ch.checked)
-        .map(ch=> ch.getAttribute("data-sel"));
-    }
-
-    // lote follow-up
-    $("#muBulkPrazo")?.addEventListener("click", async ()=>{
-      const ids = selectedIds();
-      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
-      const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
-      if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
-      try{
-        $("#muBulkPrazo").disabled = true;
-        for(const id of ids){
-          await actionSetPrazo(id, iso);
-          await sleep(120);
-        }
-        await hardRefreshAll();
-        alert("FOLLOW-UP em lote salvo ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#muBulkPrazo").disabled = false;
-      }
-    });
-
-    // lote mover stage
-    $("#muBulkMove")?.addEventListener("click", async ()=>{
-      const ids = selectedIds();
-      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
-      const to = $("#muMoveTo")?.value;
-      if(!to) return;
-      try{
-        $("#muBulkMove").disabled = true;
-        for(const id of ids){
-          await actionMoveLead(id, to);
-          await sleep(140);
-        }
-        await hardRefreshAll();
-        alert("Movimento em lote concluído ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#muBulkMove").disabled = false;
-      }
-    });
-
-    // ações individuais
-    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
-      const sp = e.target.closest("[data-save-prazo]");
-      const tf = e.target.closest("[data-do-transfer]");
-      try{
-        if(sp){
-          const leadId = sp.getAttribute("data-save-prazo");
-          const inp = $(`input[data-prazo="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
-          const iso = isoFromLocalInput(inp?.value || "");
-          if(!iso) return alert("Preencha data/hora corretamente.");
-          sp.disabled = true;
-          await actionSetPrazo(leadId, iso);
-          await hardRefreshAll();
-          alert("Prazo salvo ✅");
-        }
-        if(tf){
-          const leadId = tf.getAttribute("data-do-transfer");
-          const sel = $(`select[data-move-to="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
-          const toId = sel?.value;
-          if(!toId) return;
-          tf.disabled = true;
-          await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toId) });
-          await hardRefreshAll();
-          alert("Transferido ✅");
-        }
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        if(sp) sp.disabled = false;
-        if(tf) tf.disabled = false;
-      }
-    });
-  }
-
-  async function modalBatchTransfer(){
-    const items = state.newLeads || [];
-    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Buscar (título):</label>
-        <input class="cgdInput" id="btSearch" placeholder="Ex.: MEDSENIOR" />
-        <label style="font-weight:950">Transferir para:</label>
-        <select class="cgdSelect" id="btUser">${ops}</select>
-        <button class="cgdBtn" id="btApply">Aplicar</button>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Leads listados: <b id="btCount">${esc(items.length)}</b></div>
-      </div>
-
-      <table class="cgdTable">
-        <thead><tr><th>Selecionar</th><th>Lead</th></tr></thead>
-        <tbody id="btTbody"></tbody>
-      </table>
-    `;
-
-    openModal("TRANSFERIR EM LOTE", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
-    `);
-
-    const tbody = $("#btTbody");
-    const countEl = $("#btCount");
-
-    function draw(list){
-      countEl.textContent = String(list.length);
-      tbody.innerHTML = list.length ? list.map(it=>`
-        <tr>
-          <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
-          <td><b>${esc(leadDisplayName(it))}</b> <span style="opacity:.65;font-weight:900">ID: ${esc(it.ID)}</span></td>
-        </tr>
-      `).join("") : `<tr><td colspan="2" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-    }
-
-    draw(items);
-
-    $("#btApply")?.addEventListener("click", ()=>{
-      const q = ($("#btSearch").value||"").trim().toUpperCase();
-      if(!q) return draw(items);
-      draw(items.filter(it=> String(it.TITLE||"").toUpperCase().includes(q)));
-    });
-
-    $("#btDo")?.addEventListener("click", async ()=>{
-      const toId = $("#btUser").value;
-      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
-        .filter(x=>x.checked)
-        .map(x=> x.getAttribute("data-bt-id"));
-
-      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
-      try{
-        $("#btDo").disabled = true;
-        for(const id of ids){
-          await actionPickLead(id, toId); // em atendimento
-          await sleep(150);
-        }
-        closeModal();
-        await hardRefreshAll();
-        alert("Transferência concluída ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#btDo").disabled = false;
-      }
-    });
-  }
-
-  async function modalPickLead(leadId){
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Escolha quem vai pegar este lead</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Usuária:</label>
-        <select class="cgdSelect" id="pickUser">${uops}</select>
-      </div>
-      <div style="font-size:11px;font-weight:900;opacity:.75">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
-      </div>
-    `;
-    openModal("PEGAR LEAD", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="pickGo">Confirmar</button>
-    `);
-
-    $("#pickGo")?.addEventListener("click", async ()=>{
-      try{
-        const uid = $("#pickUser").value;
-        $("#pickGo").disabled = true;
-        await actionPickLead(leadId, uid);
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#pickGo").disabled = false;
-      }
+      renderWho(CONFIG.USERS);
     });
   }
 
   // =========================
-  // Refresh orchestration
+  // Refresh
   // =========================
-  async function refreshNewLeads(){
-    try{
+  async function refreshNewLeads() {
+    try {
       const items = await fetchNewLeads();
-      setOffline(false);
 
+      // beep só quando surge lead novo
       const newest = items && items[0] ? String(items[0].ID) : null;
-
-      // alerta sonoro: se existe NOVO LEAD e o som está ON
-      if(items.length > 0 && state.soundOn){
-        // toca só quando chegou um novo id (evita loop infinito)
-        if(newest && newest !== state.lastNewLeadId){
-          state.lastNewLeadId = newest;
-          tripleBeep();
-        }
+      if (newest && newest !== state.lastNewLeadId) {
+        state.lastNewLeadId = newest;
+        if (state.soundOn) tripleBeep();
       }
 
       state.newLeads = items || [];
       renderNewLeads(state.newLeads);
-
-    }catch(err){
+    } catch (err) {
+      // sem banner “sem conexão” (você pediu oculto)
       console.warn("new leads fetch failed", err);
-      setOffline(true);
+      setStatus("Conexão oscilando… mantendo tela. (sem travar)");
     }
   }
 
-  async function refreshStats(){
-    try{
-      const s = await fetchStats();
+  async function refreshStats() {
+    try {
+      const s = await fetchStatsPulled();
       state.stats = s;
       renderStats(s);
-    }catch(err){
+    } catch (err) {
       console.warn("stats failed", err);
     }
   }
 
-  async function refreshUsers(){
-    try{
-      const jobs = CONFIG.USERS.map(async u=>{
-        const h = await fetchUserHistory(u.id);
-        state.userStats[u.id] = h;
-      });
-      await Promise.all(jobs);
-      renderWho();
-    }catch(err){
+  async function refreshUsers() {
+    try {
+      await Promise.all(CONFIG.USERS.map(async (u) => {
+        state.userStats[u.id] = await fetchUserHistory(u.id);
+      }));
+      renderWho(CONFIG.USERS);
+    } catch (err) {
       console.warn("user stats failed", err);
     }
   }
 
-  async function refreshQueue(){
-    try{
+  async function refreshQueue() {
+    try {
       const q = await fetchQueue();
-      state.queue = { ...state.queue, ...q };
+      state.queue = { order: q.order || [], updatedAt: q.updatedAt || 0, dealId: q.dealId };
       renderQueue();
-      renderWho(); // ocultas/fila afetam ordenação
-    }catch(err){
+    } catch (err) {
       console.warn("queue failed", err);
     }
   }
 
-  async function hardRefreshAll(){
+  async function hardRefreshAll() {
     setStatus(`Atualizando… (${nowBRTime()})`);
     await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshUsers(), refreshQueue()]);
     setStatus(`Atualizado: ${nowBRTime()}`);
@@ -1563,38 +1387,32 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // Events
   // =========================
-  function updateSoundUI(){
-    $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
-    const so = $("#btnSoundOn");
-    if(so) so.style.display = state.soundOn ? "none" : "inline-block";
-  }
-
-  function wire(){
-    $("#btnSound")?.addEventListener("click", ()=>{
+  function wire() {
+    $("#btnSound")?.addEventListener("click", () => {
       state.soundOn = !state.soundOn;
-      updateSoundUI();
+      $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
     });
 
-    $("#btnSilence")?.addEventListener("click", ()=>{
+    $("#btnSilence")?.addEventListener("click", () => {
       state.soundOn = false;
-      updateSoundUI();
+      $("#btnSound").textContent = "Som: OFF";
     });
 
-    $("#btnSoundOn")?.addEventListener("click", ()=>{
+    $("#btnUnsilence")?.addEventListener("click", () => {
       state.soundOn = true;
-      updateSoundUI();
-      // se já existe NOVO LEAD, chama atenção na hora
-      if((state.newLeads||[]).length > 0) tripleBeep();
+      $("#btnSound").textContent = "Som: ON";
     });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
     $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
     $("#btnRefreshWho")?.addEventListener("click", refreshUsers);
 
-    $("#btnGet")?.addEventListener("click", modalGetEquipes);
+    $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
-    $("#btnManage")?.addEventListener("click", ()=>{
-      const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    $("#btnManage")?.addEventListener("click", () => {
+      const opts = CONFIG.USERS
+        .map(u => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`)
+        .join("");
       openModal("GERENCIAR USUÁRIA", `
         <div class="cgdRow">
           <label style="font-weight:950">Selecione:</label>
@@ -1602,71 +1420,83 @@ body{ padding-bottom: 90px !important; }
           <button class="cgdBtn" id="muOpen">Abrir</button>
         </div>
       `);
-      $("#muOpen")?.addEventListener("click", ()=>{
+      $("#muOpen")?.addEventListener("click", () => {
         const id = $("#muSel").value;
         closeModal();
         modalManageUser(id);
       });
     });
 
-    $("#btnQueue")?.addEventListener("click", modalQueue);
-    $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
+    $("#btnQueueBottom")?.addEventListener("click", modalQueue);
 
-    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
+    $("#btnNext")?.addEventListener("click", async () => {
+      if(state.busyNext) return;
+      state.busyNext = true;
+      try {
+        // “fluido”: troca a fila imediatamente (sem alert)
+        const q = state.queue.dealId ? { ...state.queue } : await fetchQueue();
+        const order = (q.order || []).slice();
+        if (order.length === 0) { setStatus("Fila vazia."); return; }
 
-    // ✅ Próxima disponível: NÃO abre alert do navegador, só rotaciona fila e atualiza UI
-    $("#btnNext")?.addEventListener("click", async ()=>{
-      try{
-        const q = await fetchQueue();
-        const order = (q.order||[]).slice();
-        if(order.length===0) return;
+        order.shift();
+        // UI instantânea
+        state.queue.order = order;
+        renderQueue();
+        setStatus(`Próxima atualizada • ${nowBRTime()}`);
 
-        const nextId = order.shift();
-        order.push(nextId); // rotaciona de forma fluida
-        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
-
-        await refreshQueue();
-        setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()}`);
-      }catch(err){
+        // sincroniza no Bitrix sem travar
+        saveQueue(q.dealId || state.queue.dealId, order)
+          .then(()=> refreshQueue())
+          .catch(()=> setStatus("Falha ao sincronizar fila (tentará no próximo refresh)."));
+      } catch (err) {
         console.error(err);
-        // sem “Failed to fetch” na tela — só mantém e tenta depois
+        setStatus("Falha ao trocar próxima (ver console).");
+      } finally {
+        state.busyNext = false;
       }
     });
 
-    $("#btnQueueReset")?.addEventListener("click", async ()=>{
-      try{
+    $("#btnQueueReset")?.addEventListener("click", async () => {
+      try {
         const q = await fetchQueue();
-        await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
+        await saveQueue(q.dealId, []);
         await refreshQueue();
-      }catch(err){
+        setStatus(`Fila resetada • ${nowBRTime()}`);
+      } catch (err) {
         console.error(err);
+        setStatus("Falha ao resetar fila (ver console).");
       }
     });
 
-    // Delegação cards
-    document.addEventListener("click", (e)=>{
+    // Delegação botões dos cards
+    document.addEventListener("click", async (e) => {
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
       const ou = e.target.closest("[data-open-user]");
 
-      if(g){
-        const id = g.getAttribute("data-grab");
-        modalPickLead(id);
-      }
-      if(d){
-        const id = d.getAttribute("data-discard");
-        (async ()=>{
-          try{
-            await actionDiscardLead(id);
-            await hardRefreshAll();
-          }catch(err){
-            console.error(err);
-          }
-        })();
-      }
-      if(ou){
-        const uid = ou.getAttribute("data-open-user");
-        modalManageUser(uid);
+      try{
+        if (g) {
+          const id = g.getAttribute("data-grab");
+          modalPickLead(id);
+        }
+        if (d) {
+          const id = d.getAttribute("data-discard");
+          // remove da UI imediatamente (fluido)
+          state.newLeads = (state.newLeads || []).filter(x => String(x.ID) !== String(id));
+          renderNewLeads(state.newLeads);
+
+          // sync
+          actionDiscard(id)
+            .then(()=>{ refreshStats(); refreshUsers(); })
+            .catch((err)=>{ console.error(err); setStatus("Falha ao descartar (ver console)."); refreshNewLeads(); });
+        }
+        if (ou) {
+          const uid = ou.getAttribute("data-open-user");
+          modalManageUser(uid);
+        }
+      }catch(err){
+        console.error(err);
+        setStatus("Falha (ver console).");
       }
     });
   }
@@ -1674,30 +1504,25 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // Start
   // =========================
-  async function start(){
-    if(!CONFIG.WEBHOOK){
-      const sentinel = document.getElementById("cgd-sentinel");
-      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
-      return;
-    }
+  async function start() {
+    if (!CONFIG.WEBHOOK) return;
 
     injectCSS();
     mount();
     wire();
-    updateSoundUI();
+
+    $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
 
     await hardRefreshAll();
 
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
-    setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
   }
 
-  if(document.readyState === "loading"){
+  if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start);
-  }else{
+  } else {
     start();
   }
-
 })();
