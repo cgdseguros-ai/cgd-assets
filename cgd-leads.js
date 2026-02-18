@@ -16,7 +16,7 @@
   // =========================
   const CONFIG = {
     // Webhook REST (o mesmo que você já usa)
-    WEBHOOK: "COLE_AQUI_O_SEU_WEBHOOK_COM_BARRA_NO_FINAL", // ex: https://b24-xxxx.bitrix24.com.br/rest/1/xxxxxx/
+    WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/", // ex: https://b24-xxxx.bitrix24.com.br/rest/1/xxxxxx/
 
     // Painel (Leads) — Categoria/Pipeline
     LEADS_CATEGORY_ID: 17,
