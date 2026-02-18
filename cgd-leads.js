@@ -10,7 +10,7 @@
   // =========================
   // CONFIG
   // =========================
-  const CONFIG = {
+  var CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
     UF_PRAZO: "UF_CRM_1768175087",
