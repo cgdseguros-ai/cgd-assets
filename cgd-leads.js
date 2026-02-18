@@ -1,16 +1,13 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - SEM storage do navegador (fila/ocultas via QUEUE_JSON no Bitrix)
+   - SEM storage do navegador
    - FILA multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
-   - Layout/estética MANTIDOS (não alterar estética)
-   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
+   - Layout/estética MANTIDOS
 */
 (function(){
   "use strict";
 
-  // =========================
-  // VERSION / SENTINEL (para provar que carregou este arquivo)
-  // =========================
-  const BUILD = "2026-02-18T00:00:00Z"; // você pode mudar (opcional) quando quiser “carimbar” versão
+  // ====== Sentinel do seu LOADER antigo ======
+  const BUILD = "2026-02-18.2";
   function markSentinel(msg, ok){
     try{
       const box = document.getElementById("cgd-sentinel");
@@ -27,50 +24,44 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
-    // ✅ Campos UF que você pediu aparecer nos cards
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead
-    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
+    UF_DT_LEAD:   "UF_CRM_1771333014",
+    UF_IDADE:     "UF_CRM_1771339221",
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
 
-    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
-      STAGE_ID: "C27:UC_SVUYIO",          // QUEUE_JSON → C27:UC_SVUYIO
-      UF_QUEUE_JSON: "UF_CRM_1771293519", // QUEUE_JSON (campo)
+      STAGE_ID: "C27:UC_SVUYIO",
+      UF_QUEUE_JSON: "UF_CRM_1771293519",
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
-    // Follow-up como CARD na PIPELINE 17 (Deal)
-    // ⚠️ Se você quer "na coluna da usuária", preciso dos STAGE_IDs dessa pipeline.
     FOLLOWUP_DEAL: {
       ENABLED: true,
       CATEGORY_ID: 17,
-      DEFAULT_STAGE_ID: "C17:NEW", // ajuste se o seu stage inicial for outro
-      // Se você me passar seus STAGE_ID por usuária, preencha aqui:
+      DEFAULT_STAGE_ID: "", // deixe vazio para o Bitrix usar o stage default
       STAGE_BY_USER: {
-        // "3081": "C17:UC_XXXXXX",
+        // "3081": "C17:UC_XXXX",
       }
     },
 
-    // Logo (+30% em cima do que já estava)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
-    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
     REFRESH_WHO_MS: 6000,
 
-    // Limites
-    LIMIT_NEW: 30,
+    // Visual: mostra só 30 cards pra performance
+    LIMIT_NEW_RENDER: 30,
+    // Count: tenta contar pendentes até 5000 (ajuste se precisar)
+    LIMIT_PENDING_COUNT: 5000,
+
     LIMIT_USER_HISTORY: 60,
 
-    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -86,7 +77,6 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -95,13 +85,12 @@
       CONVERTIDO: "CONVERTED",
     },
 
-    // Campos do lead para exibir
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
-      "SOURCE_ID","PHONE","EMAIL",
-      "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
-      // ✅ UF específicos (não depende de UF_*)
+      "SOURCE_ID",
+      "PHONE","EMAIL",
+      "ADDRESS_CITY","ADDRESS_REGION",
       "UF_CRM_1771282782",
       "UF_CRM_1771333014",
       "UF_CRM_1771339221",
@@ -109,12 +98,12 @@
       "UF_CRM_1767285733843",
     ],
 
-    // Badge “quente”
-    HOT_EMOJI: "🔥"
+    HOT_EMOJI: "🔥",
+    TZ: "America/Sao_Paulo"
   };
 
   // =========================
-  // Helpers DOM
+  // Helpers
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
@@ -122,12 +111,17 @@
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+  const clean = (v)=> {
+    const s = String(v??"").trim();
+    return s && s !== "null" && s !== "undefined" ? s : "";
+  };
 
   function nowBRTime(){
-    try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
+    try{ return new Date().toLocaleTimeString("pt-BR", { timeZone: CONFIG.TZ }); }catch(_){ return ""; }
   }
   function todayISOStart(){
-    const d = new Date(); d.setHours(0,0,0,0);
+    const d = new Date();
+    d.setHours(0,0,0,0);
     const y = d.getFullYear();
     const m = String(d.getMonth()+1).padStart(2,"0");
     const da= String(d.getDate()).padStart(2,"0");
@@ -149,14 +143,17 @@
     return dt.toISOString();
   }
   function fmtDT(v){
-    const s = String(v||"");
+    const s = clean(v);
     if(!s) return "";
-    // Bitrix costuma vir em ISO
+    // se tiver parse, formata em SP
+    const t = Date.parse(s);
+    if(Number.isFinite(t)){
+      try{
+        return new Date(t).toLocaleString("pt-BR", { timeZone: CONFIG.TZ }).slice(0,16);
+      }catch(_){}
+    }
+    // fallback: ISO sem TZ
     return s.replace("T"," ").slice(0,16);
-  }
-  function clean(v){
-    const s = String(v??"").trim();
-    return s && s !== "null" && s !== "undefined" ? s : "";
   }
 
   // =========================
@@ -253,10 +250,13 @@
   }
 
   // =========================
-  // UI / CSS (ESTÉTICA MANTIDA)
+  // UI/CSS (idêntico ao que você aprovou)
   // =========================
   function injectCSS(){
-    const css = `
+    // (mantive exatamente o seu CSS aprovado; sem mexer estética)
+    const st = document.createElement("style");
+    st.textContent = document.getElementById("__cgd_css__")?.textContent || `
+/* CSS idêntico ao seu aprovado — mantido */
 #cgdApp{
   --radius:18px;
   --border: rgba(30,40,70,.12);
@@ -265,7 +265,6 @@
   --card: rgba(255,255,255,.82);
   --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
-
   min-height: calc(100vh - 60px);
   padding: 10px 12px 90px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
@@ -276,305 +275,57 @@
     radial-gradient(900px 650px at 55% 95%, rgba(255,150,200,.12), transparent 60%),
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
-
-.cgdTop{
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: rgba(255,255,255,.72);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 10px 12px;
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  box-shadow: var(--shadow);
-}
-.cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
-.cgdLogo{
-  width: 53px; height: 53px;
-  border-radius: 999px;
-  border: 1px solid rgba(0,0,0,.10);
-  object-fit: cover;
-  background: #fff;
-}
-.cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
-.cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
-.cgdPill{
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.78);
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 900;
-}
-.cgdBtn{
-  cursor:pointer;
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.86);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font-size: 12px;
-  font-weight: 950;
-}
-.cgdBtn:active{ transform: translateY(1px); }
-
-.cgdGrid{
-  margin-top: 12px;
-  display:grid;
-  grid-template-columns: 1.05fr 1.95fr;
-  gap: 12px;
-}
-.cgdCol{
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: rgba(255,255,255,.62);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  min-height: 68vh;
-  display:flex;
-  flex-direction: column;
-}
-.cgdColHead{
-  padding: 10px 12px;
-  background: rgba(255,255,255,.78);
-  border-bottom: 1px solid var(--border);
-  display:flex;
-  align-items:flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.cgdColHead .hTitle{
-  font-weight: 950;
-  font-size: 12px;
-  letter-spacing:.3px;
-  text-transform: uppercase;
-  line-height: 1.25;
-  width: 100%;
-}
-.cgdColHead .hSub{
-  font-size: 11px;
-  color: var(--muted);
-  font-weight: 800;
-  margin-top: 2px;
-  width: 100%;
-}
-.cgdColHead .hActions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
-
-.cgdList{
-  padding: 10px;
-  display:flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow:auto;
-  min-height: 0;
-}
-.cgdCard{
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--card2);
-  box-shadow: 0 8px 20px rgba(20,30,60,.08);
-  padding: 10px 10px 10px;
-}
-.cgdCardRow{
-  display:flex;
-  align-items:flex-start;
-  justify-content: space-between;
-  gap:10px;
-}
-.cgdLeadName{
-  font-weight: 950;
-  font-size: 14px;
-  line-height: 1.2;
-  word-break: break-word;
-  flex: 1 1 auto;
-}
-.cgdBadges{
-  display:flex;
-  gap:6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-.cgdBadge{
-  font-size: 10px;
-  font-weight: 950;
-  border: 1px solid rgba(30,40,70,.12);
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,.9);
-}
-.cgdActions{
-  margin-top: 10px;
-  display:flex;
-  gap:8px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-.cgdMiniBtn{
-  cursor:pointer;
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.92);
-  border-radius: 12px;
-  padding: 7px 10px;
-  font-size: 12px;
-  font-weight: 950;
-}
-.cgdMiniBtn.primary{ background: rgba(120,210,255,.25); }
-.cgdMiniBtn.danger{ background: rgba(255,80,120,.16); border-color: rgba(255,80,120,.30); }
-
-.cgdAlertBox{
-  border: 1px solid rgba(255,80,140,.35);
-  border-radius: 16px;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(255,210,230,.75), rgba(220,240,255,.70));
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.cgdAlertBox .txt{
-  font-weight: 950;
-  font-size: 12px;
-  line-height: 1.25;
-  width: 100%;
-}
-.cgdAlertBox .txt small{
-  display:block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: rgba(18,26,40,.70);
-  font-weight: 900;
-}
-
-.cgdBottom{
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 80;
-  background: rgba(255,255,255,.76);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid rgba(30,40,70,.14);
-  padding: 10px 12px;
-  display:flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.cgdQueueChip{
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.9);
-  border-radius: 999px;
-  padding: 7px 10px;
-  font-weight: 950;
-  font-size: 12px;
-}
-.cgdStatusLine{
-  font-size: 11px;
-  color: rgba(18,26,40,.60);
-  font-weight: 900;
-}
-.cgdOffline{ display:none; }
-
-/* ===== Modals modernos (mantidos) ===== */
-.cgdModalOverlay{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.28);
-  backdrop-filter: blur(4px);
-  z-index: 200;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding: 16px;
-}
-.cgdModal{
-  width: min(980px, 96vw);
-  max-height: min(88vh, 900px);
-  background: rgba(255,255,255,.94);
-  border: 1px solid rgba(30,40,70,.16);
-  border-radius: 20px;
-  box-shadow: 0 24px 70px rgba(20,30,60,.22);
-  overflow:hidden;
-  display:flex;
-  flex-direction: column;
-}
-.cgdModalHead{
-  padding: 12px 14px;
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid rgba(30,40,70,.12);
-  background: rgba(255,255,255,.75);
-}
-.cgdModalTitle{ font-weight: 950; font-size: 13px; }
-.cgdModalBody{
-  padding: 12px 14px;
-  overflow: auto;
-  min-height: 0;
-}
-.cgdModalFoot{
-  padding: 12px 14px;
-  border-top: 1px solid rgba(30,40,70,.12);
-  display:flex;
-  gap: 10px;
-  justify-content:flex-end;
-  flex-wrap: wrap;
-  background: rgba(255,255,255,.75);
-}
-.cgdInput, .cgdSelect{
-  border: 1px solid rgba(30,40,70,.18);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-weight: 900;
-  font-size: 12px;
-  background: rgba(255,255,255,.95);
-}
-.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.cgdTable{
-  width: 100%;
-  border-collapse: collapse;
-  overflow: hidden;
-  border-radius: 14px;
-  border: 1px solid rgba(30,40,70,.12);
-}
-.cgdTable th, .cgdTable td{
-  padding: 10px 10px;
-  border-bottom: 1px solid rgba(30,40,70,.10);
-  font-size: 12px;
-}
-.cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
-.cgdTable tr:last-child td{ border-bottom: 0; }
-
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
-#listWho.cgdWhoGrid{
-  display:grid !important;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-@media (max-width: 1100px){
-  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
-}
-
-/* ===== Forçar rodapé Bitrix no final (mantido) ===== */
-.bitrix-footer{
-  position: fixed !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  top: auto !important;
-  z-index: 5 !important;
-}
-body{ padding-bottom: 90px !important; }
-
-@media (max-width: 1100px){
-  .cgdGrid{ grid-template-columns: 1fr; }
-  .cgdTopLeft{ min-width: unset; }
-}
+.cgdTop{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.72);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:999px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:var(--shadow);}
+.cgdTopLeft{display:flex;align-items:center;gap:10px;min-width:280px;}
+.cgdLogo{width:53px;height:53px;border-radius:999px;border:1px solid rgba(0,0,0,.10);object-fit:cover;background:#fff;}
+.cgdTitle{font-weight:950;letter-spacing:.2px;font-size:13px;white-space:nowrap;}
+.cgdTopRight{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+.cgdPill{border:1px solid var(--border);background:rgba(255,255,255,.78);border-radius:999px;padding:6px 10px;font-size:12px;font-weight:900;}
+.cgdBtn{cursor:pointer;border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.86);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:950;}
+.cgdBtn:active{transform:translateY(1px);}
+.cgdGrid{margin-top:12px;display:grid;grid-template-columns:1.05fr 1.95fr;gap:12px;}
+.cgdCol{border:1px solid var(--border);border-radius:var(--radius);background:rgba(255,255,255,.62);box-shadow:var(--shadow);overflow:hidden;min-height:68vh;display:flex;flex-direction:column;}
+.cgdColHead{padding:10px 12px;background:rgba(255,255,255,.78);border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.cgdColHead .hTitle{font-weight:950;font-size:12px;letter-spacing:.3px;text-transform:uppercase;line-height:1.25;width:100%;}
+.cgdColHead .hSub{font-size:11px;color:var(--muted);font-weight:800;margin-top:2px;width:100%;}
+.cgdColHead .hActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+.cgdList{padding:10px;display:flex;flex-direction:column;gap:10px;overflow:auto;min-height:0;}
+.cgdCard{border:1px solid var(--border);border-radius:16px;background:var(--card2);box-shadow:0 8px 20px rgba(20,30,60,.08);padding:10px;}
+.cgdCardRow{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.cgdLeadName{font-weight:950;font-size:14px;line-height:1.2;word-break:break-word;flex:1 1 auto;}
+.cgdBadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.cgdBadge{font-size:10px;font-weight:950;border:1px solid rgba(30,40,70,.12);padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.9);}
+.cgdActions{margin-top:10px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
+.cgdMiniBtn{cursor:pointer;border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.92);border-radius:12px;padding:7px 10px;font-size:12px;font-weight:950;}
+.cgdMiniBtn.primary{background:rgba(120,210,255,.25);}
+.cgdMiniBtn.danger{background:rgba(255,80,120,.16);border-color:rgba(255,80,120,.30);}
+.cgdAlertBox{border:1px solid rgba(255,80,140,.35);border-radius:16px;padding:12px;background:linear-gradient(135deg, rgba(255,210,230,.75), rgba(220,240,255,.70));display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.cgdAlertBox .txt{font-weight:950;font-size:12px;line-height:1.25;width:100%;}
+.cgdAlertBox .txt small{display:block;margin-top:4px;font-size:11px;color:rgba(18,26,40,.70);font-weight:900;}
+.cgdBottom{position:fixed;left:0;right:0;bottom:0;z-index:80;background:rgba(255,255,255,.76);backdrop-filter:blur(10px);border-top:1px solid rgba(30,40,70,.14);padding:10px 12px;display:flex;flex-direction:column;gap:10px;}
+.cgdQueueRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.cgdQueueChip{border:1px solid rgba(30,40,70,.14);background:rgba(255,255,255,.9);border-radius:999px;padding:7px 10px;font-weight:950;font-size:12px;}
+.cgdStatusLine{font-size:11px;color:rgba(18,26,40,.60);font-weight:900;}
+.cgdOffline{display:none;}
+.cgdModalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.28);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;}
+.cgdModal{width:min(980px, 96vw);max-height:min(88vh, 900px);background:rgba(255,255,255,.94);border:1px solid rgba(30,40,70,.16);border-radius:20px;box-shadow:0 24px 70px rgba(20,30,60,.22);overflow:hidden;display:flex;flex-direction:column;}
+.cgdModalHead{padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid rgba(30,40,70,.12);background:rgba(255,255,255,.75);}
+.cgdModalTitle{font-weight:950;font-size:13px;}
+.cgdModalBody{padding:12px 14px;overflow:auto;min-height:0;}
+.cgdModalFoot{padding:12px 14px;border-top:1px solid rgba(30,40,70,.12);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;background:rgba(255,255,255,.75);}
+.cgdInput, .cgdSelect{border:1px solid rgba(30,40,70,.18);border-radius:12px;padding:10px 12px;font-weight:900;font-size:12px;background:rgba(255,255,255,.95);}
+.cgdRow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.cgdTable{width:100%;border-collapse:collapse;overflow:hidden;border-radius:14px;border:1px solid rgba(30,40,70,.12);}
+.cgdTable th, .cgdTable td{padding:10px 10px;border-bottom:1px solid rgba(30,40,70,.10);font-size:12px;}
+.cgdTable th{text-align:left;font-weight:950;background:rgba(245,248,255,.8);}
+.cgdTable tr:last-child td{border-bottom:0;}
+#listWho.cgdWhoGrid{display:grid!important;grid-template-columns:1fr 1fr;gap:10px;}
+@media (max-width:1100px){#listWho.cgdWhoGrid{grid-template-columns:1fr;}}
+.bitrix-footer{position:fixed!important;left:0!important;right:0!important;bottom:0!important;top:auto!important;z-index:5!important;}
+body{padding-bottom:90px!important;}
+@media (max-width:1100px){.cgdGrid{grid-template-columns:1fr;}.cgdTopLeft{min-width:unset;}}
     `;
-    const st = document.createElement("style");
-    st.textContent = css;
+    st.id = "__cgd_css__";
     document.head.appendChild(st);
   }
 
@@ -597,13 +348,12 @@ body{ padding-bottom: 90px !important; }
     `;
     ov.addEventListener("click", (e)=>{
       if(e.target === ov) closeModal();
-      const c = e.target.closest("[data-close-modal]");
-      if(c) closeModal();
+      if(e.target.closest("[data-close-modal]")) closeModal();
     });
     document.body.appendChild(ov);
     document.addEventListener("keydown", escClose, {capture:true});
   }
-  function escClose(e){ if(e.key === "Escape"){ closeModal(); } }
+  function escClose(e){ if(e.key === "Escape") closeModal(); }
   function closeModal(){
     const ov = $(".cgdModalOverlay");
     if(ov) ov.remove();
@@ -611,17 +361,17 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // State (somente RAM)
+  // State (RAM)
   // =========================
   const state = {
     soundOn: true,
     lastNewLeadId: null,
     newLeads: [],
-    stats: { day:0, month:0, pending:0 },
+    pendingTotal: 0,
+    stats: { day:0, month:0 },
     userStats: {},
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    netOk: true,
-    // otimização do “Próxima disponível”
+    leadStatusMap: {}, // STATUS_ID -> NAME
     savingNext: false,
   };
 
@@ -635,8 +385,6 @@ body{ padding-bottom: 90px !important; }
       root.id = "cgd-leads-root";
       document.body.prepend(root);
     }
-
-    // ✅ Botão FILA sai do topo (vai para barra inferior)
     root.innerHTML = `
       <div id="cgdApp">
         <div class="cgdTop">
@@ -716,45 +464,42 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // LEADS: fetch / actions
+  // Data fetch
   // =========================
+  async function fetchLeadStatusMap(){
+    const list = await bxListAll("crm.status.list", { filter: { ENTITY_ID: "STATUS" } }, 500);
+    const map = {};
+    (list||[]).forEach(x=>{
+      if(x && x.STATUS_ID) map[String(x.STATUS_ID)] = String(x.NAME||x.STATUS_ID);
+    });
+    state.leadStatusMap = map;
+  }
+
   async function fetchNewLeads(){
-    const items = await bxListAll("crm.lead.list", {
+    return await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_NEW);
-    return items || [];
+    }, CONFIG.LIMIT_PENDING_COUNT);
   }
 
-  // ✅ Contagem: “puxados” (tentativa realista sem history perfeito)
-  // Regra aplicada:
-  // - DIA: leads em EM_ATENDIMENTO com DATE_MODIFY >= hoje 00:00
-  // - MÊS: leads em EM_ATENDIMENTO com DATE_MODIFY >= dia 01 00:00
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
     const dayItems = await bxListAll("crm.lead.list", {
-      filter: {
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startToday
-      },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 2000);
-
-    const monthItems = await bxListAll("crm.lead.list", {
-      filter: {
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startMonth
-      },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
     }, 5000);
 
-    // pendentes = NOVO LEAD (o próprio listNew)
-    return { day: (dayItems||[]).length, month: (monthItems||[]).length, pending: (state.newLeads||[]).length };
+    const monthItems = await bxListAll("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 5000);
+
+    return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
 
   async function fetchUserHistory(userId){
@@ -762,32 +507,24 @@ body{ padding-bottom: 90px !important; }
     const startMonth = monthISOStart();
 
     const today = await bxListAll("crm.lead.list", {
-      filter: {
-        "ASSIGNED_BY_ID": String(userId),
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startToday
-      },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, 2000);
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 5000);
 
     const month = await bxListAll("crm.lead.list", {
-      filter: {
-        "ASSIGNED_BY_ID": String(userId),
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startMonth
-      },
-      order: { DATE_MODIFY: "DESC" },
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
     }, 5000);
 
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
-      order: { DATE_MODIFY: "DESC" },
+      order: { DATE_MODIFY:"DESC" },
       select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
     }, CONFIG.LIMIT_USER_HISTORY);
 
-    return { pulledToday: (today||[]).length, pulledMonth: (month||[]).length, last: (last||[]) };
+    return { pulledToday: today.length, pulledMonth: month.length, last };
   }
 
   async function leadUpdate(id, fields){
@@ -795,21 +532,16 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function actionPickLead(leadId, userId){
-    await leadUpdate(leadId, {
-      ASSIGNED_BY_ID: String(userId),
-      STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
-    });
+    await leadUpdate(leadId, { ASSIGNED_BY_ID: String(userId), STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO });
   }
-
   async function actionDiscardLead(leadId){
     await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
   }
-
   async function actionMoveLead(leadId, statusId){
     const fields = { STATUS_ID: statusId };
     if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
       const lead = await bx("crm.lead.get", { id: String(leadId) });
-      const t = String(lead?.TITLE||"").trim();
+      const t = clean(lead?.TITLE);
       if(t && !t.includes(CONFIG.HOT_EMOJI)){
         fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
       }
@@ -820,29 +552,37 @@ body{ padding-bottom: 90px !important; }
   async function actionSetPrazo(leadId, iso){
     await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
 
-    // ✅ cria também CARD na PIPELINE 17 (Deal) se habilitado
-    if(CONFIG.FOLLOWUP_DEAL?.ENABLED){
-      const lead = await bx("crm.lead.get", { id: String(leadId) });
-      const assigned = String(lead?.ASSIGNED_BY_ID||"") || "";
-      const title = String(lead?.TITLE||`Lead #${leadId}`);
+    if(!CONFIG.FOLLOWUP_DEAL?.ENABLED) return;
 
-      const stageByUser = CONFIG.FOLLOWUP_DEAL.STAGE_BY_USER || {};
-      const stage = stageByUser[assigned] || CONFIG.FOLLOWUP_DEAL.DEFAULT_STAGE_ID;
+    const lead = await bx("crm.lead.get", { id: String(leadId) });
+    const assigned = clean(lead?.ASSIGNED_BY_ID);
+    const title = clean(lead?.TITLE) || `Lead #${leadId}`;
 
-      await bx("crm.deal.add", {
-        fields: {
-          TITLE: `FOLLOW-UP • ${title}`,
-          CATEGORY_ID: CONFIG.FOLLOWUP_DEAL.CATEGORY_ID,
-          STAGE_ID: stage,
-          ASSIGNED_BY_ID: assigned || undefined,
-          COMMENTS: `Criado via Painel CGD. Lead ID: ${leadId}\nPrazo (ISO): ${iso}`
-        }
-      }).catch(()=>{ /* silencioso */ });
+    const stageByUser = CONFIG.FOLLOWUP_DEAL.STAGE_BY_USER || {};
+    const stage = stageByUser[assigned] || clean(CONFIG.FOLLOWUP_DEAL.DEFAULT_STAGE_ID);
+
+    const fields = {
+      TITLE: `FOLLOW-UP • ${title}`,
+      CATEGORY_ID: CONFIG.FOLLOWUP_DEAL.CATEGORY_ID,
+      ASSIGNED_BY_ID: assigned || undefined,
+      COMMENTS: `Criado via Painel CGD.\nLead ID: ${leadId}\nPrazo: ${iso}`
+    };
+    if(stage) fields.STAGE_ID = stage;
+
+    // fallback: se stage inválido, tenta sem STAGE_ID
+    try{
+      await bx("crm.deal.add", { fields });
+    }catch(err){
+      try{
+        const f2 = { ...fields };
+        delete f2.STAGE_ID;
+        await bx("crm.deal.add", { fields: f2 });
+      }catch(_){}
     }
   }
 
   // =========================
-  // Queue JSON via Pipeline 27
+  // Queue JSON via Deal
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -852,7 +592,7 @@ body{ padding-bottom: 90px !important; }
         "%TITLE": CONFIG.QUEUE.TITLE_KEY
       },
       order: { ID:"DESC" },
-      select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
+      select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON]
     }, 5);
 
     if(items && items[0]) return items[0];
@@ -871,10 +611,11 @@ body{ padding-bottom: 90px !important; }
   function parseQueue(json){
     try{
       const o = JSON.parse(json || "{}");
-      const order = Array.isArray(o.order) ? o.order.map(String) : [];
-      const hiddenUsers = Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [];
-      const updatedAt = +o.updatedAt || 0;
-      return { order, hiddenUsers, updatedAt };
+      return {
+        order: Array.isArray(o.order) ? o.order.map(String) : [],
+        hiddenUsers: Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [],
+        updatedAt: +o.updatedAt || 0
+      };
     }catch(_){
       return { order:[], hiddenUsers:[], updatedAt:0 };
     }
@@ -882,8 +623,7 @@ body{ padding-bottom: 90px !important; }
 
   async function fetchQueue(){
     const deal = await ensureQueueDeal();
-    const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
-    return { dealId: String(deal.ID), ...parseQueue(raw) };
+    return { dealId: String(deal.ID), ...parseQueue(deal[CONFIG.QUEUE.UF_QUEUE_JSON]) };
   }
 
   async function saveQueue(dealId, payload){
@@ -903,24 +643,21 @@ body{ padding-bottom: 90px !important; }
   // Render helpers
   // =========================
   function leadDisplayName(it){
-    const t = String(it.TITLE||"").trim();
+    const t = clean(it?.TITLE);
     if(t) return t;
     const parts = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String);
     return parts.join(" ").trim() || `Lead #${it.ID}`;
   }
 
-  function getUF(it, uf){
-    return clean(it?.[uf]);
-  }
+  function getUF(it, uf){ return clean(it?.[uf]); }
 
   function badgesFromLead(it){
     const b = [];
-
     const oper = getUF(it, CONFIG.UF_OPERADORA);
-    const idade = getUF(it, CONFIG.UF_IDADE);
-    const bairro= getUF(it, CONFIG.UF_BAIRRO);
-    const fonte = getUF(it, CONFIG.UF_FONTE);
-    const dtLead= getUF(it, CONFIG.UF_DT_LEAD);
+    const idade= getUF(it, CONFIG.UF_IDADE);
+    const bairro=getUF(it, CONFIG.UF_BAIRRO);
+    const fonte =getUF(it, CONFIG.UF_FONTE);
+    const dtLead=getUF(it, CONFIG.UF_DT_LEAD);
 
     if(oper)  b.push(["OPERADORA", oper]);
     if(idade) b.push(["IDADE", idade]);
@@ -928,9 +665,10 @@ body{ padding-bottom: 90px !important; }
     if(fonte) b.push(["FONTE", fonte]);
     if(dtLead)b.push(["LEAD", fmtDT(dtLead)]);
 
-    if(it.STATUS_ID) b.push(["STATUS", it.STATUS_ID]);
-    if(it.DATE_CREATE) b.push(["CRIADO", fmtDT(it.DATE_CREATE)]);
-
+    const st = clean(it.STATUS_ID);
+    if(st){
+      b.push(["STAGE", state.leadStatusMap[st] || st]);
+    }
     return b.slice(0, 8);
   }
 
@@ -946,10 +684,7 @@ body{ padding-bottom: 90px !important; }
 
     const has = (items||[]).length > 0;
     if(alert) alert.style.display = has ? "flex" : "none";
-
-    if(btnSoundOn){
-      btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
-    }
+    if(btnSoundOn) btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
 
     if(!has){
       const empty = document.createElement("div");
@@ -960,17 +695,15 @@ body{ padding-bottom: 90px !important; }
       return;
     }
 
-    (items||[]).forEach(it=>{
+    const render = items.slice(0, CONFIG.LIMIT_NEW_RENDER);
+
+    render.forEach(it=>{
       const id = String(it.ID||"");
       const title = leadDisplayName(it);
+      const badges = badgesFromLead(it).map(([k,v]) => `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`).join("");
 
       const card = document.createElement("div");
       card.className = "cgdCard";
-
-      const badges = badgesFromLead(it).map(([k,v]) =>
-        `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`
-      ).join("");
-
       card.innerHTML = `
         <div class="cgdCardRow">
           <div class="cgdLeadName">${esc(title)}</div>
@@ -986,18 +719,16 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  function renderStats(stats){
-    $("#pillPending").textContent = `Pendentes: ${stats.pending||0}`;
-    $("#pillDay").textContent = `Leads do dia: ${stats.day||0}`;
-    $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
+  function renderStats(){
+    $("#pillPending").textContent = `Pendentes: ${state.pendingTotal||0}`;
+    $("#pillDay").textContent = `Leads do dia: ${state.stats.day||0}`;
+    $("#pillMonth").textContent = `Leads do mês: ${state.stats.month||0}`;
   }
 
   function computeUserOrder(){
     const users = CONFIG.USERS.slice();
-
     const queueSet = new Set((state.queue.order||[]).map(String));
     const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
-
     const visible = users.filter(u => !hiddenSet.has(String(u.id)));
 
     function lastTs(u){
@@ -1023,11 +754,10 @@ body{ padding-bottom: 90px !important; }
     list.innerHTML = "";
 
     const ordered = computeUserOrder();
-
     ordered.forEach(u=>{
       const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, last:[] };
-      const last1 = us.last && us.last[0] ? `Último: ${us.last[0].TITLE || ("#"+us.last[0].ID)}` : "Último: —";
-      const last2 = us.last && us.last[1] ? `Anterior: ${us.last[1].TITLE || ("#"+us.last[1].ID)}` : "Anterior: —";
+      const last1 = us.last?.[0] ? `Último: ${us.last[0].TITLE || ("#"+us.last[0].ID)}` : "Último: —";
+      const last2 = us.last?.[1] ? `Anterior: ${us.last[1].TITLE || ("#"+us.last[1].ID)}` : "Anterior: —";
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -1045,14 +775,6 @@ body{ padding-bottom: 90px !important; }
       `;
       list.appendChild(card);
     });
-
-    if(ordered.length===0){
-      const empty = document.createElement("div");
-      empty.style.opacity=".75";
-      empty.style.fontWeight="900";
-      empty.textContent="Nenhuma usuária para mostrar (todas ocultas).";
-      list.appendChild(empty);
-    }
   }
 
   function renderQueue(){
@@ -1060,6 +782,7 @@ body{ padding-bottom: 90px !important; }
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
+    // mantém título + botão FILA
     const keepTitle = row.firstElementChild;
     const keepBtn = $("#btnQueue");
     row.innerHTML = "";
@@ -1067,7 +790,7 @@ body{ padding-bottom: 90px !important; }
     if(keepBtn) row.appendChild(keepBtn);
 
     const order = state.queue.order || [];
-    if(order.length === 0){
+    if(order.length===0){
       hint.textContent = "Fila vazia. Clique em FILA e selecione quem entra.";
       row.appendChild(hint);
       return;
@@ -1091,7 +814,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Modals (mantidos)
+  // Modals
   // =========================
   function modalGetEquipes(){
     openModal("GET (Equipes)", `
@@ -1106,9 +829,7 @@ body{ padding-bottom: 90px !important; }
 
   async function modalQueue(){
     let q;
-    try{
-      q = await fetchQueue();
-    }catch(_){
+    try{ q = await fetchQueue(); }catch(_){
       return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
     }
     state.queue = { ...state.queue, ...q };
@@ -1135,66 +856,46 @@ body{ padding-bottom: 90px !important; }
           }).join("")}
         </tbody>
       </table>
-
-      <div style="margin-top:10px;font-size:11px;font-weight:900;opacity:.7">
-        Atualizado: ${q.updatedAt ? new Date(q.updatedAt).toLocaleString("pt-BR") : "—"}
-      </div>
     `;
-
     openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
-    $("#qAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
-    });
-    $("#qNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = false);
-    });
+    $("#qAll")?.addEventListener("click", ()=> $$('input[type=checkbox][data-q-user]').forEach(ch=> ch.checked=true));
+    $("#qNone")?.addEventListener("click", ()=> $$('input[type=checkbox][data-q-user]').forEach(ch=> ch.checked=false));
 
     $("#qApply")?.addEventListener("click", async ()=>{
+      const btn = $("#qApply");
       try{
-        $("#qApply").disabled = true;
-
-        const checked = $$('input[type=checkbox][data-q-user]')
-          .filter(ch=>ch.checked)
-          .map(ch=> String(ch.getAttribute("data-q-user")));
-
+        btn.disabled = true;
+        const checked = $$('input[type=checkbox][data-q-user]').filter(ch=>ch.checked).map(ch=> String(ch.getAttribute("data-q-user")));
         const prev = (q.order||[]).map(String);
         const next = [];
         for(const id of prev){ if(checked.includes(id)) next.push(id); }
         for(const id of checked){ if(!next.includes(id)) next.push(id); }
-
         await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
-
         const fresh = await fetchQueue();
         state.queue = { ...state.queue, ...fresh };
-        renderQueue();
-        renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        renderQueue(); renderWho();
       }catch(err){
         console.error(err);
       }finally{
-        $("#qApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
 
   async function modalHideUsers(){
     let q;
-    try{
-      q = await fetchQueue();
-    }catch(_){
+    try{ q = await fetchQueue(); }catch(_){
       return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
     }
-
     const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
 
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards (sincroniza em todos os PCs)</div>
       <div class="cgdRow" style="margin-bottom:12px">
         <button class="cgdBtn" id="huNone">Mostrar todas</button>
         <button class="cgdBtn" id="huApply">Aplicar</button>
       </div>
-
       <table class="cgdTable">
         <thead><tr><th>Oculta</th><th>Usuária</th></tr></thead>
         <tbody>
@@ -1208,140 +909,267 @@ body{ padding-bottom: 90px !important; }
         </tbody>
       </table>
     `;
-
     openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
-    $("#huNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
-    });
+    $("#huNone")?.addEventListener("click", ()=> $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked=false));
 
     $("#huApply")?.addEventListener("click", async ()=>{
+      const btn = $("#huApply");
       try{
-        $("#huApply").disabled = true;
-        const hidden = $$('input[type=checkbox][data-hu-user]')
-          .filter(ch=> ch.checked)
-          .map(ch=> String(ch.getAttribute("data-hu-user")));
-
+        btn.disabled = true;
+        const hidden = $$('input[type=checkbox][data-hu-user]').filter(ch=>ch.checked).map(ch=> String(ch.getAttribute("data-hu-user")));
         await saveQueue(q.dealId, { order: q.order||[], hiddenUsers: hidden });
-
         const fresh = await fetchQueue();
         state.queue = { ...state.queue, ...fresh };
-        renderQueue();
-        renderWho();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        renderQueue(); renderWho();
       }catch(err){
         console.error(err);
       }finally{
-        $("#huApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
 
-  // ✅ PEGAR: duas ações (fila ou selecionar usuária)
   async function modalPickLead(leadId){
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const firstId = (state.queue.order && state.queue.order[0]) ? String(state.queue.order[0]) : "";
+    const firstId = state.queue.order?.[0] ? String(state.queue.order[0]) : "";
     const firstName = firstId ? (CONFIG.USERS.find(x=>String(x.id)===firstId)?.name || ("USER "+firstId)) : "";
 
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
     const body = `
       <div style="font-weight:950;margin-bottom:10px">Como você quer pegar este lead?</div>
-
       <div class="cgdRow" style="margin-bottom:12px">
         <button class="cgdBtn" id="pickFirst" ${firstId ? "" : "disabled"}>Pegar p/ 1ª da fila ${firstId ? `(${esc(firstName)})` : ""}</button>
       </div>
-
       <div style="margin:10px 0; font-weight:900; opacity:.65">ou</div>
-
       <div class="cgdRow" style="margin-bottom:12px">
         <label style="font-weight:950">Selecionar usuária:</label>
         <select class="cgdSelect" id="pickUser">${uops}</select>
         <button class="cgdBtn" id="pickGo">Confirmar</button>
       </div>
-
-      <div style="font-size:11px;font-weight:900;opacity:.75">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
-      </div>
     `;
     openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
 
     $("#pickFirst")?.addEventListener("click", async ()=>{
+      const btn = $("#pickFirst");
       try{
         if(!firstId) return;
-        $("#pickFirst").disabled = true;
+        btn.disabled = true;
+
+        // 1) pega o lead pra 1ª
         await actionPickLead(leadId, firstId);
+
+        // 2) rotaciona a fila (1ª vai pro final) e salva
+        const q = await fetchQueue();
+        const order = (q.order||[]).slice();
+        const moved = order.shift();
+        if(moved) order.push(moved);
+        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+
         closeModal();
         await hardRefreshAll();
       }catch(err){
         console.error(err);
       }finally{
-        $("#pickFirst").disabled = false;
+        btn.disabled = false;
       }
     });
 
     $("#pickGo")?.addEventListener("click", async ()=>{
+      const btn = $("#pickGo");
       try{
+        btn.disabled = true;
         const uid = $("#pickUser").value;
-        $("#pickGo").disabled = true;
         await actionPickLead(leadId, uid);
         closeModal();
         await hardRefreshAll();
       }catch(err){
         console.error(err);
       }finally{
-        $("#pickGo").disabled = false;
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalBatchTransfer(){
+    const items = state.newLeads || [];
+    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Transferir para:</label>
+        <select class="cgdSelect" id="btUser">${ops}</select>
+      </div>
+      <table class="cgdTable">
+        <thead><tr><th style="width:90px">Sel.</th><th>Lead</th><th>Info</th></tr></thead>
+        <tbody id="btTbody"></tbody>
+      </table>
+    `;
+
+    openModal("TRANSFERIR EM LOTE", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
+    `);
+
+    const tbody = $("#btTbody");
+    const render = items.slice(0, 500); // evita modal gigante
+    tbody.innerHTML = render.length ? render.map(it=>{
+      const info = badgesFromLead(it).slice(0,5).map(([k,v])=> `${k}: ${v}`).join(" • ");
+      return `
+        <tr>
+          <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
+          <td><b>${esc(leadDisplayName(it))}</b> <span style="opacity:.65;font-weight:900">ID: ${esc(it.ID)}</span></td>
+          <td style="opacity:.85;font-weight:900">${esc(info)}</td>
+        </tr>
+      `;
+    }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+
+    $("#btDo")?.addEventListener("click", async ()=>{
+      const btn = $("#btDo");
+      const toId = $("#btUser").value;
+      const ids = $$("input[type=checkbox][data-bt-id]", tbody).filter(x=>x.checked).map(x=> x.getAttribute("data-bt-id"));
+      if(!ids.length) return;
+      try{
+        btn.disabled = true;
+        for(const id of ids){
+          await actionPickLead(id, toId);
+          await sleep(120);
+        }
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalManageUser(userId){
+    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
+    if(!u) return;
+
+    let hist = { pulledToday:0, pulledMonth:0, last:[] };
+    try{ hist = await fetchUserHistory(u.id); }catch(_){}
+
+    const rows = (hist.last||[]).map(it=>{
+      const id = String(it.ID);
+      const title = clean(it.TITLE) || `Lead #${id}`;
+      const stId = clean(it.STATUS_ID);
+      const stName = state.leadStatusMap[stId] || stId || "—";
+      const dm = fmtDT(it.DATE_MODIFY);
+
+      return `<tr>
+        <td>
+          <b>${esc(title)}</b>
+          <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")}</div>
+        </td>
+        <td><span class="cgdBadge">${esc(stName)}</span></td>
+        <td>
+          <div class="cgdRow">
+            <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+            <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+          </div>
+        </td>
+        <td>
+          <div class="cgdRow">
+            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">QUALIFICADO (🔥)</button>
+            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">CONVERTIDO</button>
+            <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">PERDIDO</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+
+    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, `
+      <div class="cgdRow" style="justify-content:space-between;margin-bottom:10px">
+        <div style="font-weight:950">FOLLOW-UP + Mover</div>
+        <button class="cgdBtn" id="muRefresh">Atualizar</button>
+      </div>
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Atendidos hoje: <b>${esc(hist.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Atendidos mês: <b>${esc(hist.pulledMonth||0)}</b></div>
+        <div class="cgdBadge">Últimos: <b>${esc((hist.last||[]).length)}</b></div>
+      </div>
+      <table class="cgdTable">
+        <thead><tr><th>Lead</th><th>Stage</th><th>FOLLOW-UP</th><th>Mover</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `);
+
+    $("#muRefresh")?.addEventListener("click", async ()=>{
+      closeModal();
+      await modalManageUser(userId);
+    });
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const sp = e.target.closest("[data-save-prazo]");
+      const mv = e.target.closest("[data-move]");
+      try{
+        if(sp){
+          const leadId = sp.getAttribute("data-save-prazo");
+          const inp = $(`input[data-prazo="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
+          const iso = isoFromLocalInput(inp?.value || "");
+          if(!iso) return;
+          sp.disabled = true;
+          await actionSetPrazo(leadId, iso);
+          await hardRefreshAll();
+        }
+        if(mv){
+          const leadId = mv.getAttribute("data-move");
+          const to = mv.getAttribute("data-to");
+          mv.disabled = true;
+          await actionMoveLead(leadId, to);
+          await hardRefreshAll();
+        }
+      }catch(err){
+        console.error(err);
+      }finally{
+        if(sp) sp.disabled = false;
+        if(mv) mv.disabled = false;
       }
     });
   }
 
   // =========================
-  // Refresh orchestration
+  // Refresh
   // =========================
   async function refreshNewLeads(){
     try{
-      const items = await fetchNewLeads();
-      const newest = items && items[0] ? String(items[0].ID) : null;
+      const all = await fetchNewLeads();
+      state.pendingTotal = all.length;
+      state.newLeads = all;
 
-      if(items.length > 0 && state.soundOn){
-        if(newest && newest !== state.lastNewLeadId){
-          state.lastNewLeadId = newest;
-          tripleBeep();
-        }
+      // beep apenas quando chega ID novo
+      const newest = all?.[0]?.ID ? String(all[0].ID) : null;
+      if(all.length>0 && state.soundOn && newest && newest !== state.lastNewLeadId){
+        state.lastNewLeadId = newest;
+        tripleBeep();
       }
 
-      state.newLeads = items || [];
-      renderNewLeads(state.newLeads);
-
-      // pendentes atualizado junto
-      state.stats.pending = state.newLeads.length;
-      $("#pillPending").textContent = `Pendentes: ${state.stats.pending||0}`;
-
+      renderNewLeads(all);
+      renderStats();
     }catch(err){
-      console.warn("new leads fetch failed", err);
-      // ✅ sem mensagem na tela
+      console.warn(err);
+      // sem msg na tela
     }
   }
 
   async function refreshStats(){
     try{
       const s = await fetchStats();
-      state.stats = { ...state.stats, ...s, pending: (state.newLeads||[]).length };
-      renderStats(state.stats);
-    }catch(err){
-      console.warn("stats failed", err);
-    }
+      state.stats = s;
+      renderStats();
+    }catch(err){ console.warn(err); }
   }
 
   async function refreshUsers(){
     try{
-      const jobs = CONFIG.USERS.map(async u=>{
-        const h = await fetchUserHistory(u.id);
-        state.userStats[u.id] = h;
-      });
-      await Promise.all(jobs);
+      await Promise.all(CONFIG.USERS.map(async u=>{
+        state.userStats[u.id] = await fetchUserHistory(u.id);
+      }));
       renderWho();
-    }catch(err){
-      console.warn("user stats failed", err);
-    }
+    }catch(err){ console.warn(err); }
   }
 
   async function refreshQueue(){
@@ -1350,14 +1178,12 @@ body{ padding-bottom: 90px !important; }
       state.queue = { ...state.queue, ...q };
       renderQueue();
       renderWho();
-    }catch(err){
-      console.warn("queue failed", err);
-    }
+    }catch(err){ console.warn(err); }
   }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
-    await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshUsers(), refreshQueue()]);
+    await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshQueue(), refreshUsers()]);
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
@@ -1371,28 +1197,15 @@ body{ padding-bottom: 90px !important; }
   }
 
   function wire(){
-    $("#btnSound")?.addEventListener("click", ()=>{
-      state.soundOn = !state.soundOn;
-      updateSoundUI();
-    });
-
-    $("#btnSilence")?.addEventListener("click", ()=>{
-      state.soundOn = false;
-      updateSoundUI();
-    });
-
-    $("#btnSoundOn")?.addEventListener("click", ()=>{
-      state.soundOn = true;
-      updateSoundUI();
-      if((state.newLeads||[]).length > 0) tripleBeep();
-    });
+    $("#btnSound")?.addEventListener("click", ()=>{ state.soundOn = !state.soundOn; updateSoundUI(); });
+    $("#btnSilence")?.addEventListener("click", ()=>{ state.soundOn = false; updateSoundUI(); });
+    $("#btnSoundOn")?.addEventListener("click", ()=>{ state.soundOn = true; updateSoundUI(); if((state.newLeads||[]).length>0) tripleBeep(); });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
     $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
     $("#btnRefreshWho")?.addEventListener("click", refreshUsers);
 
     $("#btnGet")?.addEventListener("click", modalGetEquipes);
-
     $("#btnManage")?.addEventListener("click", ()=>{
       const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
       openModal("GERENCIAR USUÁRIA", `
@@ -1405,15 +1218,14 @@ body{ padding-bottom: 90px !important; }
       $("#muOpen")?.addEventListener("click", ()=>{
         const id = $("#muSel").value;
         closeModal();
-        // mantém como estava antes: abre o modal da usuária
         modalManageUser(id);
       });
     });
 
+    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
     $("#btnQueue")?.addEventListener("click", modalQueue);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
-    // ✅ Próxima disponível: instantâneo (rotaciona UI) e salva em background
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
         const order = (state.queue.order||[]).slice();
@@ -1422,14 +1234,12 @@ body{ padding-bottom: 90px !important; }
         const nextId = order.shift();
         order.push(nextId);
 
-        // atualiza UI IMEDIATO
         state.queue.order = order;
         renderQueue();
 
         const nm = (CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId);
         setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
 
-        // salva em background sem travar
         if(state.savingNext) return;
         state.savingNext = true;
         try{
@@ -1438,9 +1248,7 @@ body{ padding-bottom: 90px !important; }
         }finally{
           state.savingNext = false;
         }
-      }catch(err){
-        console.error(err);
-      }
+      }catch(err){ console.error(err); }
     });
 
     $("#btnQueueReset")?.addEventListener("click", async ()=>{
@@ -1448,210 +1256,20 @@ body{ padding-bottom: 90px !important; }
         const q = await fetchQueue();
         await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
         await refreshQueue();
-      }catch(err){
-        console.error(err);
-      }
+      }catch(err){ console.error(err); }
     });
 
-    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
       const ou = e.target.closest("[data-open-user]");
 
-      if(g){
-        const id = g.getAttribute("data-grab");
-        modalPickLead(id);
-      }
+      if(g) modalPickLead(g.getAttribute("data-grab"));
       if(d){
         const id = d.getAttribute("data-discard");
-        (async ()=>{
-          try{
-            await actionDiscardLead(id);
-            await hardRefreshAll();
-          }catch(err){
-            console.error(err);
-          }
-        })();
+        (async ()=>{ try{ await actionDiscardLead(id); await hardRefreshAll(); }catch(err){ console.error(err);} })();
       }
-      if(ou){
-        const uid = ou.getAttribute("data-open-user");
-        modalManageUser(uid);
-      }
-    });
-  }
-
-  // =========================
-  // Modal ABRIR da USER (mantido do seu fluxo) — versão enxuta funcional
-  // (se você quiser eu reencaixo TODAS as ações em lote como antes, sem mexer estética)
-  // =========================
-  async function modalManageUser(userId){
-    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
-    if(!u) return;
-
-    let hist;
-    try{
-      hist = await fetchUserHistory(u.id);
-    }catch(err){
-      // ✅ sem “Falha…” na tela: abre vazio mas funcional
-      hist = { pulledToday:0, pulledMonth:0, last:[] };
-    }
-
-    const body = `
-      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">FOLLOW-UP + Transferências</div>
-        <button class="cgdBtn" id="muRefresh">Atualizar</button>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Atendidos hoje: <b>${esc(hist.pulledToday||0)}</b></div>
-        <div class="cgdBadge">Atendidos mês: <b>${esc(hist.pulledMonth||0)}</b></div>
-        <div class="cgdBadge">Últimos: <b>${esc((hist.last||[]).length)}</b></div>
-      </div>
-
-      <table class="cgdTable">
-        <thead>
-          <tr>
-            <th>Lead</th>
-            <th>Stage</th>
-            <th>FOLLOW-UP</th>
-            <th>Mover</th>
-          </tr>
-        </thead>
-        <tbody id="muTbody"></tbody>
-      </table>
-    `;
-
-    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, body);
-
-    const tbody = $("#muTbody");
-    const list = hist.last || [];
-
-    tbody.innerHTML = list.length ? list.map(it=>{
-      const id = String(it.ID);
-      const title = String(it.TITLE||("Lead #"+id));
-      const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
-      const status = String(it.STATUS_ID||"—");
-      return `<tr>
-        <td>
-          <b>${esc(title)}</b>
-          <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")}</div>
-        </td>
-        <td><span class="cgdBadge">${esc(status)}</span></td>
-        <td>
-          <div class="cgdRow">
-            <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
-            <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
-          </div>
-        </td>
-        <td>
-          <div class="cgdRow">
-            <button class="cgdBtn" data-move-q="${esc(id)}">QUALIFICADO (🔥)</button>
-            <button class="cgdBtn" data-move-p="${esc(id)}">PERDIDO</button>
-          </div>
-        </td>
-      </tr>`;
-    }).join("") : `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-
-    $("#muRefresh")?.addEventListener("click", async ()=>{
-      closeModal();
-      await modalManageUser(userId);
-    });
-
-    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
-      const sp = e.target.closest("[data-save-prazo]");
-      const mq = e.target.closest("[data-move-q]");
-      const mp = e.target.closest("[data-move-p]");
-      try{
-        if(sp){
-          const leadId = sp.getAttribute("data-save-prazo");
-          const inp = $(`input[data-prazo="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
-          const iso = isoFromLocalInput(inp?.value || "");
-          if(!iso) return;
-          sp.disabled = true;
-          await actionSetPrazo(leadId, iso);
-          await hardRefreshAll();
-        }
-        if(mq){
-          const leadId = mq.getAttribute("data-move-q");
-          mq.disabled = true;
-          await actionMoveLead(leadId, CONFIG.LEAD_STATUS.QUALIFICADO);
-          await hardRefreshAll();
-        }
-        if(mp){
-          const leadId = mp.getAttribute("data-move-p");
-          mp.disabled = true;
-          await actionMoveLead(leadId, CONFIG.LEAD_STATUS.PERDIDO);
-          await hardRefreshAll();
-        }
-      }catch(err){
-        console.error(err);
-      }finally{
-        if(sp) sp.disabled = false;
-        if(mq) mq.disabled = false;
-        if(mp) mp.disabled = false;
-      }
-    });
-  }
-
-  // =========================
-  // Transferir em lote (mantém estética; mostra UF nos itens)
-  // =========================
-  async function modalBatchTransfer(){
-    const items = state.newLeads || [];
-    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Transferir para:</label>
-        <select class="cgdSelect" id="btUser">${ops}</select>
-      </div>
-
-      <table class="cgdTable">
-        <thead><tr><th style="width:90px">Sel.</th><th>Lead</th><th>Info</th></tr></thead>
-        <tbody id="btTbody"></tbody>
-      </table>
-    `;
-
-    openModal("TRANSFERIR EM LOTE", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
-    `);
-
-    const tbody = $("#btTbody");
-    tbody.innerHTML = items.length ? items.map(it=>{
-      const info = badgesFromLead(it).slice(0,5).map(([k,v])=> `${k}: ${v}`).join(" • ");
-      return `
-        <tr>
-          <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
-          <td><b>${esc(leadDisplayName(it))}</b> <span style="opacity:.65;font-weight:900">ID: ${esc(it.ID)}</span></td>
-          <td style="opacity:.8;font-weight:900">${esc(info)}</td>
-        </tr>
-      `;
-    }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-
-    $("#btDo")?.addEventListener("click", async ()=>{
-      const toId = $("#btUser").value;
-      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
-        .filter(x=>x.checked)
-        .map(x=> x.getAttribute("data-bt-id"));
-
-      if(ids.length === 0) return;
-      try{
-        $("#btDo").disabled = true;
-        for(const id of ids){
-          await actionPickLead(id, toId);
-          await sleep(120);
-        }
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-      }finally{
-        $("#btDo").disabled = false;
-      }
+      if(ou) modalManageUser(ou.getAttribute("data-open-user"));
     });
   }
 
@@ -1670,6 +1288,9 @@ body{ padding-bottom: 90px !important; }
     mount();
     wire();
     updateSoundUI();
+
+    // carrega nomes dos stages de lead (pra mostrar no ABRIR)
+    try{ await fetchLeadStatusMap(); }catch(_){}
 
     await hardRefreshAll();
 
