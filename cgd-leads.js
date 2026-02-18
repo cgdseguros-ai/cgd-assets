@@ -164,7 +164,6 @@
 
   function fmtDT(v) {
     if (!v) return "-";
-    // Bitrix costuma mandar "2026-02-18T08:05:28+03:00"
     const d = new Date(v);
     if (isNaN(d.getTime())) return String(v);
     return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(
@@ -227,7 +226,6 @@
   }
 
   async function listLeads(filter, select, order, limit = 50) {
-    // crm.lead.list suporta pagination com "start"
     let start = 0;
     const out = [];
     while (out.length < limit) {
@@ -273,7 +271,6 @@
   }
 
   async function addLeadProductTag(leadId, tagText) {
-    // Bitrix Lead não tem TAG padrão universal. A forma mais segura é registrar no COMMENTS.
     const lead = await getLead(leadId);
     const prev = String(lead[CFG.LEAD_COMMENTS_FIELD] || "");
     const stamp = fmtDT(new Date().toISOString());
@@ -352,7 +349,6 @@
   const today = nowKey();
   let dailyStats = {
     day: today,
-    // userId -> { pulled: number, last2: [{name, op, dt}] }
     byUser: {},
   };
 
@@ -391,10 +387,8 @@
   }
 
   function ensureQueueValid() {
-    // remove users not available
     const allowed = new Set(Array.from(availUsers).map(Number));
     const q = queue.filter((id) => allowed.has(Number(id)));
-    // also ensure uniqueness
     const seen = new Set();
     const out = [];
     for (const id of q) {
@@ -507,10 +501,11 @@
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:space-between;
   gap:10px;
 }
+.p-hdr > div:first-child{ flex:1; min-width:0; }
 .p-hdr .h{
   font-weight: 950;
 }
@@ -518,6 +513,7 @@
   font-size: 12px;
   color: var(--muted);
   font-weight: 800;
+  line-height: 1.25;
 }
 .p-body{ padding: 12px; }
 
@@ -719,25 +715,20 @@
   }
 
   /* =============================
-   * 7) CORE ACTIONS (PEGAR / MOVER / DESCARTAR / LOTE)
+   * 7) CORE ACTIONS
    * ============================= */
 
   async function doPickLead(leadId, userId) {
-    // Ao pegar:
-    // - atribui ASSIGNED_BY_ID
-    // - move STATUS_ID para IN_PROCESS
     await updateLead(leadId, {
       ASSIGNED_BY_ID: Number(userId),
       STATUS_ID: CFG.LEAD_STATUS.IN_PROCESS,
     });
 
-    // fila: quem pegou vai pro final
     ensureQueueValid();
     const q = queue.filter((x) => Number(x) !== Number(userId));
     q.push(Number(userId));
     setQueue(q);
 
-    // estatística do dia
     const lead = await getLead(leadId);
     const name = renderClientName(lead);
     const op = String(lead[CFG.UF_OPERADORA] || "-");
@@ -755,7 +746,6 @@
   }
 
   async function doDiscardLead(leadId) {
-    // Descarta: move para JUNK (lead descartado)
     await updateLead(leadId, { STATUS_ID: CFG.LEAD_STATUS.JUNK });
   }
 
@@ -822,13 +812,7 @@
   }
 
   /* =============================
-   * 8) ITEM 8 — MODAL “GERENCIAR USUÁRIA”
-   *     - buscar leads por nome
-   *     - listar leads da usuária (exceto Perdido)
-   *     - mover lead p/ Qualificado/Perdido/Convertido (com TAG no Qualificado)
-   *     - FOLLOW-UP (Pipeline 17)
-   *     - FOLLOW-UP em lote (com intervalo opcional)
-   *     - CONVERTIDOS (Pipeline 0) por usuária
+   * 8) MODAL “GERENCIAR USUÁRIA”
    * ============================= */
 
   let currentUserId = null;
@@ -879,7 +863,6 @@
     async function load() {
       elStatus.textContent = "Carregando…";
 
-      // Lista leads da usuária, exceto Perdido/Descartado
       leads = await listLeads(
         {
           ASSIGNED_BY_ID: currentUserId,
@@ -971,7 +954,6 @@
     document.getElementById("umBatchFollow").onclick = () => openFollowUpBatch(currentUserId, leads);
     document.getElementById("umConvertidos").onclick = () => openConvertidos(currentUserId);
 
-    // auto load
     load().catch((e) => (elStatus.textContent = `Erro: ${String(e.message || e)}`));
   }
 
@@ -1037,11 +1019,9 @@
         };
 
         if (prazo) fields[CFG.PIPE17.UF_PRAZO] = prazo;
-
-        // Auto preenchidos (se seus UFs aceitarem texto/enum):
         if (CFG.PIPE17.UF_URGENCIA) fields[CFG.PIPE17.UF_URGENCIA] = CFG.PIPE17.FIXED.URGENCIA;
         if (CFG.PIPE17.UF_ETAPA_TAREFA) fields[CFG.PIPE17.UF_ETAPA_TAREFA] = CFG.PIPE17.FIXED.ETAPA;
-        if (CFG.PIPE17.UF_COLAB) fields[CFG.PIPE17.UF_COLAB] = ""; // sem preenchimento
+        if (CFG.PIPE17.UF_COLAB) fields[CFG.PIPE17.UF_COLAB] = "";
 
         await createDeal(fields);
 
@@ -1142,7 +1122,6 @@
 
         elStatus.textContent = `Criando ${ids.length} follow-ups…`;
 
-        // parse base date
         const base = new Date(prazoBase.replace(" ", "T"));
         const canParse = !isNaN(base.getTime());
 
@@ -1195,9 +1174,7 @@
   }
 
   /* =============================
-   * 9) CONVERTIDOS (Pipeline 0) por usuária
-   *     - lista negócios da user (ASSIGNED_BY_ID) exceto WON
-   *     - move etapa e exige campos
+   * 9) CONVERTIDOS (Pipeline 0)
    * ============================= */
 
   function openConvertidos(userId /* opcional */) {
@@ -1355,7 +1332,7 @@
   }
 
   /* =============================
-   * 10) FILA — modal selecionar disponível/indisponível
+   * 10) FILA — modal disponível/indisponível
    * ============================= */
 
   function openQueueManager() {
@@ -1489,101 +1466,111 @@
     </div>
   `;
 
-  // Sentinel
   if (sentinel) setSent("JS iniciou ✅");
 
   /* =============================
-   * 12) EVENTS
+   * 12) EVENTS (delegation — Bitrix DOM-safe)
    * ============================= */
 
-  document.getElementById("btnRefresh").onclick = () => refreshAll(true);
-  document.getElementById("btnLeftRefresh").onclick = () => refreshLeft(true);
-  document.getElementById("btnRightRefresh").onclick = () => refreshRight(true);
+  function onDocClick(e) {
+    const t = e.target;
 
-  document.getElementById("btnSilent").onclick = () => {
-    setSilent(!isSilent);
-    document.getElementById("btnSilent").textContent = isSilent ? "Som: OFF" : "Som: ON";
-  };
+    if (t.closest("#btnRefresh")) return refreshAll(true);
+    if (t.closest("#btnLeftRefresh")) return refreshLeft(true);
+    if (t.closest("#btnRightRefresh")) return refreshRight(true);
 
-  document.getElementById("btnSilenceAlert").onclick = () => {
-    // só silencia o som (mantém alerta visual)
-    setSilent(true);
-    document.getElementById("btnSilent").textContent = "Som: OFF";
-  };
-
-  document.getElementById("btnQueueMgr").onclick = openQueueManager;
-
-  document.getElementById("btnUserManager").onclick = () => {
-    openModal("Selecionar Usuária", `
-      <div class="small muted">Escolha uma usuária para abrir o painel de ações (Item 8).</div>
-      <hr class="sep"/>
-      <div class="tableLike">
-        ${CFG.USERS.map(
-          (u) => `
-          <div class="selLeadRow">
-            <div class="left">
-              <div style="font-weight:950">${esc(u.name)}</div>
-              <div class="small muted">ID: ${esc(u.id)}</div>
-            </div>
-            <div class="right">
-              <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
-            </div>
-          </div>
-        `
-        ).join("")}
-      </div>
-    `);
-
-    document.querySelectorAll("button[data-um]").forEach((b) => {
-      b.onclick = () => openUserManager(Number(b.dataset.um));
-    });
-  };
-
-  document.getElementById("btnGetLinks").onclick = () => {
-    openModal("GET • Equipes", `
-      <div class="small muted">Abrir os painéis GET em nova aba.</div>
-      <hr class="sep"/>
-      <div class="tableLike">
-        ${CFG.GET_LINKS.map(
-          (x) => `
-          <div class="selLeadRow">
-            <div class="left">
-              <div style="font-weight:950">${esc(x.label)}</div>
-              <div class="small muted">${esc(x.url)}</div>
-            </div>
-            <div class="right">
-              <a class="btn primary" href="${esc(x.url)}" target="_blank" rel="noopener">Abrir</a>
-            </div>
-          </div>
-        `
-        ).join("")}
-      </div>
-    `);
-  };
-
-  document.getElementById("btnBatch").onclick = () => openBatchTransfer();
-  document.getElementById("btnToggleHideUsers").onclick = () => openHideUsers();
-
-  document.getElementById("btnResetQueue").onclick = () => {
-    if (!confirm("Resetar a fila?")) return;
-    setQueue([]);
-    renderBottom();
-    renderRightUsers();
-  };
-
-  document.getElementById("btnNextAvail").onclick = () => {
-    // gira fila para próxima disponível
-    ensureQueueValid();
-    if (!queue.length) {
-      alert("Fila vazia. Abra FILA e marque usuárias disponíveis.");
+    if (t.closest("#btnSilent")) {
+      setSilent(!isSilent);
+      const b = document.getElementById("btnSilent");
+      if (b) b.textContent = isSilent ? "Som: OFF" : "Som: ON";
       return;
     }
-    const q = queue.slice();
-    q.push(q.shift());
-    setQueue(q);
-    renderBottom();
-    renderRightUsers();
-  };
+
+    if (t.closest("#btnSilenceAlert")) {
+      setSilent(true);
+      const b = document.getElementById("btnSilent");
+      if (b) b.textContent = "Som: OFF";
+      return;
+    }
+
+    if (t.closest("#btnQueueMgr")) return openQueueManager();
+
+    if (t.closest("#btnGetLinks")) {
+      openModal("GET • Equipes", `
+        <div class="small muted">Abrir os painéis GET em nova aba.</div>
+        <hr class="sep"/>
+        <div class="tableLike">
+          ${CFG.GET_LINKS.map(
+            (x) => `
+            <div class="selLeadRow">
+              <div class="left">
+                <div style="font-weight:950">${esc(x.label)}</div>
+                <div class="small muted">${esc(x.url)}</div>
+              </div>
+              <div class="right">
+                <a class="btn primary" href="${esc(x.url)}" target="_blank" rel="noopener">Abrir</a>
+              </div>
+            </div>
+          `
+          ).join("")}
+        </div>
+      `);
+      return;
+    }
+
+    if (t.closest("#btnUserManager")) {
+      openModal("Selecionar Usuária", `
+        <div class="small muted">Escolha uma usuária para abrir o painel de ações (Item 8).</div>
+        <hr class="sep"/>
+        <div class="tableLike">
+          ${CFG.USERS.map(
+            (u) => `
+            <div class="selLeadRow">
+              <div class="left">
+                <div style="font-weight:950">${esc(u.name)}</div>
+                <div class="small muted">ID: ${esc(u.id)}</div>
+              </div>
+              <div class="right">
+                <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
+              </div>
+            </div>
+          `
+          ).join("")}
+        </div>
+      `);
+      return;
+    }
+
+    const umBtn = t.closest("button[data-um], button[data-openUm]");
+    if (umBtn) return openUserManager(Number(umBtn.dataset.um || umBtn.dataset.openum));
+
+    if (t.closest("#btnBatch")) return openBatchTransfer();
+    if (t.closest("#btnToggleHideUsers")) return openHideUsers();
+
+    if (t.closest("#btnResetQueue")) {
+      if (!confirm("Resetar a fila?")) return;
+      setQueue([]);
+      renderBottom();
+      renderRightUsers();
+      return;
+    }
+
+    if (t.closest("#btnNextAvail")) {
+      ensureQueueValid();
+      if (!queue.length) {
+        alert("Fila vazia. Abra FILA e marque usuárias disponíveis.");
+        return;
+      }
+      const q = queue.slice();
+      q.push(q.shift());
+      setQueue(q);
+      renderBottom();
+      renderRightUsers();
+      return;
+    }
+  }
+
+  document.addEventListener("click", onDocClick, true);
 
   /* =============================
    * 13) HIDE USERS (cards do lado direito)
@@ -1629,7 +1616,7 @@
   }
 
   /* =============================
-   * 14) BATCH TRANSFER (Transferir em lote)
+   * 14) BATCH TRANSFER
    * ============================= */
 
   let cachedNewLeads = [];
@@ -1679,412 +1666,4 @@
               <input type="checkbox" data-bt="${esc(l.ID)}" />
               <div>
                 <div style="font-weight:950">${esc(L.name)}</div>
-                <div class="small muted">
-                  Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}
-                </div>
-              </div>
-            </label>
-          </div>
-        </div>
-      `;
-      })
-      .join("");
-
-    box.querySelectorAll("input[data-bt]").forEach((i) => {
-      i.onchange = () => {
-        const id = Number(i.dataset.bt);
-        if (i.checked) chosen.add(id);
-        else chosen.delete(id);
-      };
-    });
-
-    document.getElementById("btGo").onclick = async () => {
-      try {
-        const userId = Number(document.getElementById("btUser").value);
-        const ids = Array.from(chosen);
-        if (!ids.length) return (status.textContent = "Selecione ao menos 1 lead.");
-
-        status.textContent = `Transferindo ${ids.length}…`;
-
-        for (let idx = 0; idx < ids.length; idx++) {
-          await doPickLead(ids[idx], userId);
-          status.textContent = `Transferindo… (${idx + 1}/${ids.length})`;
-          await sleep(150);
-        }
-
-        status.textContent = "OK ✅ Transferência em lote concluída.";
-        await refreshAll(true);
-      } catch (e) {
-        status.textContent = `Erro: ${String(e.message || e)}`;
-      }
-    };
-  }
-
-  /* =============================
-   * 15) RENDER LEFT (NOVOS LEADS)
-   * ============================= */
-
-  function renderLeadCard(lead) {
-    const L = leadLine(lead);
-    const id = Number(lead.ID);
-
-    // MOVER PARA só aparece depois que alguém pegou (ASSIGNED_BY_ID != 0 e STATUS != NEW)
-    const canMove = String(lead.STATUS_ID) !== String(CFG.LEAD_STATUS.NEW);
-
-    return `
-      <div class="leadCard" data-lead="${esc(id)}">
-        <div class="leadTop">
-          <div class="leadName">${esc(L.name)}</div>
-          <div class="pills">
-            <span class="pill">OPERADORA: ${esc(L.op)}</span>
-            <span class="pill">DATA/HORA: ${esc(fmtDT(L.dt))}</span>
-            <span class="pill">IDADE: ${esc(L.idade)}</span>
-            <span class="pill">FONTE: ${esc(L.fonte)}</span>
-            <span class="pill">BAIRRO: ${esc(L.bairro)}</span>
-          </div>
-        </div>
-
-        <div class="ctaRow">
-          <button class="btn danger" data-discard="${esc(id)}">DESCARTAR</button>
-          <button class="btn primary" data-pick="${esc(id)}">PEGAR</button>
-
-          ${
-            canMove
-              ? `
-              <select class="sel" data-moveSel="${esc(id)}">
-                ${stageOptionsHTML(lead.STATUS_ID)}
-              </select>
-              <button class="btn" data-moveBtn="${esc(id)}">MOVER PARA</button>
-            `
-              : `<span class="small muted">“Mover para” aparece após PEGAR.</span>`
-          }
-
-          <span class="small muted">ID: ${esc(id)}</span>
-        </div>
-      </div>
-    `;
-  }
-
-  async function bindLeftActions() {
-    const box = document.getElementById("leadList");
-    box.querySelectorAll("button[data-discard]").forEach((b) => {
-      b.onclick = async () => {
-        const id = Number(b.dataset.discard);
-        if (!confirm("Descartar este lead? (vai para Lead descartado/JUNK)")) return;
-        try {
-          b.disabled = true;
-          await doDiscardLead(id);
-          await refreshAll(true);
-        } catch (e) {
-          alert(`Erro: ${String(e.message || e)}`);
-        } finally {
-          b.disabled = false;
-        }
-      };
-    });
-
-    box.querySelectorAll("button[data-pick]").forEach((b) => {
-      b.onclick = async () => {
-        const leadId = Number(b.dataset.pick);
-        try {
-          const front = getFrontUser();
-          if (!front) {
-            alert("Fila vazia. Abra FILA e selecione usuárias disponíveis (e/ou adicione na fila).");
-            return;
-          }
-
-          // Modal de confirmação (PEGA para a usuária da frente)
-          const uName = getUserNameById(front);
-          const lead = await getLead(leadId);
-          const L = leadLine(lead);
-
-          openModal(`PEGAR • ${uName}`, `
-            <div class="small muted">
-              Ao confirmar, o lead será atribuído para <b>${esc(uName)}</b> e mudará para <b>EM ATENDIMENTO</b>.
-              <br/>A usuária volta automaticamente para o <b>final da fila</b>.
-            </div>
-
-            <hr class="sep"/>
-
-            <div class="badge">Lead: ${esc(L.name)} • ID ${esc(leadId)}</div>
-
-            <div class="small muted" style="margin-top:10px">
-              Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b>
-            </div>
-
-            <hr class="sep"/>
-
-            <div class="row">
-              <button class="btn primary" id="pkGo">Confirmar transferência</button>
-            </div>
-
-            <div class="small" id="pkStatus"></div>
-          `);
-
-          document.getElementById("pkGo").onclick = async () => {
-            const st = document.getElementById("pkStatus");
-            try {
-              st.textContent = "Transferindo…";
-              await doPickLead(leadId, front);
-              st.textContent = "OK ✅";
-              closeModal();
-              await refreshAll(true);
-            } catch (e) {
-              st.textContent = `Erro: ${String(e.message || e)}`;
-            }
-          };
-        } catch (e) {
-          alert(`Erro: ${String(e.message || e)}`);
-        }
-      };
-    });
-
-    box.querySelectorAll("button[data-moveBtn]").forEach((b) => {
-      b.onclick = async () => {
-        const leadId = Number(b.dataset.moveBtn);
-        const sel = box.querySelector(`select[data-moveSel="${CSS.escape(String(leadId))}"]`);
-        const to = sel ? String(sel.value) : null;
-        if (!to) return;
-
-        try {
-          b.disabled = true;
-          await doMoveLead(leadId, to);
-          await refreshAll(true);
-        } catch (e) {
-          alert(`Erro: ${String(e.message || e)}`);
-        } finally {
-          b.disabled = false;
-        }
-      };
-    });
-  }
-
-  /* =============================
-   * 16) RENDER RIGHT (cards por usuária)
-   *     ordem: quem puxou por último → fila → fora
-   * ============================= */
-
-  function computeUserOrder() {
-    resetDailyIfNeeded();
-
-    const pulled = [];
-    const never = [];
-
-    for (const u of CFG.USERS) {
-      const st = dailyStats.byUser[String(u.id)];
-      if (st && st.pulled > 0) pulled.push({ id: u.id, last: st.last2[0]?.dt || "" });
-      else never.push({ id: u.id });
-    }
-
-    // quem puxou por último: ordenar pelo dt (desc)
-    pulled.sort((a, b) => {
-      const da = new Date(a.last).getTime();
-      const db = new Date(b.last).getTime();
-      return (isNaN(db) ? 0 : db) - (isNaN(da) ? 0 : da);
-    });
-
-    ensureQueueValid();
-    const q = queue.slice();
-
-    const inQueueSet = new Set(q.map(Number));
-    const pulledIds = new Set(pulled.map((x) => Number(x.id)));
-
-    // ordem final:
-    // 1) pulled (já traz por "último")
-    // 2) fila na ordem atual, excluindo quem já está em pulled
-    // 3) resto (não puxou e fora da fila)
-    const out = [];
-    for (const p of pulled) out.push(Number(p.id));
-    for (const id of q) if (!pulledIds.has(Number(id))) out.push(Number(id));
-    for (const n of never) {
-      if (!pulledIds.has(Number(n.id)) && !inQueueSet.has(Number(n.id))) out.push(Number(n.id));
-    }
-    return out;
-  }
-
-  function renderRightUsers() {
-    const grid = document.getElementById("userGrid");
-    const order = computeUserOrder();
-
-    grid.innerHTML =
-      order
-        .filter((id) => !hiddenUsers.has(Number(id)))
-        .map((id) => {
-          const u = CFG.USERS.find((x) => Number(x.id) === Number(id));
-          if (!u) return "";
-          const st = statUser(id);
-          const l1 = st.last2[0];
-          const l2 = st.last2[1];
-
-          return `
-          <div class="userCard">
-            <div class="userRow">
-              <div class="userName">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
-              <div class="kpis">
-                <span class="kpi">puxados hoje: ${esc(st.pulled)}</span>
-                <button class="btn small" data-openUm="${esc(u.id)}">Abrir</button>
-              </div>
-            </div>
-
-            <div class="miniLead">
-              <div class="miniLine">
-                <span>Último:</span> ${esc(l1 ? l1.name : "-")}
-                <span>•</span> ${esc(l1 ? l1.op : "-")}
-                <span>•</span> ${esc(l1 ? fmtDT(l1.dt) : "-")}
-              </div>
-              <div class="miniLine">
-                <span>Anterior:</span> ${esc(l2 ? l2.name : "-")}
-                <span>•</span> ${esc(l2 ? l2.op : "-")}
-                <span>•</span> ${esc(l2 ? fmtDT(l2.dt) : "-")}
-              </div>
-            </div>
-          </div>
-        `;
-        })
-        .join("") || `<div class="small muted">Sem cards.</div>`;
-
-    grid.querySelectorAll("button[data-openUm]").forEach((b) => {
-      b.onclick = () => openUserManager(Number(b.dataset.openUm));
-    });
-  }
-
-  /* =============================
-   * 17) RENDER BOTTOM (fila)
-   * ============================= */
-
-  function renderBottom() {
-    ensureQueueValid();
-
-    const box = document.getElementById("queueBox");
-    const q = queue.slice();
-
-    // se fila vazia, sugere montar com disponíveis
-    if (!q.length) {
-      box.innerHTML = `
-        <span class="badge">Fila de atendimento</span>
-        <span class="small muted">
-          Fila vazia. Clique em <b>Fila</b> e marque usuárias disponíveis. Depois, clique “Próxima disponível” para girar.
-        </span>
-      `;
-      return;
-    }
-
-    box.innerHTML = `
-      <span class="badge">Fila de atendimento</span>
-      ${q
-        .map((id, idx) => {
-          const u = getUserNameById(id);
-          const pos = idx === 0 ? "PRÓXIMA" : `#${idx + 1}`;
-          return `
-            <span class="queueTag">
-              ${esc(u)}
-              <span class="mini">${esc(pos)}</span>
-            </span>
-          `;
-        })
-        .join("")}
-    `;
-  }
-
-  /* =============================
-   * 18) ALERT
-   * ============================= */
-
-  let alertTimer = null;
-  function setAlertOn(hasNew) {
-    const box = document.getElementById("alertBox");
-    if (!box) return;
-
-    if (hasNew) {
-      box.style.display = "flex";
-      if (!alertTimer) {
-        alertTimer = setInterval(() => {
-          box.style.opacity = box.style.opacity === "0.55" ? "1" : "0.55";
-        }, 350);
-      }
-      beep();
-    } else {
-      box.style.display = "none";
-      box.style.opacity = "1";
-      if (alertTimer) {
-        clearInterval(alertTimer);
-        alertTimer = null;
-      }
-    }
-  }
-
-  /* =============================
-   * 19) REFRESH
-   * ============================= */
-
-  async function refreshLeft(force) {
-    const leadBox = document.getElementById("leadList");
-    leadBox.innerHTML = `<div class="small muted">Carregando…</div>`;
-
-    // lista NOVO LEAD
-    const leads = await listLeads(
-      { STATUS_ID: CFG.LEAD_STATUS.NEW },
-      null,
-      { DATE_CREATE: "DESC" },
-      120
-    );
-
-    cachedNewLeads = leads;
-
-    // alerta se existe lead novo
-    setAlertOn(leads.length > 0);
-
-    leadBox.innerHTML =
-      leads.map(renderLeadCard).join("") || `<div class="small muted">Sem novos leads.</div>`;
-
-    await bindLeftActions();
-  }
-
-  async function refreshRight(force) {
-    renderRightUsers();
-    renderBottom();
-
-    // KPI do dia / mês (simples: soma do dia do memory local — se quiser contar pelo Bitrix, eu implemento depois)
-    resetDailyIfNeeded();
-    const dayTotal = Object.values(dailyStats.byUser).reduce((a, x) => a + (x.pulled || 0), 0);
-    document.getElementById("kpiDay").textContent = `Leads do dia: ${dayTotal}`;
-    // mês: placeholder (local). Mantém 0 sem inventar
-    document.getElementById("kpiMonth").textContent = `Leads do mês: 0`;
-  }
-
-  async function refreshAll(force) {
-    try {
-      ensureQueueValid();
-      await refreshLeft(force);
-      await refreshRight(force);
-    } catch (e) {
-      console.error(e);
-      const leadBox = document.getElementById("leadList");
-      if (leadBox) leadBox.innerHTML = `<div class="small muted">Erro: ${esc(String(e.message || e))}</div>`;
-    }
-  }
-
-  /* =============================
-   * 20) AUTO-REFRESH
-   * ============================= */
-
-  // bootstrap
-  ensureQueueValid();
-  renderBottom();
-  renderRightUsers();
-  refreshAll(true).catch(console.error);
-
-  setInterval(() => {
-    refreshAll(false).catch(console.error);
-  }, CFG.REFRESH_MS);
-
-  /* =============================
-   * 21) FINAL NOTES
-   * =============================
-   * - “PEGAR” move lead para IN_PROCESS e atribui para a primeira da fila.
-   * - Quem pegou volta para o final automaticamente (como você perguntou).
-   * - “MOVER PARA” só aparece depois de pegar (como você exigiu).
-   * - “DESCARTAR” move para JUNK e remove dos pendentes.
-   * - Item 8: Gerenciar Usuária + Follow-up + Convertidos por usuária está implementado.
-   */
-})();
+                <div class="small
