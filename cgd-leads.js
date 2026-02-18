@@ -13,7 +13,7 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // ✅ Campo UF usado no Follow-up (no DEAL da PIPELINE 17 — PRAZO MÁXIMO)
+    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
     // Campos no card/badges (se existirem)
@@ -155,48 +155,6 @@
     return `${dd}/${mm}/${yy}`;
   }
 
-  // ✅ (1) Parse robusto da data do lead (ISO, DD/MM/AAAA, DD/MM/AAAA HH:MM, etc.)
-  function parseLeadDateToYMD(val){
-    const s = String(val||"").trim();
-    if(!s) return "";
-
-    // ISO / Date.parse padrão
-    const t = Date.parse(s);
-    if(Number.isFinite(t)){
-      const d = new Date(t);
-      const y = d.getFullYear();
-      const m = String(d.getMonth()+1).padStart(2,"0");
-      const da= String(d.getDate()).padStart(2,"0");
-      return `${y}-${m}-${da}`;
-    }
-
-    // DD/MM/AAAA ou DD/MM/AAAA HH:MM
-    let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?$/);
-    if(m){
-      const dd=m[1], mm=m[2], yy=m[3];
-      return `${yy}-${mm}-${dd}`;
-    }
-
-    // AAAA-MM-DD ou AAAA-MM-DD HH:MM
-    m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2}))?$/);
-    if(m){
-      return `${m[1]}-${m[2]}-${m[3]}`;
-    }
-
-    return "";
-  }
-
-  // ✅ (3) Nome amigável do STAGE do Lead
-  function leadStageName(statusId){
-    const st = String(statusId||"");
-    if(st === CONFIG.LEAD_STATUS.NOVO_LEAD) return "NOVO LEAD";
-    if(st === CONFIG.LEAD_STATUS.EM_ATENDIMENTO) return "EM ATENDIMENTO";
-    if(st === CONFIG.LEAD_STATUS.QUALIFICADO) return "QUALIFICADO";
-    if(st === CONFIG.LEAD_STATUS.PERDIDO) return "PERDIDO";
-    if(st === CONFIG.LEAD_STATUS.CONVERTIDO) return "CONVERTIDO";
-    return st || "—";
-  }
-
   // =========================
   // Webhook client
   // =========================
@@ -221,21 +179,62 @@
     return out;
   }
 
-  async function bx(method, params={}){
+  // ✅ AJUSTE (Item 3): tornar as chamadas mais resilientes (timeout + retry leve)
+  async function bx(method, params={}, options={}){
+    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
 
-    const resp = await fetch(CONFIG.WEBHOOK + method, {
-      method:"POST",
-      headers:{"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
-      body
-    });
+    let lastErr = null;
 
-    const data = await resp.json().catch(()=> ({}));
-    if(!resp.ok) throw new Error(`HTTP ${resp.status} em ${method}`);
-    if(data && data.error) throw new Error(data.error_description || data.error);
-    return data.result;
+    // retry curto para falhas intermitentes
+    for(let attempt=0; attempt<3; attempt++){
+      const ctrl = new AbortController();
+      const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, timeoutMs);
+
+      try{
+        const resp = await fetch(CONFIG.WEBHOOK + method, {
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
+          body,
+          signal: ctrl.signal
+        });
+
+        const data = await resp.json().catch(()=> ({}));
+        if(!resp.ok){
+          const e = new Error(`HTTP ${resp.status} em ${method}`);
+          e._httpStatus = resp.status;
+          throw e;
+        }
+        if(data && data.error){
+          const e = new Error(data.error_description || data.error);
+          e._bxError = data.error;
+          throw e;
+        }
+        return data.result;
+      }catch(err){
+        lastErr = err;
+
+        // só retry em falhas tipicamente intermitentes
+        const http = err && err._httpStatus;
+        const transientHTTP = (http===429 || http===500 || http===502 || http===503 || http===504);
+        const aborted = (err && (err.name==="AbortError"));
+        const net = (err && String(err.message||err).toLowerCase().includes("failed to fetch"));
+
+        if(attempt < 2 && (transientHTTP || aborted || net)){
+          clearTimeout(t);
+          await sleep(220 + attempt*420);
+          continue;
+        }
+        clearTimeout(t);
+        throw err;
+      }finally{
+        clearTimeout(t);
+      }
+    }
+
+    throw lastErr || new Error("Falha desconhecida");
   }
 
   // Paginação robusta (resolve “só 50/30”)
@@ -248,14 +247,17 @@
       out = out.concat(items);
       if(out.length >= max) break;
 
+      // next pode vir em r.next, ou quando list retorna array (nesse caso costuma não paginar)
       if(r && typeof r === "object" && r.next !== undefined && r.next !== null){
         start = r.next;
         if(!start) break;
       }else{
+        // fallback: se veio array e já veio menos que 50, para
         if(items.length < 50) break;
         start = start + 50;
       }
 
+      // proteção
       if(items.length === 0) break;
     }
     return out.slice(0, max);
@@ -278,6 +280,7 @@
     if(pendingOps.length === 0) return;
     flushBusy = true;
     try{
+      // tenta 1 por vez pra não explodir em rede ruim
       for(let i=0; i<25 && pendingOps.length; i++){
         const op = pendingOps[0];
         try{
@@ -285,6 +288,7 @@
           pendingOps.shift();
           await sleep(90);
         }catch(_){
+          // ainda sem rede: para e tenta depois
           break;
         }
       }
@@ -691,11 +695,11 @@ body{ padding-bottom: 90px !important; }
   const state = {
     soundOn: true,
     lastNewLeadId: null,
-    newLeadsAll: [],
-    newLeadsRender: [],
-    pendingCount: 0,
+    newLeadsAll: [],      // tudo (p/ filtros/lote)
+    newLeadsRender: [],   // render (até LIMIT_NEW_RENDER)
+    pendingCount: 0,      // total correto de pendentes
     stats: { day:0, month:0 },
-    userStats: {},
+    userStats: {},        // id -> { pulledToday, pulledMonth, lastTwo:[...], list:[...] }
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     lastServedUserName: "—"
   };
@@ -772,11 +776,11 @@ body{ padding-bottom: 90px !important; }
           </section>
         </div>
 
-        <!-- ✅ Barra inferior em 2 linhas e FILA unificado com FILA DE ATENDIMENTO -->
+        <!-- ✅ Barra inferior em 2 linhas -->
         <div class="cgdBottom">
           <div class="cgdQueueRow" id="queueRow">
-            <div class="cgdQueueChip"><b>Fila de atendimento</b></div>
-            <button class="cgdBtn" id="btnQueue">Fila</button>
+            <!-- ✅ AJUSTE (Item 1): juntar "FILA" + "FILA DE ATENDIMENTO" em 1 botão -->
+            <button class="cgdBtn" id="btnQueue">Fila de atendimento</button>
             <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
           </div>
           <div class="cgdQueueRow">
@@ -803,6 +807,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function fetchNewLeadsCount(){
+    // conta real (paginando IDs)
     const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
@@ -815,6 +820,8 @@ body{ padding-bottom: 90px !important; }
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
+    // “Leads do dia/mês” = puxados (mudados para EM_ATENDIMENTO) no dia/mês
+    // Aproximação consistente: DATE_MODIFY + STATUS_ID = EM_ATENDIMENTO
     const dayItems = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
@@ -831,6 +838,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   function leadDisplayName(it){
+    // Preferir nome do cliente: NAME/LAST_NAME, senão TITLE
     const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
     if(nm) return nm;
     const t = String(it.TITLE||"").trim();
@@ -852,10 +860,7 @@ body{ padding-bottom: 90px !important; }
     const bairro= pickUF(it, CONFIG.UF_BAIRRO);
     const fonte = pickUF(it, CONFIG.UF_FONTE);
     const dtuf  = pickUF(it, CONFIG.UF_DT_LEAD);
-
-    // ✅ mostra a data no badge (tenta formatar por parse robusto)
-    const ymd = parseLeadDateToYMD(dtuf);
-    const dt = ymd ? `${ymd.slice(8,10)}/${ymd.slice(5,7)}/${ymd.slice(0,4)}` : (dtuf ? fmtDateBRFromISO(dtuf) : "");
+    const dt = dtuf ? fmtDateBRFromISO(dtuf) : "";
 
     if(oper)  b.push(["OPERADORA", oper]);
     if(idade) b.push(["IDADE", idade]);
@@ -863,6 +868,7 @@ body{ padding-bottom: 90px !important; }
     if(fonte) b.push(["FONTE", fonte]);
     if(dt)    b.push(["DATA", dt]);
 
+    // fallback se vierem poucos
     if(b.length < 2){
       if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
       if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
@@ -874,15 +880,8 @@ body{ padding-bottom: 90px !important; }
     return bx("crm.lead.update", { id: String(id), fields });
   }
 
-  // ✅ Mantido: prazo no LEAD pode existir, mas FOLLOW-UP (Deal) grava PRAZO no DEAL (ver createFollowUpDeal)
-  async function actionSetPrazoLead(leadId, iso){
-    enqueueOp("setPrazoLead", async ()=>{
-      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
-    });
-    flushOps();
-  }
-
   async function actionPickLead(leadId, userId){
+    // UI otimista (remove da lista)
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
@@ -922,22 +921,26 @@ body{ padding-bottom: 90px !important; }
     flushOps();
   }
 
-  // ✅ (4) FOLLOW-UP: grava PRAZO MÁXIMO no DEAL da Pipeline 17 (UF_CRM_1768175087)
-  async function createFollowUpDeal(userId, lead, prazoIso){
+  async function actionSetPrazo(leadId, iso){
+    enqueueOp("setPrazo", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    });
+    flushOps();
+  }
+
+  async function createFollowUpDeal(userId, lead){
     const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
     const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
     enqueueOp("createDealFollowUp", async ()=>{
-      const fields = {
-        CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
-        STAGE_ID: stage || "C17:NEW",
-        ASSIGNED_BY_ID: String(userId),
-        TITLE: title,
-        COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
-      };
-      if(prazoIso){
-        fields[CONFIG.UF_PRAZO] = prazoIso; // ✅ PRAZO MÁXIMO no DEAL
-      }
-      await bx("crm.deal.add", { fields });
+      await bx("crm.deal.add", {
+        fields: {
+          CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+          STAGE_ID: stage || "C17:NEW",
+          ASSIGNED_BY_ID: String(userId),
+          TITLE: title,
+          COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
+        }
+      });
     });
     flushOps();
   }
@@ -981,22 +984,56 @@ body{ padding-bottom: 90px !important; }
     }
   }
 
+  // ✅ AJUSTE (Item 3): lock + tentativas para evitar intermitência em "Sem conexão..."
+  let queueBusy = false;
+  async function withQueueLock(fn){
+    // espera curto (evita briga entre refreshQueue e modalQueue/modalHideUsers)
+    for(let i=0; i<20 && queueBusy; i++) await sleep(60);
+    queueBusy = true;
+    try{ return await fn(); }
+    finally{ queueBusy = false; }
+  }
+
   async function fetchQueue(){
-    const deal = await ensureQueueDeal();
-    const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
-    return { dealId: String(deal.ID), ...parseQueue(raw) };
+    return withQueueLock(async ()=>{
+      let lastErr = null;
+      for(let attempt=0; attempt<3; attempt++){
+        try{
+          const deal = await ensureQueueDeal();
+          const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
+          return { dealId: String(deal.ID), ...parseQueue(raw) };
+        }catch(err){
+          lastErr = err;
+          await sleep(200 + attempt*350);
+        }
+      }
+      throw lastErr || new Error("Falha ao carregar fila");
+    });
   }
 
   async function saveQueue(dealId, payload){
-    const next = {
-      v: 1,
-      order: Array.isArray(payload.order) ? payload.order.map(String) : [],
-      hiddenUsers: Array.isArray(payload.hiddenUsers) ? payload.hiddenUsers.map(String) : [],
-      updatedAt: Date.now()
-    };
-    await bx("crm.deal.update", {
-      id: String(dealId),
-      fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
+    return withQueueLock(async ()=>{
+      const next = {
+        v: 1,
+        order: Array.isArray(payload.order) ? payload.order.map(String) : [],
+        hiddenUsers: Array.isArray(payload.hiddenUsers) ? payload.hiddenUsers.map(String) : [],
+        updatedAt: Date.now()
+      };
+
+      let lastErr = null;
+      for(let attempt=0; attempt<3; attempt++){
+        try{
+          await bx("crm.deal.update", {
+            id: String(dealId),
+            fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
+          });
+          return;
+        }catch(err){
+          lastErr = err;
+          await sleep(220 + attempt*420);
+        }
+      }
+      throw lastErr || new Error("Falha ao salvar fila");
     });
   }
 
@@ -1129,11 +1166,10 @@ body{ padding-bottom: 90px !important; }
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
+    // ✅ agora só mantém o primeiro: botão "Fila de atendimento"
     const keepA = row.children[0];
-    const keepB = row.children[1];
     row.innerHTML = "";
     if(keepA) row.appendChild(keepA);
-    if(keepB) row.appendChild(keepB);
 
     const order = state.queue.order || [];
     if(order.length === 0){
@@ -1165,7 +1201,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Fetch Usuárias (SEM storage) — usa DATE_MODIFY
+  // Fetch Usuárias (SEM storage) — usa DATE_MODIFY com STATUS IN_PROCESS
   // =========================
   async function fetchUserStats(userId){
     const startToday = todayISOStart();
@@ -1189,6 +1225,7 @@ body{ padding-bottom: 90px !important; }
       select: CONFIG.LEAD_SELECT
     }, CONFIG.LIMIT_USER_LAST);
 
+    // lastTwo: preferir os últimos que realmente estão em EM_ATENDIMENTO ou QUALIFICADO
     const lastTwo = (last||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
       return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO;
@@ -1219,6 +1256,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalQueue(){
+    // abre rápido, carrega depois
     openModal("FILA", `<div style="font-weight:900;opacity:.75">Carregando fila…</div>`);
     let q;
     try{
@@ -1272,6 +1310,7 @@ body{ padding-bottom: 90px !important; }
       .filter(ch=>ch.checked)
       .map(ch=> String(ch.getAttribute("data-q-user")));
 
+    // reordenação visual (sem salvar ainda)
     function moveInTable(userId, dir){
       const tr = tbody.querySelector(`tr[data-u="${CSS.escape(String(userId))}"]`);
       if(!tr) return;
@@ -1302,6 +1341,7 @@ body{ padding-bottom: 90px !important; }
       try{
         btn.disabled = true;
 
+        // ordem = ordem VISUAL da tabela, mas somente os marcados
         const visualOrder = $$("tr[data-u]", tbody).map(tr=> String(tr.getAttribute("data-u")));
         const checked = new Set(getChecked());
         const next = visualOrder.filter(id=> checked.has(id));
@@ -1385,6 +1425,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalPickLead(leadId){
+    // modal com 2 opções: selecionar usuária OU pegar para primeira da fila
     const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
     const body = `
       <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
@@ -1416,13 +1457,14 @@ body{ padding-bottom: 90px !important; }
         if(order.length === 0) return;
 
         const firstId = order.shift();
-        order.push(firstId);
-
+        order.push(firstId); // volta pro fim (regra)
+        // UI rápida: atualiza na hora
         state.queue.order = order.slice();
         renderQueue();
         setLastServed((CONFIG.USERS.find(x=>String(x.id)===String(firstId))||{}).name || ("USER "+firstId));
         setStatus(`Próxima: ${state.lastServedUserName} • ${nowBRTime()}`);
 
+        // salva fila (async)
         enqueueOp("saveQueueRotate", async ()=>{
           await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
         });
@@ -1453,6 +1495,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalBatchTransfer(){
+    // (mantido)
     openModal("TRANSFERIR EM LOTE", `
       <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
       <div style="opacity:.75;font-weight:900">Carregando leads pendentes…</div>
@@ -1519,12 +1562,16 @@ body{ padding-bottom: 90px !important; }
     const tbody = $("#btTbody");
     const countEl = $("#btCount");
 
-    // ✅ (1) filtro por data corrigido: compara YYYY-MM-DD robusto
     function matchDate(it, yyyy_mm_dd){
       if(!yyyy_mm_dd) return true;
       const dtuf = pickUF(it, CONFIG.UF_DT_LEAD);
-      const ymd = parseLeadDateToYMD(dtuf);
-      return ymd ? (ymd === yyyy_mm_dd) : false;
+      const t = Date.parse(String(dtuf||""));
+      if(!Number.isFinite(t)) return false;
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const da= String(d.getDate()).padStart(2,"0");
+      return `${y}-${m}-${da}` === yyyy_mm_dd;
     }
 
     function filtered(){
@@ -1548,7 +1595,7 @@ body{ padding-bottom: 90px !important; }
             <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
             <td>
               <b>${esc(leadDisplayName(it))}</b>
-              <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STAGE: ${esc(leadStageName(it.STATUS_ID))}</div>
+              <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STATUS: ${esc(it.STATUS_ID||"—")}</div>
             </td>
             <td>${infoHtml}</td>
           </tr>
@@ -1570,7 +1617,7 @@ body{ padding-bottom: 90px !important; }
       if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
       try{
         btn.disabled = true;
-
+        // otimista: remove da lista local
         ids.forEach(id=>{
           state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
         });
@@ -1591,6 +1638,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalManageUser(userId){
+    // (mantido)
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
@@ -1684,14 +1732,14 @@ body{ padding-bottom: 90px !important; }
       tbody.innerHTML = list.length ? list.map(it=>{
         const id = String(it.ID);
         const name = leadDisplayName(it);
-        const stName = leadStageName(it.STATUS_ID); // ✅ (3) stage por nome
+        const st = String(it.STATUS_ID||"—");
         const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
         const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? CONFIG.HOT_EMOJI+" " : "";
         return `<tr>
           <td><input type="checkbox" data-sel="${esc(id)}" /></td>
           <td>
             <b>${esc(hot + name)}</b>
-            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(stName)}</div>
+            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(st)}</div>
           </td>
           <td>
             <div class="cgdRow">
@@ -1740,7 +1788,7 @@ body{ padding-bottom: 90px !important; }
       const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
       if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
       for(const id of ids){
-        await actionSetPrazoLead(id, iso);
+        await actionSetPrazo(id, iso);
         await sleep(60);
       }
       alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
@@ -1812,6 +1860,7 @@ body{ padding-bottom: 90px !important; }
       });
     });
 
+    // delegação de ações
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
       const sp = e.target.closest("[data-save-prazo]");
       const sd = e.target.closest("[data-save-fupdeal]");
@@ -1822,7 +1871,7 @@ body{ padding-bottom: 90px !important; }
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
         const iso = isoFromLocalInput(inp?.value || "");
         if(!iso) return alert("Preencha data/hora corretamente.");
-        await actionSetPrazoLead(leadId, iso);
+        await actionSetPrazo(leadId, iso);
         alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
       }
 
@@ -1831,13 +1880,8 @@ body{ padding-bottom: 90px !important; }
         const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
         const iso = isoFromLocalInput(inp?.value || "");
-
-        // mantém salvar no lead (se existir)
-        if(iso) await actionSetPrazoLead(leadId, iso);
-
-        // ✅ cria o DEAL e grava PRAZO no DEAL
-        if(lead) await createFollowUpDeal(u.id, lead, iso);
-
+        if(iso) await actionSetPrazo(leadId, iso);
+        if(lead) await createFollowUpDeal(u.id, lead);
         alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
       }
 
@@ -1860,6 +1904,7 @@ body{ padding-bottom: 90px !important; }
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
+      // alerta sonoro: se existe NOVO LEAD e o som está ON
       const newest = items && items[0] ? String(items[0].ID) : null;
       if(items.length > 0 && state.soundOn){
         if(newest && newest !== state.lastNewLeadId){
@@ -1980,6 +2025,7 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
+    // ✅ Próxima disponível ultra-rápido (UI imediata; salva em background)
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
         if(!state.queue.dealId){
@@ -1992,6 +2038,7 @@ body{ padding-bottom: 90px !important; }
         const nextId = order.shift();
         order.push(nextId);
 
+        // UI na hora
         state.queue.order = order.slice();
         renderQueue();
 
@@ -1999,6 +2046,7 @@ body{ padding-bottom: 90px !important; }
         setLastServed(nm);
         setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
 
+        // salva depois
         const dealId = state.queue.dealId;
         const hidden = state.queue.hiddenUsers || [];
         enqueueOp("queueRotate", async ()=>{ await saveQueue(dealId, { order, hiddenUsers: hidden }); });
@@ -2021,6 +2069,7 @@ body{ padding-bottom: 90px !important; }
       }
     });
 
+    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
@@ -2058,12 +2107,14 @@ body{ padding-bottom: 90px !important; }
 
     await hardRefreshAll();
 
+    // refreshes
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
 
+    // offline flush (em RAM)
     setInterval(flushOps, 2500);
   }
 
