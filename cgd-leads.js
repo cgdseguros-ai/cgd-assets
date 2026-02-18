@@ -1,4 +1,3 @@
-
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - Sem localStorage (contagens, histórico, fila e “puxados hoje” vêm do Bitrix)
    - Fila multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
@@ -16,7 +15,7 @@
   // =========================
   const CONFIG = {
     // Webhook REST (o mesmo que você já usa)
-    WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/"
+    WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
     // Painel (Leads) — Categoria/Pipeline
     LEADS_CATEGORY_ID: 17,
