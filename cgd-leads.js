@@ -7,7 +7,7 @@
   "use strict";
 
   // ====== Sentinel do seu LOADER antigo ======
-  const BUILD = "2026-02-18.2";
+  const BUILD = "2026-02-19.1";
   function markSentinel(msg, ok){
     try{
       const box = document.getElementById("cgd-sentinel");
@@ -39,12 +39,24 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
+    // ✅ FOLLOW-UP cria DEAL na Pipeline 17 (TF SAÚDE) na coluna da usuária
     FOLLOWUP_DEAL: {
       ENABLED: true,
       CATEGORY_ID: 17,
-      DEFAULT_STAGE_ID: "", // deixe vazio para o Bitrix usar o stage default
+      DEFAULT_STAGE_ID: "C17:NEW", // NOVA TAREFA
       STAGE_BY_USER: {
-        // "3081": "C17:UC_XXXX",
+        "15":  "C17:UC_FQ8UPI",  // ALINE
+        "19":  "C17:UC_1HXNTB",  // ADRIANA
+        "17":  "C17:UC_RRQKAQ",  // ANDREYNA
+        "23":  "C17:UC_4HQGI1",  // MARIANA
+        "811": "C17:UC_8Y4R4V",  // JOSIANE
+        "3081":"C17:EXECUTING",  // BRUNA LUISA
+        "3083":"C17:UC_8O5UFO",  // FERNANDA SILVA
+        "3079":"C17:UC_P1P9RJ",  // LIVIA ALVES
+        "3085":"C17:UC_U8AAGB",  // NICOLLE BELMONTE
+        "3389":"C17:UC_A6LSS8",  // ANNA CLARA
+        "815": "C17:UC_ZT6WEB",  // GABRIEL
+        "3387":"C17:UC_RXISLQ",  // BEATRIZ
       }
     },
 
@@ -57,7 +69,7 @@
 
     // Visual: mostra só 30 cards pra performance
     LIMIT_NEW_RENDER: 30,
-    // Count: tenta contar pendentes até 5000 (ajuste se precisar)
+    // Count: conta pendentes até 5000
     LIMIT_PENDING_COUNT: 5000,
 
     LIMIT_USER_HISTORY: 60,
@@ -77,12 +89,13 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // ✅ Status reais do seu Bitrix (ENTITY_ID=STATUS)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
-      QUALIFICADO: "PROCESSED",
-      PERDIDO: "JUNK",
-      CONVERTIDO: "CONVERTED",
+      QUALIFICADO: "UC_0NFA3H", // Qualificado (custom)
+      PERDIDO: "UC_5IMTI4",     // Perdido (custom)
+      CONVERTIDO: "UC_B3RQAF",  // Convertido (custom)
     },
 
     LEAD_SELECT: [
@@ -145,14 +158,12 @@
   function fmtDT(v){
     const s = clean(v);
     if(!s) return "";
-    // se tiver parse, formata em SP
     const t = Date.parse(s);
     if(Number.isFinite(t)){
       try{
         return new Date(t).toLocaleString("pt-BR", { timeZone: CONFIG.TZ }).slice(0,16);
       }catch(_){}
     }
-    // fallback: ISO sem TZ
     return s.replace("T"," ").slice(0,16);
   }
 
@@ -250,20 +261,16 @@
   }
 
   // =========================
-  // UI/CSS (idêntico ao que você aprovou)
+  // UI/CSS (mantido)
   // =========================
   function injectCSS(){
-    // (mantive exatamente o seu CSS aprovado; sem mexer estética)
     const st = document.createElement("style");
     st.textContent = document.getElementById("__cgd_css__")?.textContent || `
-/* CSS idêntico ao seu aprovado — mantido */
+/* CSS idêntico ao aprovado — mantido */
 #cgdApp{
-  --radius:18px;
-  --border: rgba(30,40,70,.12);
-  --text: rgba(18,26,40,.92);
-  --muted: rgba(18,26,40,.62);
-  --card: rgba(255,255,255,.82);
-  --card2: rgba(255,255,255,.92);
+  --radius:18px; --border: rgba(30,40,70,.12);
+  --text: rgba(18,26,40,.92); --muted: rgba(18,26,40,.62);
+  --card: rgba(255,255,255,.82); --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
   min-height: calc(100vh - 60px);
   padding: 10px 12px 90px;
@@ -569,7 +576,6 @@ body{padding-bottom:90px!important;}
     };
     if(stage) fields.STAGE_ID = stage;
 
-    // fallback: se stage inválido, tenta sem STAGE_ID
     try{
       await bx("crm.deal.add", { fields });
     }catch(err){
@@ -700,7 +706,7 @@ body{padding-bottom:90px!important;}
     render.forEach(it=>{
       const id = String(it.ID||"");
       const title = leadDisplayName(it);
-      const badges = badgesFromLead(it).map(([k,v]) => `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`).join("");
+      const badges = badgesFromLead(it).map(([k,v])=> `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`).join("");
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -782,7 +788,6 @@ body{padding-bottom:90px!important;}
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
-    // mantém título + botão FILA
     const keepTitle = row.firstElementChild;
     const keepBtn = $("#btnQueue");
     row.innerHTML = "";
@@ -837,16 +842,14 @@ body{padding-bottom:90px!important;}
     const currentSet = new Set((q.order||[]).map(String));
     const body = `
       <div style="font-weight:950; margin-bottom:10px">Gerenciar fila (sincroniza em todos os PCs)</div>
-
       <div class="cgdRow" style="margin-bottom:12px">
         <button class="cgdBtn" id="qAll">Selecionar todas</button>
         <button class="cgdBtn" id="qNone">Limpar</button>
         <button class="cgdBtn" id="qApply">Aplicar alterações</button>
       </div>
-
       <table class="cgdTable">
         <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
-        <tbody id="qTbody">
+        <tbody>
           ${CONFIG.USERS.map(u=>{
             const checked = currentSet.has(String(u.id)) ? "checked" : "";
             return `<tr>
@@ -955,10 +958,8 @@ body{padding-bottom:90px!important;}
         if(!firstId) return;
         btn.disabled = true;
 
-        // 1) pega o lead pra 1ª
         await actionPickLead(leadId, firstId);
 
-        // 2) rotaciona a fila (1ª vai pro final) e salva
         const q = await fetchQueue();
         const order = (q.order||[]).slice();
         const moved = order.shift();
@@ -1012,7 +1013,7 @@ body{padding-bottom:90px!important;}
     `);
 
     const tbody = $("#btTbody");
-    const render = items.slice(0, 500); // evita modal gigante
+    const render = items.slice(0, 500);
     tbody.innerHTML = render.length ? render.map(it=>{
       const info = badgesFromLead(it).slice(0,5).map(([k,v])=> `${k}: ${v}`).join(" • ");
       return `
@@ -1140,7 +1141,6 @@ body{padding-bottom:90px!important;}
       state.pendingTotal = all.length;
       state.newLeads = all;
 
-      // beep apenas quando chega ID novo
       const newest = all?.[0]?.ID ? String(all[0].ID) : null;
       if(all.length>0 && state.soundOn && newest && newest !== state.lastNewLeadId){
         state.lastNewLeadId = newest;
@@ -1151,14 +1151,12 @@ body{padding-bottom:90px!important;}
       renderStats();
     }catch(err){
       console.warn(err);
-      // sem msg na tela
     }
   }
 
   async function refreshStats(){
     try{
-      const s = await fetchStats();
-      state.stats = s;
+      state.stats = await fetchStats();
       renderStats();
     }catch(err){ console.warn(err); }
   }
@@ -1206,6 +1204,7 @@ body{padding-bottom:90px!important;}
     $("#btnRefreshWho")?.addEventListener("click", refreshUsers);
 
     $("#btnGet")?.addEventListener("click", modalGetEquipes);
+
     $("#btnManage")?.addEventListener("click", ()=>{
       const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
       openModal("GERENCIAR USUÁRIA", `
@@ -1289,7 +1288,6 @@ body{padding-bottom:90px!important;}
     wire();
     updateSoundUI();
 
-    // carrega nomes dos stages de lead (pra mostrar no ABRIR)
     try{ await fetchLeadStatusMap(); }catch(_){}
 
     await hardRefreshAll();
