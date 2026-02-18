@@ -69,7 +69,7 @@
       },
 
       UF_OBS: "UF_CRM_691385BE7D33D",
-      UF_PRAZO: "UF_CRM_1768175087",
+      UF_PRAZO: "UF_CRM_1768175087", // ✅ PRAZO
       UF_URGENCIA: "UF_CRM_1768174982",
       UF_ETAPA_TAREFA: "UF_CRM_1768179977089",
       UF_COLAB: "UF_CRM_1770327799",
@@ -108,8 +108,14 @@
       ]),
     },
 
-    REFRESH_MS: 120000, // 2 min
+    // ✅ Atualizações
+    REFRESH_MS: 20000,     // refresh “completo”
+    FAST_POLL_MS: 8000,    // checagem rápida de novo lead (barata)
     TITLE: "PAINEL DE LEADS - CGD CORRETORA",
+
+    // ✅ Logo (redonda) — topo
+    LOGO_URL:
+      "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
     GET_LINKS: [
       { label: "EQUIPE DELTA", url: "https://getcgdcorretora.bitrix24.site/equipedelta/" },
@@ -185,6 +191,20 @@
 
   function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // ✅ Prazo (datetime-local) -> formato Bitrix (YYYY-MM-DD HH:MM:SS)
+  function toBitrixDateTime(dtLocalValue) {
+    // dtLocalValue: "YYYY-MM-DDTHH:MM"
+    if (!dtLocalValue) return "";
+    const v = String(dtLocalValue).trim();
+    if (!v) return "";
+    // garante segundos
+    const parts = v.split("T");
+    if (parts.length !== 2) return v.replace("T", " ");
+    const date = parts[0];
+    const time = parts[1].length === 5 ? parts[1] + ":00" : parts[1];
+    return `${date} ${time}`;
   }
 
   /* =============================
@@ -311,10 +331,10 @@
    * ============================= */
 
   const LS = {
-    QUEUE: "cgd_leads_queue_v1",
-    HIDDEN_USERS: "cgd_leads_hidden_users_v1",
-    AVAIL_USERS: "cgd_leads_avail_users_v1",
-    SILENT: "cgd_leads_silent_v1",
+    QUEUE: "cgd_leads_queue_v2",
+    HIDDEN_USERS: "cgd_leads_hidden_users_v2",
+    AVAIL_USERS: "cgd_leads_avail_users_v2",
+    SILENT: "cgd_leads_silent_v2",
   };
 
   function readJSON(k, fallback) {
@@ -388,7 +408,61 @@
   }
 
   /* =============================
-   * 5) UI (CSS)
+   * 5) AUDIO (unlock)
+   * ============================= */
+
+  let audioCtx = null;
+  let audioUnlocked = false;
+
+  function unlockAudioOnce() {
+    if (audioUnlocked) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // resume no gesto
+      audioCtx.resume && audioCtx.resume().catch(() => {});
+      audioUnlocked = true;
+    } catch (_) {
+      audioUnlocked = false;
+    }
+  }
+
+  ["click", "touchstart", "keydown"].forEach((ev) => {
+    window.addEventListener(
+      ev,
+      () => {
+        unlockAudioOnce();
+      },
+      { once: true, passive: true }
+    );
+  });
+
+  function beep() {
+    if (isSilent) return;
+    if (!audioUnlocked || !audioCtx) return;
+    try {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      o.type = "square";
+      o.frequency.value = 980;
+      g.gain.value = 0.045;
+      o.start();
+      setTimeout(() => {
+        o.stop();
+      }, 160);
+    } catch (_) {}
+  }
+
+  function beepTriple() {
+    if (isSilent) return;
+    beep();
+    setTimeout(beep, 220);
+    setTimeout(beep, 440);
+  }
+
+  /* =============================
+   * 6) UI (CSS)
    * ============================= */
 
   const style = document.createElement("style");
@@ -411,11 +485,12 @@
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
 }
 
+/* ====== TOP ====== */
 #cgd-top{
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(255,255,255,.9);
+  background: rgba(255,255,255,.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
   padding: 10px 12px;
@@ -431,12 +506,21 @@
   display:flex;
   align-items:center;
   gap:10px;
+  min-width: 260px;
+}
+#cgd-title .logo{
+  width:34px;height:34px;border-radius:999px;
+  border:1px solid rgba(0,0,0,.12);
+  box-shadow: 0 10px 18px rgba(2,6,23,.10);
+  object-fit: cover;
+  background:#fff;
 }
 #cgd-title .dot{ width:10px;height:10px;border-radius:999px;background:#111827; }
 
 #cgd-top .right{
   display:flex; align-items:center; gap:10px; flex-wrap:wrap;
 }
+
 .btn{
   border:1px solid var(--border);
   background: #fff;
@@ -445,6 +529,7 @@
   border-radius: 12px;
   font-weight: 800;
   cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
 }
 .btn:hover{ box-shadow: 0 8px 18px rgba(2,6,23,.08); transform: translateY(-1px); }
 .btn:active{ transform: translateY(0px); }
@@ -464,11 +549,12 @@
   font-size: 12px;
 }
 
+/* ====== LAYOUT ====== */
 #cgd-wrap{
   width:100%;
   max-width:none;
   display:grid;
-  grid-template-columns: minmax(360px, 35%) 1fr;
+  grid-template-columns: minmax(420px, 38%) 1fr;
   gap: 12px;
   padding: 12px;
   align-items:start;
@@ -482,31 +568,45 @@
   box-shadow: var(--shadow);
   overflow:hidden;
 }
+
+/* ====== HEADER DOS PAINÉIS (corrige “mal formatado”) ====== */
 .p-hdr{
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:space-between;
   gap:10px;
 }
-.p-hdr .h{ font-weight: 950; }
-.p-hdr .sub{ font-size: 12px; color: var(--muted); font-weight: 800; }
+.p-hdr > .leftInfo{ flex:1; min-width:0; }
+.p-hdr .h{ font-weight: 950; font-size: 14px; line-height: 1.25; }
+.p-hdr .sub{ font-size: 12px; color: var(--muted); font-weight: 800; margin-top: 2px; line-height: 1.25; }
 .p-body{ padding: 12px; width:100%; }
 
 .leadCard{
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 10px;
+  padding: 12px;
   background: #fff;
   display:flex;
   flex-direction:column;
-  gap:8px;
+  gap:10px;
   margin-bottom: 10px;
 }
-.leadTop{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.leadName{ font-weight: 950; }
-.pills{ display:flex; gap:6px; flex-wrap:wrap; }
+.leadName{
+  font-weight: 980;
+  font-size: 18px;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: break-word;
+}
+.leadTop{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.pills{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
 .pill{
   font-size: 11px;
   font-weight: 950;
@@ -529,18 +629,32 @@
 .muted{ color: var(--muted); }
 
 .alertBox{
-  border: 2px solid rgba(236,72,153,.25);
-  background: rgba(236,72,153,.08);
-  padding: 10px;
+  border: 2px solid rgba(236,72,153,.28);
+  background: rgba(236,72,153,.10);
+  padding: 12px;
   border-radius: 14px;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:10px;
   margin-bottom:10px;
+  position: sticky;
+  top: 64px;
+  z-index: 30;
 }
-.alertBox .a{ font-weight: 950; }
-.alertBox .b{ font-size: 12px; font-weight: 900; color: rgba(15,23,42,.75); }
+
+/* alarme mais chamativo */
+@keyframes cgdPulse {
+  0% { transform: translateZ(0) scale(1); box-shadow: 0 0 0 rgba(236,72,153,.0); }
+  50% { transform: translateZ(0) scale(1.01); box-shadow: 0 0 0 6px rgba(236,72,153,.12); }
+  100% { transform: translateZ(0) scale(1); box-shadow: 0 0 0 rgba(236,72,153,.0); }
+}
+.alertOn .alertBox{
+  animation: cgdPulse 0.75s ease-in-out infinite;
+  border-color: rgba(236,72,153,.55);
+}
+.alertBox .a{ font-weight: 980; font-size: 14px; }
+.alertBox .b{ font-size: 12px; font-weight: 900; color: rgba(15,23,42,.78); }
 
 #userGrid{
   width:100%;
@@ -552,18 +666,18 @@
   width:100%;
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 10px;
+  padding: 12px;
   background: #fff;
 }
 .userRow{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.userName{ font-weight: 950; }
+.userName{ font-weight: 980; }
 .kpis{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 .kpi{ font-size: 11px; font-weight: 950; border:1px solid var(--border); border-radius:999px; padding:4px 8px; background: rgba(2,6,23,.03); }
 
 .miniLead{
   border-top: 1px dashed rgba(20,30,60,.18);
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
   display:flex;
   flex-direction:column;
   gap:6px;
@@ -594,15 +708,23 @@
 }
 .queueTag .mini{ font-size:11px; font-weight: 950; color: var(--muted); }
 
-.modalBack{ display:none; } /* (só pra não “ganhar” do inline style) */
-
+/* ====== MODAL (evita cortar) ====== */
 .modalHdr{
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   display:flex; align-items:center; justify-content:space-between; gap:10px;
+  position: sticky;
+  top: 0;
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(6px);
+  z-index: 2;
 }
-.modalHdr .t{ font-weight: 950; }
-.modalBody{ padding: 14px; }
+.modalHdr .t{ font-weight: 980; }
+.modalBody{
+  padding: 14px;
+  overflow-x: hidden;
+  max-width: 100%;
+}
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom: 10px; }
 .field label{ font-size: 12px; font-weight: 950; color: rgba(15,23,42,.85); }
 .input{ border:1px solid var(--border); border-radius: 12px; padding: 10px 12px; font-weight: 900; }
@@ -610,8 +732,8 @@
 .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .tableLike{ display:flex; flex-direction:column; gap:10px; }
 .selLeadRow{
-  border:1px solid var(--border); border-radius: 14px; padding:10px;
-  display:flex; gap:10px; align-items:center; justify-content:space-between;
+  border:1px solid var(--border); border-radius: 14px; padding:12px;
+  display:flex; gap:10px; align-items:flex-start; justify-content:space-between;
 }
 .selLeadRow .left{ flex:1; min-width: 240px; }
 .selLeadRow .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -619,12 +741,14 @@
 @media (max-width: 1024px){
   #cgd-wrap{ grid-template-columns: 1fr; }
   #userGrid{ grid-template-columns: 1fr; }
+  .leadTop{ flex-direction:column; align-items:flex-start; }
+  .pills{ justify-content:flex-start; }
 }
   `;
   document.head.appendChild(style);
 
   /* =============================
-   * 6) MODAL (BLINDADO)
+   * 7) MODAL (BLINDADO)
    * ============================= */
 
   const MODAL_Z = 2147483647;
@@ -639,8 +763,6 @@
 
     const back = document.createElement("div");
     back.id = "cgd-modal-back";
-
-    // ✅ inline style pra Bitrix não “matar” o modal
     back.style.cssText = [
       "position:fixed",
       "left:0",
@@ -648,7 +770,7 @@
       "right:0",
       "bottom:0",
       "inset:0",
-      "background:rgba(2,6,23,.55)",
+      "background:rgba(2,6,23,.60)",
       "display:flex",
       "align-items:center",
       "justify-content:center",
@@ -660,13 +782,13 @@
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
     modal.style.cssText = [
-      "width:min(980px, calc(100vw - 22px))",
+      "width:min(1040px, calc(100vw - 22px))",
       "max-height:calc(100vh - 22px)",
       "overflow:auto",
       "background:#fff",
       "border-radius:18px",
       "border:1px solid rgba(255,255,255,.18)",
-      "box-shadow:0 30px 80px rgba(2,6,23,.35)",
+      "box-shadow:0 30px 90px rgba(2,6,23,.45)",
     ].join(";");
 
     modal.innerHTML = `
@@ -684,22 +806,18 @@
     });
 
     back.appendChild(modal);
-
-    // ✅ garante body
-    const host = document.body || document.documentElement;
-    host.appendChild(back);
+    (document.body || document.documentElement).appendChild(back);
 
     const btn = modal.querySelector("#cgd-modal-close");
     if (btn) btn.onclick = closeModal;
   }
 
-  // ✅ debug manual: abra console e rode window.cgdModalTest()
   window.cgdModalTest = function () {
     openModal("TESTE MODAL", `<div class="badge">Se você está vendo isso, modal OK ✅</div>`);
   };
 
   /* =============================
-   * 7) CORE ACTIONS
+   * 8) CORE ACTIONS
    * ============================= */
 
   async function doPickLead(leadId, userId) {
@@ -719,7 +837,7 @@
     const dt = String(lead[CFG.UF_DT_LEAD] || lead.DATE_CREATE || lead.DATE_MODIFY || "");
     const st = statUser(userId);
     st.pulled += 1;
-    st.last2.unshift({ name, op, dt });
+    st.last2.unshift({ name, op, dt, id: leadId });
     st.last2 = st.last2.slice(0, 2);
 
     return lead;
@@ -776,27 +894,8 @@
     return Number(queue[0]);
   }
 
-  function beep() {
-    if (isSilent) return;
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g);
-      g.connect(ctx.destination);
-      o.type = "sine";
-      o.frequency.value = 880;
-      g.gain.value = 0.06;
-      o.start();
-      setTimeout(() => {
-        o.stop();
-        ctx.close().catch(() => {});
-      }, 140);
-    } catch (_) {}
-  }
-
   /* =============================
-   * 8) MODAL “GERENCIAR USUÁRIA”
+   * 9) MODAL “GERENCIAR USUÁRIA”
    * ============================= */
 
   let currentUserId = null;
@@ -804,37 +903,91 @@
   function openUserManager(userId) {
     currentUserId = Number(userId);
 
+    const stLocal = statUser(currentUserId);
+    const pulledHtml = `
+      <div class="badge">Puxados hoje: ${esc(stLocal.pulled || 0)}</div>
+      <div class="tableLike" style="margin-top:10px">
+        ${(stLocal.last2 || [])
+          .map((x) => {
+            return `
+            <div class="selLeadRow">
+              <div class="left">
+                <div style="font-weight:980">${esc(x.name || "-")}</div>
+                <div class="small muted">Operadora: <b>${esc(x.op || "-")}</b> • Data/Hora: <b>${esc(
+              fmtDT(x.dt)
+            )}</b> • Lead ID: <b>${esc(x.id || "-")}</b></div>
+              </div>
+              <div class="right">
+                <button class="btn" data-openLead="${esc(x.id || "")}">Abrir Lead</button>
+              </div>
+            </div>
+          `;
+          })
+          .join("") || `<div class="small muted">Sem histórico ainda.</div>`}
+      </div>
+    `;
+
     openModal(`USUÁRIA • ${getUserNameById(currentUserId)}`, `
-      <div class="row" style="justify-content:space-between">
-        <div class="small muted">
-          Aqui você controla os <b>LEADS EM ANDAMENTO</b> da usuária (exceto “PERDIDO”) e cria <b>FOLLOW-UP</b> na Pipeline 17.
+      <div class="small muted">
+        Aqui você controla os <b>LEADS EM ANDAMENTO</b> da usuária (exceto “PERDIDO”) e cria <b>FOLLOW-UP</b> na Pipeline 17.
+        <br/>🔊 Se o som não tocar, clique uma vez no painel para “liberar áudio” (regra do navegador).
+      </div>
+
+      <hr class="sep"/>
+
+      <div style="display:grid; gap:12px; grid-template-columns: 1fr 1fr;">
+        <div>
+          <div class="field">
+            <label>Buscar lead por palavra (nome do cliente)</label>
+            <input class="input" id="umSearch" placeholder="Ex.: Maria, João, Carlos..." />
+          </div>
+
+          <div class="row" style="justify-content:space-between">
+            <div class="badge" id="umCount">0 leads</div>
+            <div class="row">
+              <button class="btn" id="umReload">Atualizar</button>
+              <button class="btn primary" id="umBatchFollow">FOLLOW-UP em lote</button>
+              <button class="btn" id="umConvertidos">CONVERTIDOS (Pipeline 0)</button>
+            </div>
+          </div>
+
+          <hr class="sep" />
+
+          <div id="umList" class="tableLike">
+            <div class="small muted">Clique em “Atualizar”.</div>
+          </div>
+
+          <div class="small" id="umStatus"></div>
         </div>
-        <div class="row">
-          <button class="btn" id="umReload">Atualizar</button>
+
+        <div>
+          <div class="h" style="font-weight:980;margin-bottom:6px">Histórico • puxados hoje</div>
+          ${pulledHtml}
         </div>
       </div>
-
-      <div class="field">
-        <label>Buscar lead por palavra (nome do cliente)</label>
-        <input class="input" id="umSearch" placeholder="Ex.: Maria, João, Carlos..." />
-      </div>
-
-      <div class="row" style="justify-content:space-between">
-        <div class="badge" id="umCount">0 leads</div>
-        <div class="row">
-          <button class="btn primary" id="umBatchFollow">FOLLOW-UP em lote</button>
-          <button class="btn" id="umConvertidos">CONVERTIDOS (Pipeline 0)</button>
-        </div>
-      </div>
-
-      <hr class="sep" />
-
-      <div id="umList" class="tableLike">
-        <div class="small muted">Clique em “Atualizar”.</div>
-      </div>
-
-      <div class="small" id="umStatus"></div>
     `);
+
+    // bind “Abrir Lead” do histórico
+    document.querySelectorAll("button[data-openLead]").forEach((b) => {
+      b.onclick = async () => {
+        const id = Number(b.dataset.openLead || 0);
+        if (!id) return;
+        try {
+          const lead = await getLead(id);
+          const L = leadLine(lead);
+          openModal(`LEAD • ${esc(L.name)}`, `
+            <div class="badge">ID ${esc(id)} • Status: ${esc(stageLeadName(lead.STATUS_ID))}</div>
+            <hr class="sep"/>
+            <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(
+            fmtDT(L.dt)
+          )}</b> • Idade: <b>${esc(L.idade)}</b></div>
+            <div class="small muted">Fonte: <b>${esc(L.fonte)}</b> • Bairro: <b>${esc(L.bairro)}</b></div>
+          `);
+        } catch (e) {
+          alert(`Erro ao abrir lead: ${String(e.message || e)}`);
+        }
+      };
+    });
 
     const elReload = document.getElementById("umReload");
     const elSearch = document.getElementById("umSearch");
@@ -855,7 +1008,7 @@
         },
         null,
         { DATE_MODIFY: "DESC" },
-        120
+        200
       );
 
       elStatus.textContent = `OK • ${leads.length} leads`;
@@ -865,7 +1018,6 @@
     function render() {
       const q = String(elSearch.value || "").trim().toLowerCase();
       const filtered = leads.filter((l) => renderClientName(l).toLowerCase().includes(q));
-
       elCount.textContent = `${filtered.length} leads`;
 
       elList.innerHTML =
@@ -875,10 +1027,11 @@
             return `
             <div class="selLeadRow">
               <div class="left">
-                <div style="font-weight:950">${esc(L.name)}</div>
+                <div style="font-weight:980">${esc(L.name)}</div>
                 <div class="small muted">
-                  Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • Status: <b>${esc(stageLeadName(l.STATUS_ID))}</b>
-                  • ID ${esc(l.ID)}
+                  Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • Status: <b>${esc(
+              stageLeadName(l.STATUS_ID)
+            )}</b> • ID <b>${esc(l.ID)}</b>
                 </div>
               </div>
               <div class="right">
@@ -932,7 +1085,7 @@
       });
     }
 
-    elReload.onclick = load;
+    elReload.onclick = () => load().catch((e) => (elStatus.textContent = `Erro: ${String(e.message || e)}`));
     elSearch.oninput = render;
 
     document.getElementById("umBatchFollow").onclick = () => openFollowUpBatch(currentUserId, leads);
@@ -950,6 +1103,8 @@
         Será criado um <b>NEGÓCIO</b> na Pipeline 17 na coluna da usuária, com os dados do lead em OBS.
       </div>
 
+      <hr class="sep"/>
+
       <div class="field">
         <label>Nome do cliente</label>
         <input class="input" id="fuTitle" value="${esc(L.name)}" />
@@ -961,9 +1116,9 @@
       </div>
 
       <div class="field">
-        <label>Definir prazo (UF_CRM_1768175087)</label>
-        <input class="input" id="fuPrazo" placeholder="YYYY-MM-DD ou data/hora do seu padrão" />
-        <div class="small muted">Se o seu campo for data/hora, você pode usar: YYYY-MM-DD HH:MM</div>
+        <label>Prazo (UF_CRM_1768175087)</label>
+        <input class="input" id="fuPrazo" type="datetime-local" />
+        <div class="small muted">Escolha data e hora. O sistema envia em formato Bitrix.</div>
       </div>
 
       <div class="row">
@@ -980,7 +1135,8 @@
 
         const title = String(document.getElementById("fuTitle").value || "").trim() || L.name;
         const extra = String(document.getElementById("fuExtra").value || "").trim();
-        const prazo = String(document.getElementById("fuPrazo").value || "").trim();
+        const prazoLocal = String(document.getElementById("fuPrazo").value || "").trim();
+        const prazo = toBitrixDateTime(prazoLocal);
 
         const obsBlock =
           `CLIENTE: ${L.name}\n` +
@@ -1003,16 +1159,14 @@
         };
 
         if (prazo) fields[CFG.PIPE17.UF_PRAZO] = prazo;
-
         if (CFG.PIPE17.UF_URGENCIA) fields[CFG.PIPE17.UF_URGENCIA] = CFG.PIPE17.FIXED.URGENCIA;
         if (CFG.PIPE17.UF_ETAPA_TAREFA) fields[CFG.PIPE17.UF_ETAPA_TAREFA] = CFG.PIPE17.FIXED.ETAPA;
         if (CFG.PIPE17.UF_COLAB) fields[CFG.PIPE17.UF_COLAB] = "";
 
         await createDeal(fields);
-
         st.textContent = "OK ✅ FOLLOW-UP criado na Pipeline 17.";
       } catch (e) {
-        document.getElementById("fuStatus").textContent = `Erro: ${String(e.message || e)}`;
+        st.textContent = `Erro: ${String(e.message || e)}`;
       }
     };
   }
@@ -1020,8 +1174,10 @@
   function openFollowUpBatch(userId, leadsInMemory) {
     openModal(`FOLLOW-UP EM LOTE • ${getUserNameById(userId)}`, `
       <div class="small muted">
-        Selecione leads (da lista atual da usuária), defina data/hora e opcionalmente intervalo.
+        Selecione leads, defina prazo base e (opcional) intervalo.
       </div>
+
+      <hr class="sep"/>
 
       <div class="field">
         <label>Buscar lead (na lista)</label>
@@ -1029,8 +1185,8 @@
       </div>
 
       <div class="field">
-        <label>Prazo (UF_CRM_1768175087) base</label>
-        <input class="input" id="fbPrazo" placeholder="YYYY-MM-DD HH:MM" />
+        <label>Prazo base (UF_CRM_1768175087)</label>
+        <input class="input" id="fbPrazo" type="datetime-local" />
       </div>
 
       <div class="field">
@@ -1073,8 +1229,10 @@
                 <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
                   <input type="checkbox" data-chk="${esc(l.ID)}" ${checked} />
                   <div>
-                    <div style="font-weight:950">${esc(L.name)}</div>
-                    <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}</div>
+                    <div style="font-weight:980">${esc(L.name)}</div>
+                    <div class="small muted">Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(
+              fmtDT(L.dt)
+            )}</b> • ID <b>${esc(l.ID)}</b></div>
                   </div>
                 </label>
               </div>
@@ -1097,17 +1255,18 @@
 
     document.getElementById("fbGo").onclick = async () => {
       try {
-        const prazoBase = String(document.getElementById("fbPrazo").value || "").trim();
-        if (!prazoBase) return (elStatus.textContent = "Preencha o prazo base (YYYY-MM-DD HH:MM).");
+        const prazoLocal = String(document.getElementById("fbPrazo").value || "").trim();
+        const prazoBase = toBitrixDateTime(prazoLocal);
+        if (!prazoBase) return (elStatus.textContent = "Preencha o prazo base (data e hora).");
 
         const step = Number(document.getElementById("fbStep").value || 0);
-
         const ids = Array.from(chosen);
         if (!ids.length) return (elStatus.textContent = "Selecione ao menos 1 lead.");
 
         elStatus.textContent = `Criando ${ids.length} follow-ups…`;
 
-        const base = new Date(prazoBase.replace(" ", "T"));
+        // converte para Date para somar minutos
+        const base = new Date(prazoLocal);
         const canParse = !isNaN(base.getTime());
 
         for (let idx = 0; idx < ids.length; idx++) {
@@ -1117,9 +1276,10 @@
           let prazo = prazoBase;
           if (step && canParse) {
             const d = new Date(base.getTime() + idx * step * 60000);
-            prazo = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(
+            const local = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(
               d.getHours()
             )}:${pad2(d.getMinutes())}`;
+            prazo = toBitrixDateTime(local);
           }
 
           const obsBlock =
@@ -1159,7 +1319,7 @@
   }
 
   /* =============================
-   * 9) CONVERTIDOS (Pipeline 0)
+   * 10) CONVERTIDOS (Pipeline 0)
    * ============================= */
 
   function openConvertidos(userId) {
@@ -1180,6 +1340,8 @@
         }
       </div>
 
+      <hr class="sep"/>
+
       <div class="field">
         <label>Buscar (título)</label>
         <input class="input" id="cvSearch" placeholder="Digite..." />
@@ -1192,7 +1354,7 @@
         </select>
         <div class="small muted">
           A partir de <b>Em digitação de proposta</b> pede Valor/Moeda e Operadora Fechada.
-          Em <b>Negócios Fechados</b> pede Data de Fechamento (e o card some da lista).
+          Em <b>Negócios Fechados</b> pede Data de Fechamento (e o card some).
         </div>
       </div>
 
@@ -1219,12 +1381,16 @@
             (d) => `
         <div class="selLeadRow">
           <div class="left">
-            <div style="font-weight:950">${esc(d.TITLE || `Deal ${d.ID}`)}</div>
+            <div style="font-weight:980">${esc(d.TITLE || `Deal ${d.ID}`)}</div>
             <div class="small muted">
-              Etapa: <b>${esc(stageName(d.STAGE_ID))}</b> • ID ${esc(d.ID)} • Resp: ${esc(getUserNameById(d.ASSIGNED_BY_ID))}
+              Etapa: <b>${esc(stageName(d.STAGE_ID))}</b> • ID <b>${esc(d.ID)}</b> • Resp: <b>${esc(
+              getUserNameById(d.ASSIGNED_BY_ID)
+            )}</b>
             </div>
             <div class="small muted">
-              Valor: ${esc(d.OPPORTUNITY || "-")} ${esc(d.CURRENCY_ID || "")} • Última mod.: ${esc(fmtDT(d.DATE_MODIFY))}
+              Valor: <b>${esc(d.OPPORTUNITY || "-")}</b> ${esc(d.CURRENCY_ID || "")} • Última mod.: <b>${esc(
+              fmtDT(d.DATE_MODIFY)
+            )}</b>
             </div>
           </div>
           <div class="right">
@@ -1280,15 +1446,13 @@
 
             st.textContent = "Movendo…";
             await updateDeal(id, fields);
-
             st.textContent = "OK ✅ Recarregando…";
 
             const extraFilter = { "!STAGE_ID": "WON" };
             if (isPerUser) extraFilter.ASSIGNED_BY_ID = Number(userId);
 
-            deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 160, extraFilter);
+            deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 180, extraFilter);
             await render();
-
             st.textContent = "OK ✅";
           } catch (e) {
             st.textContent = `Erro: ${String(e.message || e)}`;
@@ -1307,7 +1471,7 @@
         const extraFilter = { "!STAGE_ID": "WON" };
         if (isPerUser) extraFilter.ASSIGNED_BY_ID = Number(userId);
 
-        deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 160, extraFilter);
+        deals = await listDeals(CFG.PIPE0.CATEGORY_ID, 180, extraFilter);
         st.textContent = `OK • ${deals.length} negócios`;
         await render();
       } catch (e) {
@@ -1317,10 +1481,12 @@
   }
 
   /* =============================
-   * 10) FILA — modal selecionar disponível/indisponível
+   * 11) FILA — modal
    * ============================= */
 
   function openQueueManager() {
+    ensureQueueValid();
+
     openModal("FILA • Disponibilidade", `
       <div class="small muted">
         Marque quem está <b>DISPONÍVEL</b>. Somente essas entram na fila.
@@ -1329,6 +1495,27 @@
 
       <hr class="sep"/>
 
+      <div class="badge">Fila atual: ${esc(queue.length)} usuária(s)</div>
+      <div class="tableLike" style="margin-top:10px">
+        ${queue
+          .map((id, idx) => {
+            const u = getUserNameById(id);
+            const pos = idx === 0 ? "PRÓXIMA" : `#${idx + 1}`;
+            return `
+              <div class="selLeadRow">
+                <div class="left">
+                  <div style="font-weight:980">${esc(u)} <span class="small muted">(${esc(id)})</span></div>
+                  <div class="small muted">Posição: <b>${esc(pos)}</b></div>
+                </div>
+              </div>
+            `;
+          })
+          .join("") || `<div class="small muted">Fila vazia.</div>`}
+      </div>
+
+      <hr class="sep"/>
+
+      <div class="h" style="font-weight:980;margin-bottom:8px">Disponibilidade</div>
       <div id="qmList" class="tableLike"></div>
 
       <hr class="sep"/>
@@ -1336,7 +1523,7 @@
       <div class="row">
         <button class="btn primary" id="qmSave">Salvar</button>
         <button class="btn" id="qmBuild">Montar fila (com disponíveis)</button>
-        <button class="btn" id="qmClear">Zerar fila</button>
+        <button class="btn danger" id="qmClear">Zerar fila</button>
       </div>
 
       <div class="small" id="qmStatus"></div>
@@ -1352,7 +1539,7 @@
           <div class="left">
             <label style="display:flex; gap:10px; align-items:center; cursor:pointer">
               <input type="checkbox" data-av="${esc(u.id)}" ${chk}/>
-              <div style="font-weight:950">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
+              <div style="font-weight:980">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
             </label>
           </div>
         </div>
@@ -1396,13 +1583,17 @@
   }
 
   /* =============================
-   * 11) APP UI
+   * 12) APP UI
    * ============================= */
 
   root.innerHTML = `
     <div id="cgd-app">
       <div id="cgd-top">
-        <div id="cgd-title"><span class="dot"></span> <span>${esc(CFG.TITLE)}</span></div>
+        <div id="cgd-title">
+          <img class="logo" src="${esc(CFG.LOGO_URL)}" alt="CGD" />
+          <span class="dot"></span>
+          <span>${esc(CFG.TITLE)}</span>
+        </div>
         <div class="right">
           <span class="badge" id="kpiDay">Leads do dia: 0</span>
           <span class="badge" id="kpiMonth">Leads do mês: 0</span>
@@ -1417,7 +1608,7 @@
       <div id="cgd-wrap">
         <div class="panel">
           <div class="p-hdr">
-            <div>
+            <div class="leftInfo">
               <div class="h">NOVOS LEADS • PENDENTES</div>
               <div class="sub">Somente status: <b>NOVO LEAD</b></div>
             </div>
@@ -1429,8 +1620,11 @@
           <div class="p-body">
             <div class="alertBox" id="alertBox" style="display:none">
               <div>
-                <div class="a">🎉 NOVO LEAD</div>
-                <div class="b">Alerta sonoro + piscante (enquanto existir lead em “NOVO LEAD”).</div>
+                <div class="a">🚨 NOVO LEAD • ATENÇÃO</div>
+                <div class="b">Alerta sonoro + piscante enquanto existir lead em “NOVO LEAD”.</div>
+                <div class="small muted" id="audioHint" style="margin-top:4px;display:none">
+                  Dica: clique uma vez no painel para liberar áudio (regra do navegador).
+                </div>
               </div>
               <button class="btn" id="btnSilenceAlert">Silenciar</button>
             </div>
@@ -1440,7 +1634,7 @@
 
         <div class="panel">
           <div class="p-hdr">
-            <div>
+            <div class="leftInfo">
               <div class="h">QUEM PEGOU HOJE</div>
               <div class="sub">Cards por usuária (ordem: última que puxou → fila → fora da fila)</div>
             </div>
@@ -1468,7 +1662,7 @@
   if (sentinel) setSent("JS iniciou ✅");
 
   /* =============================
-   * 12) EVENTS
+   * 13) EVENTS
    * ============================= */
 
   document.getElementById("btnRefresh").onclick = () => refreshAll(true);
@@ -1483,6 +1677,7 @@
   document.getElementById("btnSilenceAlert").onclick = () => {
     setSilent(true);
     document.getElementById("btnSilent").textContent = "Som: OFF";
+    stopAlarm();
   };
 
   document.getElementById("btnQueueMgr").onclick = openQueueManager;
@@ -1496,8 +1691,8 @@
           (u) => `
           <div class="selLeadRow">
             <div class="left">
-              <div style="font-weight:950">${esc(u.name)}</div>
-              <div class="small muted">ID: ${esc(u.id)}</div>
+              <div style="font-weight:980">${esc(u.name)}</div>
+              <div class="small muted">ID: <b>${esc(u.id)}</b></div>
             </div>
             <div class="right">
               <button class="btn primary" data-um="${esc(u.id)}">Abrir</button>
@@ -1522,7 +1717,7 @@
           (x) => `
           <div class="selLeadRow">
             <div class="left">
-              <div style="font-weight:950">${esc(x.label)}</div>
+              <div style="font-weight:980">${esc(x.label)}</div>
               <div class="small muted">${esc(x.url)}</div>
             </div>
             <div class="right">
@@ -1559,7 +1754,7 @@
   };
 
   /* =============================
-   * 13) HIDE USERS
+   * 14) HIDE USERS
    * ============================= */
 
   function openHideUsers() {
@@ -1583,7 +1778,7 @@
           <div class="left">
             <label style="display:flex; gap:10px; align-items:center; cursor:pointer">
               <input type="checkbox" data-hu="${esc(u.id)}" ${chk}/>
-              <div style="font-weight:950">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
+              <div style="font-weight:980">${esc(u.name)} <span class="small muted">(${esc(u.id)})</span></div>
             </label>
           </div>
         </div>
@@ -1602,7 +1797,7 @@
   }
 
   /* =============================
-   * 14) BATCH TRANSFER
+   * 15) BATCH TRANSFER (com filtro)
    * ============================= */
 
   let cachedNewLeads = [];
@@ -1613,19 +1808,39 @@
       return;
     }
 
+    const ops = Array.from(
+      new Set(
+        cachedNewLeads
+          .map((l) => String(l[CFG.UF_OPERADORA] || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
     openModal("TRANSFERIR EM LOTE", `
       <div class="small muted">
         Selecione leads e escolha para quem transferir.
-        <br/>Ao transferir: <b>ASSIGNED_BY_ID</b> muda e o lead vira <b>EM ATENDIMENTO</b>.
+        Ao transferir: <b>ASSIGNED_BY_ID</b> muda e o lead vira <b>EM ATENDIMENTO</b>.
       </div>
 
       <hr class="sep"/>
 
-      <div class="field">
-        <label>Transferir para usuária</label>
-        <select class="sel" id="btUser">
-          ${CFG.USERS.map((u) => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("")}
-        </select>
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div class="field" style="min-width:320px;flex:1">
+          <label>Transferir para usuária</label>
+          <select class="sel" id="btUser" style="width:100%">
+            ${CFG.USERS.map((u) => `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="field" style="min-width:260px">
+          <label>Filtrar por operadora</label>
+          <select class="sel" id="btOp">
+            <option value="">Todas</option>
+            ${ops.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="badge" id="btCount">0 lead(s)</div>
       </div>
 
       <div class="row">
@@ -1640,36 +1855,50 @@
 
     const box = document.getElementById("btList");
     const status = document.getElementById("btStatus");
+    const count = document.getElementById("btCount");
+    const opSel = document.getElementById("btOp");
     let chosen = new Set();
 
-    box.innerHTML = cachedNewLeads
-      .map((l) => {
-        const L = leadLine(l);
-        return `
-        <div class="selLeadRow">
-          <div class="left">
-            <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
-              <input type="checkbox" data-bt="${esc(l.ID)}" />
-              <div>
-                <div style="font-weight:950">${esc(L.name)}</div>
-                <div class="small muted">
-                  Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID ${esc(l.ID)}
-                </div>
-              </div>
-            </label>
-          </div>
-        </div>
-      `;
-      })
-      .join("");
+    function render() {
+      const op = String(opSel.value || "");
+      const list = cachedNewLeads.filter((l) => !op || String(l[CFG.UF_OPERADORA] || "") === op);
+      count.textContent = `${list.length} lead(s)`;
 
-    box.querySelectorAll("input[data-bt]").forEach((i) => {
-      i.onchange = () => {
-        const id = Number(i.dataset.bt);
-        if (i.checked) chosen.add(id);
-        else chosen.delete(id);
-      };
-    });
+      box.innerHTML = list
+        .map((l) => {
+          const L = leadLine(l);
+          const checked = chosen.has(Number(l.ID)) ? "checked" : "";
+          return `
+            <div class="selLeadRow">
+              <div class="left">
+                <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer">
+                  <input type="checkbox" data-bt="${esc(l.ID)}" ${checked}/>
+                  <div>
+                    <div style="font-weight:980">${esc(L.name)}</div>
+                    <div class="small muted">
+                      Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID <b>${esc(
+            l.ID
+          )}</b>
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      box.querySelectorAll("input[data-bt]").forEach((i) => {
+        i.onchange = () => {
+          const id = Number(i.dataset.bt);
+          if (i.checked) chosen.add(id);
+          else chosen.delete(id);
+        };
+      });
+    }
+
+    opSel.onchange = render;
+    render();
 
     document.getElementById("btGo").onclick = async () => {
       try {
@@ -1694,7 +1923,7 @@
   }
 
   /* =============================
-   * 15) RENDER LEFT
+   * 16) RENDER LEFT
    * ============================= */
 
   function renderLeadCard(lead) {
@@ -1725,12 +1954,12 @@
               <select class="sel" data-moveSel="${esc(id)}">
                 ${stageOptionsHTML(lead.STATUS_ID)}
               </select>
-              <button class="btn" data-moveBtn="${esc(id)}">MOVER PARA</button>
+              <button class="btn" data-moveBtn="${esc(id)}">MOVER</button>
             `
               : ``
           }
 
-          <span class="small muted">ID: ${esc(id)}</span>
+          <span class="small muted">ID: <b>${esc(id)}</b></span>
         </div>
       </div>
     `;
@@ -1757,6 +1986,8 @@
 
     box.querySelectorAll("button[data-pick]").forEach((b) => {
       b.onclick = async () => {
+        unlockAudioOnce();
+
         const leadId = Number(b.dataset.pick);
         try {
           const front = getFrontUser();
@@ -1770,27 +2001,31 @@
           const L = leadLine(lead);
 
           openModal(`PEGAR • ${uName}`, `
-            <div class="small muted">
-              Ao confirmar, o lead será atribuído para <b>${esc(uName)}</b> e mudará para <b>EM ATENDIMENTO</b>.
-              <br/>A usuária volta automaticamente para o <b>final da fila</b>.
+            <div class="badge">Você vai transferir para: <b>${esc(uName)}</b></div>
+
+            <div style="margin-top:10px;padding:12px;border:1px solid rgba(20,30,60,.12);border-radius:14px;background:rgba(2,6,23,.02)">
+              <div style="font-weight:980;font-size:16px">${esc(L.name)}</div>
+              <div class="small muted" style="margin-top:4px">
+                Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b> • ID <b>${esc(
+            leadId
+          )}</b>
+              </div>
+              <div class="small muted" style="margin-top:4px">
+                Ao confirmar: status vira <b>EM ATENDIMENTO</b> e a usuária vai para o <b>final da fila</b>.
+              </div>
             </div>
 
             <hr class="sep"/>
 
-            <div class="badge">Lead: ${esc(L.name)} • ID ${esc(leadId)}</div>
-
-            <div class="small muted" style="margin-top:10px">
-              Operadora: <b>${esc(L.op)}</b> • Data/Hora: <b>${esc(fmtDT(L.dt))}</b>
-            </div>
-
-            <hr class="sep"/>
-
-            <div class="row">
+            <div class="row" style="justify-content:flex-end">
+              <button class="btn" id="pkCancel">Cancelar</button>
               <button class="btn primary" id="pkGo">Confirmar transferência</button>
             </div>
 
             <div class="small" id="pkStatus"></div>
           `);
+
+          document.getElementById("pkCancel").onclick = closeModal;
 
           document.getElementById("pkGo").onclick = async () => {
             const st = document.getElementById("pkStatus");
@@ -1813,7 +2048,7 @@
     box.querySelectorAll("button[data-moveBtn]").forEach((b) => {
       b.onclick = async () => {
         const leadId = Number(b.dataset.moveBtn);
-        const sel = box.querySelector(`select[data-moveSel="${String(leadId).replace(/"/g, '\\"')}"]`);
+        const sel = box.querySelector(`select[data-moveSel="${String(leadId)}"]`);
         const to = sel ? String(sel.value) : null;
         if (!to) return;
 
@@ -1831,7 +2066,7 @@
   }
 
   /* =============================
-   * 16) RENDER RIGHT
+   * 17) RENDER RIGHT
    * ============================= */
 
   function computeUserOrder() {
@@ -1913,7 +2148,7 @@
   }
 
   /* =============================
-   * 17) RENDER BOTTOM
+   * 18) RENDER BOTTOM
    * ============================= */
 
   function renderBottom() {
@@ -1950,35 +2185,71 @@
   }
 
   /* =============================
-   * 18) ALERT
+   * 19) ALERT (mais forte)
    * ============================= */
 
-  let alertTimer = null;
+  let alertFlashTimer = null;
+  let alertBeepTimer = null;
+
+  function startAlarm() {
+    document.body.classList.add("alertOn");
+
+    // pisca (opacidade)
+    const box = document.getElementById("alertBox");
+    if (box && !alertFlashTimer) {
+      alertFlashTimer = setInterval(() => {
+        box.style.opacity = box.style.opacity === "0.6" ? "1" : "0.6";
+      }, 280);
+    }
+
+    // beep repetido (a cada 4.5s)
+    if (!alertBeepTimer) {
+      // dica de áudio se não desbloqueou
+      const hint = document.getElementById("audioHint");
+      if (hint) hint.style.display = audioUnlocked ? "none" : "block";
+
+      beepTriple();
+      alertBeepTimer = setInterval(() => {
+        // só apita se som ON e áudio liberado
+        if (!isSilent && audioUnlocked) beepTriple();
+      }, 4500);
+    }
+  }
+
+  function stopAlarm() {
+    document.body.classList.remove("alertOn");
+
+    const box = document.getElementById("alertBox");
+    if (box) box.style.opacity = "1";
+
+    if (alertFlashTimer) {
+      clearInterval(alertFlashTimer);
+      alertFlashTimer = null;
+    }
+    if (alertBeepTimer) {
+      clearInterval(alertBeepTimer);
+      alertBeepTimer = null;
+    }
+  }
+
   function setAlertOn(hasNew) {
     const box = document.getElementById("alertBox");
     if (!box) return;
 
     if (hasNew) {
       box.style.display = "flex";
-      if (!alertTimer) {
-        alertTimer = setInterval(() => {
-          box.style.opacity = box.style.opacity === "0.55" ? "1" : "0.55";
-        }, 350);
-      }
-      beep();
+      startAlarm();
     } else {
       box.style.display = "none";
-      box.style.opacity = "1";
-      if (alertTimer) {
-        clearInterval(alertTimer);
-        alertTimer = null;
-      }
+      stopAlarm();
     }
   }
 
   /* =============================
-   * 19) REFRESH
+   * 20) REFRESH (rápido + completo)
    * ============================= */
+
+  let lastNewTopId = null;
 
   async function refreshLeft(force) {
     const leadBox = document.getElementById("leadList");
@@ -1988,10 +2259,15 @@
       { STATUS_ID: CFG.LEAD_STATUS.NEW },
       null,
       { DATE_CREATE: "DESC" },
-      120
+      200
     );
 
     cachedNewLeads = leads;
+
+    // guarda topo
+    const topId = leads && leads[0] ? String(leads[0].ID) : null;
+    if (force || lastNewTopId === null) lastNewTopId = topId;
+
     setAlertOn(leads.length > 0);
 
     leadBox.innerHTML =
@@ -2022,16 +2298,49 @@
     }
   }
 
+  // ✅ “fast poll” para detectar novo lead sem esperar o refresh completo
+  async function fastPollNewLead() {
+    try {
+      const mini = await listLeads(
+        { STATUS_ID: CFG.LEAD_STATUS.NEW },
+        ["ID", CFG.UF_OPERADORA, CFG.UF_DT_LEAD, "DATE_CREATE", "NAME", "LAST_NAME", "TITLE", "STATUS_ID"],
+        { DATE_CREATE: "DESC" },
+        1
+      );
+
+      const topId = mini && mini[0] ? String(mini[0].ID) : null;
+
+      if (topId && lastNewTopId && topId !== lastNewTopId) {
+        // novo lead entrou -> atualiza coluna da esquerda imediatamente
+        lastNewTopId = topId;
+        await refreshLeft(true);
+      }
+
+      if (!topId && lastNewTopId) {
+        // zerou novos
+        lastNewTopId = null;
+        setAlertOn(false);
+      }
+    } catch (e) {
+      // silencioso (evita poluir console)
+    }
+  }
+
   /* =============================
-   * 20) AUTO-REFRESH
+   * 21) INIT + AUTO
    * ============================= */
 
   ensureQueueValid();
   renderBottom();
   renderRightUsers();
+
   refreshAll(true).catch(console.error);
 
   setInterval(() => {
     refreshAll(false).catch(console.error);
   }, CFG.REFRESH_MS);
+
+  setInterval(() => {
+    fastPollNewLead().catch(() => {});
+  }, CFG.FAST_POLL_MS);
 })();
