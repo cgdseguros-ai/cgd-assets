@@ -1,6 +1,6 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - SEM storage do navegador (fila, ocultar usuárias e etc ficam no Bitrix via QUEUE_JSON)
-   - FILA multi-PC via QUEUE_JSON (Pipeline 27 / Stage QUEUE_JSON)
+   - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - Fila multi-PC e ocultar usuárias via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Layout/estética MANTIDOS (não alterar estética)
    - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
 */
@@ -13,30 +13,64 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up (PRAZO MÁXIMO — NEGÓCIOS PIPELINE 17)
+    // ✅ Campo UF usado no Follow-up (no DEAL da PIPELINE 17 — PRAZO MÁXIMO)
     UF_PRAZO: "UF_CRM_1768175087",
+
+    // Campos no card/badges (se existirem)
+    UF_OPERADORA: "UF_CRM_1771282782",
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
+    UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
+    UF_FONTE:     "UF_CRM_1767285733843",
 
     // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
-      STAGE_ID: "C27:UC_SVUYIO",          // QUEUE_JSON → C27:UC_SVUYIO
-      UF_QUEUE_JSON: "UF_CRM_1771293519", // QUEUE_JSON (campo)
+      STAGE_ID: "C27:UC_SVUYIO",
+      UF_QUEUE_JSON: "UF_CRM_1771293519",
       TITLE_KEY: "__QUEUE__CGD__"
+    },
+
+    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
+    FOLLOWUP_DEALS: {
+      CATEGORY_ID: 17,
+      // STAGE_ID por usuária (coluna da usuária)
+      STAGE_BY_USER: {
+        "15":   "C17:UC_FQ8UPI",   // ALINE
+        "19":   "C17:UC_1HXNTB",   // ADRIANA
+        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
+        "23":   "C17:UC_4HQGI1",   // MARIANA
+        "811":  "C17:UC_8Y4R4V",   // JOSIANE
+        "3081": "C17:EXECUTING",   // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",   // GABRIEL
+        "3387": "C17:UC_RXISLQ"    // BEATRIZ
+      }
     },
 
     // Logo (+30% em cima do que já estava)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
 
-    // Refresh
+    // Links GET (equipes)
+    GET_LINKS: {
+      "DELTA": "https://getcgdcorretora.bitrix24.site/equipedelta/",
+      "BETA":  "https://getcgdcorretora.bitrix24.site/equipebeta/",
+      "ALPHA": "https://getcgdcorretora.bitrix24.site/equipeALPHA/"
+    },
+
+    // Refresh (mantendo seus tempos)
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
     REFRESH_WHO_MS: 6000,
 
     // Limites
-    LIMIT_NEW: 30,              // cards renderizados (mantido)
-    LIMIT_NEW_TOTAL_SCAN: 800,  // varredura p/ totais (mantido, não altera estética)
-    LIMIT_USER_HISTORY: 60,
+    LIMIT_NEW_RENDER: 30,          // renderiza 30 (visual), mas busca/conta mais no background
+    LIMIT_BATCH_MAX:  600,         // transferir lote (puxa até 600 pendentes)
+    LIMIT_USER_LAST:  120,         // histórico por usuária (2 últimos + lista p/ abrir)
 
     // Usuárias do painel
     USERS: [
@@ -54,7 +88,7 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // ✅ Status/Stages de LEADS (Bitrix — SEUS IDs REAIS)
+    // ✅ Status/Stages de LEADS (seus IDs reais)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -63,28 +97,7 @@
       CONVERTIDO: "UC_B3RQAF",
     },
 
-    // Pipeline 17 (Negócios) — Follow-up vira CARD na coluna da usuária
-    FOLLOWUP_DEALS: {
-      CATEGORY_ID: 17,
-      // STAGE_IDs da Pipeline 17 (colunas das usuárias)
-      STAGE_BY_USER: {
-        "15":   "C17:UC_FQ8UPI",   // ALINE
-        "19":   "C17:UC_1HXNTB",   // ADRIANA
-        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
-        "23":   "C17:UC_4HQGI1",   // MARIANA
-        "811":  "C17:UC_8Y4R4V",   // JOSIANE
-        "3081": "C17:EXECUTING",   // BRUNA LUISA
-        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
-        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
-        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
-        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
-        "815":  "C17:UC_ZT6WEB",   // GABRIEL
-        "3387": "C17:UC_RXISLQ",   // BEATRIZ
-      },
-      DEFAULT_STAGE_ID: "C17:NEW"
-    },
-
-    // Campos do lead para exibir nos badges (se existirem)
+    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
@@ -93,7 +106,6 @@
       "UF_*"
     ],
 
-    // Badge “quente”
     HOT_EMOJI: "🔥"
   };
 
@@ -111,8 +123,7 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
   function todayISOStart(){
-    const d = new Date();
-    d.setHours(0,0,0,0);
+    const d = new Date(); d.setHours(0,0,0,0);
     const y = d.getFullYear();
     const m = String(d.getMonth()+1).padStart(2,"0");
     const da= String(d.getDate()).padStart(2,"0");
@@ -132,6 +143,58 @@
     const dt = new Date(y, mo, d, hh, mi, 0, 0);
     if(Number.isNaN(dt.getTime())) return "";
     return dt.toISOString();
+  }
+  function fmtDateBRFromISO(iso){
+    if(!iso) return "";
+    const t = Date.parse(String(iso));
+    if(!Number.isFinite(t)) return String(iso);
+    const d = new Date(t);
+    const dd = String(d.getDate()).padStart(2,"0");
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const yy = d.getFullYear();
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  // ✅ (1) Parse robusto da data do lead (ISO, DD/MM/AAAA, DD/MM/AAAA HH:MM, etc.)
+  function parseLeadDateToYMD(val){
+    const s = String(val||"").trim();
+    if(!s) return "";
+
+    // ISO / Date.parse padrão
+    const t = Date.parse(s);
+    if(Number.isFinite(t)){
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const da= String(d.getDate()).padStart(2,"0");
+      return `${y}-${m}-${da}`;
+    }
+
+    // DD/MM/AAAA ou DD/MM/AAAA HH:MM
+    let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?$/);
+    if(m){
+      const dd=m[1], mm=m[2], yy=m[3];
+      return `${yy}-${mm}-${dd}`;
+    }
+
+    // AAAA-MM-DD ou AAAA-MM-DD HH:MM
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2}))?$/);
+    if(m){
+      return `${m[1]}-${m[2]}-${m[3]}`;
+    }
+
+    return "";
+  }
+
+  // ✅ (3) Nome amigável do STAGE do Lead
+  function leadStageName(statusId){
+    const st = String(statusId||"");
+    if(st === CONFIG.LEAD_STATUS.NOVO_LEAD) return "NOVO LEAD";
+    if(st === CONFIG.LEAD_STATUS.EM_ATENDIMENTO) return "EM ATENDIMENTO";
+    if(st === CONFIG.LEAD_STATUS.QUALIFICADO) return "QUALIFICADO";
+    if(st === CONFIG.LEAD_STATUS.PERDIDO) return "PERDIDO";
+    if(st === CONFIG.LEAD_STATUS.CONVERTIDO) return "CONVERTIDO";
+    return st || "—";
   }
 
   // =========================
@@ -175,25 +238,59 @@
     return data.result;
   }
 
-  async function bxListAll(method, params, max=200){
+  // Paginação robusta (resolve “só 50/30”)
+  async function bxListAll(method, params, max=500){
     let start = 0;
     let out = [];
     while(true){
       const r = await bx(method, { ...params, start });
-      if(Array.isArray(r)){
-        out = out.concat(r);
-        break;
-      }
-      if(r && Array.isArray(r.items)){
-        out = out.concat(r.items);
-        if(!r.next) break;
-        start = r.next;
-      }else{
-        break;
-      }
+      const items = Array.isArray(r) ? r : (r && Array.isArray(r.items) ? r.items : []);
+      out = out.concat(items);
       if(out.length >= max) break;
+
+      if(r && typeof r === "object" && r.next !== undefined && r.next !== null){
+        start = r.next;
+        if(!start) break;
+      }else{
+        if(items.length < 50) break;
+        start = start + 50;
+      }
+
+      if(items.length === 0) break;
     }
     return out.slice(0, max);
+  }
+
+  // =========================
+  // “Offline”: fila de ações (só RAM)
+  // - NÃO mostra mensagem na tela
+  // - Executa UI otimista e tenta sincronizar quando normalizar
+  // =========================
+  const pendingOps = []; // { name, run: async()=>void }
+
+  function enqueueOp(name, run){
+    pendingOps.push({ name, run });
+  }
+
+  let flushBusy = false;
+  async function flushOps(){
+    if(flushBusy) return;
+    if(pendingOps.length === 0) return;
+    flushBusy = true;
+    try{
+      for(let i=0; i<25 && pendingOps.length; i++){
+        const op = pendingOps[0];
+        try{
+          await op.run();
+          pendingOps.shift();
+          await sleep(90);
+        }catch(_){
+          break;
+        }
+      }
+    } finally{
+      flushBusy = false;
+    }
   }
 
   // =========================
@@ -433,7 +530,7 @@
   padding: 10px 12px;
   display:flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .cgdQueueChip{
@@ -449,12 +546,15 @@
   color: rgba(18,26,40,.60);
   font-weight: 900;
 }
-.cgdOffline{
-  display:none;
-  margin-top: 6px;
-  font-size: 11px;
-  font-weight: 950;
-  color: rgba(160,0,40,.82);
+
+/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
+#listWho.cgdWhoGrid{
+  display:grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 1100px){
+  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
 /* ===== Modals modernos (mantidos) ===== */
@@ -470,7 +570,7 @@
   padding: 16px;
 }
 .cgdModal{
-  width: min(980px, 96vw);
+  width: min(1040px, 96vw);
   max-height: min(88vh, 900px);
   background: rgba(255,255,255,.94);
   border: 1px solid rgba(30,40,70,.16);
@@ -526,21 +626,11 @@
   padding: 10px 10px;
   border-bottom: 1px solid rgba(30,40,70,.10);
   font-size: 12px;
+  vertical-align: top;
 }
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
-#listWho.cgdWhoGrid{
-  display:grid !important;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-@media (max-width: 1100px){
-  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
-}
-
-/* ===== Forçar rodapé Bitrix no final (mantido) ===== */
 .bitrix-footer{
   position: fixed !important;
   left: 0 !important;
@@ -601,15 +691,17 @@ body{ padding-bottom: 90px !important; }
   const state = {
     soundOn: true,
     lastNewLeadId: null,
-    newLeads: [],
+    newLeadsAll: [],
+    newLeadsRender: [],
+    pendingCount: 0,
     stats: { day:0, month:0 },
-    userStats: {},      // id -> {pulledToday, last:[...]}
+    userStats: {},
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    netOk: true
+    lastServedUserName: "—"
   };
 
   // =========================
-  // Mount (mantido)
+  // Mount
   // =========================
   function mount(){
     let root = document.getElementById("cgd-leads-root");
@@ -626,6 +718,7 @@ body{ padding-bottom: 90px !important; }
             <div class="cgdTitle">PAINEL DE LEADS • CGD CORRETORA</div>
           </div>
           <div class="cgdTopRight">
+            <div class="cgdPill" id="pillPending">Pendentes: 0</div>
             <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
             <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
             <button class="cgdBtn" id="btnGet">GET (Equipes)</button>
@@ -658,7 +751,6 @@ body{ padding-bottom: 90px !important; }
                   <button class="cgdBtn" id="btnSoundOn" style="display:none">Ligar som</button>
                 </div>
               </div>
-              <div class="cgdOffline" id="offlineNew">Sem conexão agora. Mantendo os dados atuais.</div>
               <div style="opacity:.7;font-weight:900">Carregando…</div>
             </div>
           </section>
@@ -680,15 +772,17 @@ body{ padding-bottom: 90px !important; }
           </section>
         </div>
 
+        <!-- ✅ Barra inferior em 2 linhas e FILA unificado com FILA DE ATENDIMENTO -->
         <div class="cgdBottom">
           <div class="cgdQueueRow" id="queueRow">
-            <!-- ✅ (ALTERAÇÃO #2) unificado: botão = “Fila de atendimento” -->
-            <button class="cgdBtn" id="btnQueue"><b>Fila de atendimento</b></button>
-            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila de atendimento e selecione quem entra.</div>
+            <div class="cgdQueueChip"><b>Fila de atendimento</b></div>
+            <button class="cgdBtn" id="btnQueue">Fila</button>
+            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
           </div>
           <div class="cgdQueueRow">
             <button class="cgdBtn" id="btnQueueReset">Resetar</button>
             <button class="cgdBtn" id="btnNext">Próxima disponível</button>
+            <div class="cgdQueueChip">Última: <b id="lastServed">—</b></div>
             <div class="cgdStatusLine" id="statusLine">Atualizado: —</div>
           </div>
         </div>
@@ -699,13 +793,22 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // LEADS: fetch / actions
   // =========================
-  async function fetchNewLeads(limit){
+  async function fetchNewLeadsAll(){
     const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
-    }, limit || CONFIG.LIMIT_NEW);
+    }, CONFIG.LIMIT_BATCH_MAX);
     return items || [];
+  }
+
+  async function fetchNewLeadsCount(){
+    const items = await bxListAll("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      order: { ID: "DESC" },
+      select: ["ID"]
+    }, 2000);
+    return (items||[]).length;
   }
 
   async function fetchStats(){
@@ -713,78 +816,134 @@ body{ padding-bottom: 90px !important; }
     const startMonth = monthISOStart();
 
     const dayItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startToday },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 500);
+    }, 2000);
 
     const monthItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startMonth },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 1500);
+    }, 4000);
 
     return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
 
-  async function fetchUserHistory(userId){
-    const startToday = todayISOStart();
+  function leadDisplayName(it){
+    const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
+    if(nm) return nm;
+    const t = String(it.TITLE||"").trim();
+    if(t && !/^Lead\s*#\d+$/i.test(t)) return t;
+    if(t) return t;
+    return `Lead #${it.ID}`;
+  }
 
-    const today = await bxListAll("crm.lead.list", {
-      filter: {
-        "ASSIGNED_BY_ID": String(userId),
-        ">DATE_MODIFY": startToday
-      },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, 200);
+  function pickUF(it, key){
+    try{
+      return it && Object.prototype.hasOwnProperty.call(it, key) ? it[key] : (it ? it[key] : "");
+    }catch(_){ return ""; }
+  }
 
-    const last = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId) },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, CONFIG.LIMIT_USER_HISTORY);
+  function leadBadgesRich(it){
+    const b = [];
+    const oper = pickUF(it, CONFIG.UF_OPERADORA);
+    const idade = pickUF(it, CONFIG.UF_IDADE);
+    const bairro= pickUF(it, CONFIG.UF_BAIRRO);
+    const fonte = pickUF(it, CONFIG.UF_FONTE);
+    const dtuf  = pickUF(it, CONFIG.UF_DT_LEAD);
 
-    return { pulledToday: (today||[]).length, last: (last||[]) };
+    // ✅ mostra a data no badge (tenta formatar por parse robusto)
+    const ymd = parseLeadDateToYMD(dtuf);
+    const dt = ymd ? `${ymd.slice(8,10)}/${ymd.slice(5,7)}/${ymd.slice(0,4)}` : (dtuf ? fmtDateBRFromISO(dtuf) : "");
+
+    if(oper)  b.push(["OPERADORA", oper]);
+    if(idade) b.push(["IDADE", idade]);
+    if(bairro)b.push(["BAIRRO", bairro]);
+    if(fonte) b.push(["FONTE", fonte]);
+    if(dt)    b.push(["DATA", dt]);
+
+    if(b.length < 2){
+      if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
+      if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
+    }
+    return b.slice(0, 6);
   }
 
   async function leadUpdate(id, fields){
     return bx("crm.lead.update", { id: String(id), fields });
   }
 
-  async function actionPickLead(leadId, userId){
-    // ✅ ao pegar: muda responsável + stage EM ATENDIMENTO
-    await leadUpdate(leadId, {
-      ASSIGNED_BY_ID: String(userId),
-      STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+  // ✅ Mantido: prazo no LEAD pode existir, mas FOLLOW-UP (Deal) grava PRAZO no DEAL (ver createFollowUpDeal)
+  async function actionSetPrazoLead(leadId, iso){
+    enqueueOp("setPrazoLead", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
     });
+    flushOps();
+  }
+
+  async function actionPickLead(leadId, userId){
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+
+    enqueueOp("pickLead", async ()=>{
+      await leadUpdate(leadId, {
+        ASSIGNED_BY_ID: String(userId),
+        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+      });
+    });
+    flushOps();
   }
 
   async function actionDiscardLead(leadId){
-    // ✅ descartar: vai para PERDIDO
-    await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+
+    enqueueOp("discardLead", async ()=>{
+      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    });
+    flushOps();
   }
 
   async function actionMoveLead(leadId, statusId){
-    const fields = { STATUS_ID: statusId };
-    if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-      // marca 🔥 no título, sem duplicar
-      const lead = await bx("crm.lead.get", { id: String(leadId) });
-      const t = String(lead?.TITLE||"");
-      if(!t.includes(CONFIG.HOT_EMOJI)){
-        fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
+    enqueueOp("moveLead", async ()=>{
+      const fields = { STATUS_ID: statusId };
+      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
+        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const t = String(lead?.TITLE||"").trim();
+        if(!t.startsWith(CONFIG.HOT_EMOJI)){
+          fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
+        }
       }
-    }
-    await leadUpdate(leadId, fields);
+      await leadUpdate(leadId, fields);
+    });
+    flushOps();
   }
 
-  async function actionSetPrazo(leadId, iso){
-    await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+  // ✅ (4) FOLLOW-UP: grava PRAZO MÁXIMO no DEAL da Pipeline 17 (UF_CRM_1768175087)
+  async function createFollowUpDeal(userId, lead, prazoIso){
+    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
+    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
+    enqueueOp("createDealFollowUp", async ()=>{
+      const fields = {
+        CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+        STAGE_ID: stage || "C17:NEW",
+        ASSIGNED_BY_ID: String(userId),
+        TITLE: title,
+        COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
+      };
+      if(prazoIso){
+        fields[CONFIG.UF_PRAZO] = prazoIso; // ✅ PRAZO MÁXIMO no DEAL
+      }
+      await bx("crm.deal.add", { fields });
+    });
+    flushOps();
   }
 
   // =========================
-  // Queue JSON via Pipeline 27 (compartilhado multi-PC)
-  // payload: { v, order:[], hiddenUsers:[], updatedAt }
+  // Queue JSON via Pipeline 27 (multi-PC)
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -842,39 +1001,12 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Render helpers
+  // Render
   // =========================
-  function leadDisplayName(it){
-    // prioriza TITLE (mantém estética do card)
-    const t = String(it.TITLE||"").trim();
-    if(t) return t;
-    const parts = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String);
-    return parts.join(" ").trim() || `Lead #${it.ID}`;
-  }
-
-  // ✅ (ALTERAÇÃO #3) STAGE/NOME para exibir no ABRIR
-  function leadStageLabel(statusId){
-    const s = String(statusId||"");
-    if(s === CONFIG.LEAD_STATUS.NOVO_LEAD) return "NOVO LEAD";
-    if(s === CONFIG.LEAD_STATUS.EM_ATENDIMENTO) return "EM ATENDIMENTO";
-    if(s === CONFIG.LEAD_STATUS.QUALIFICADO) return "QUALIFICADO";
-    if(s === CONFIG.LEAD_STATUS.PERDIDO) return "PERDIDO";
-    if(s === CONFIG.LEAD_STATUS.CONVERTIDO) return "CONVERTIDO";
-    if(s === "CONVERTED") return "LEAD CONVERTIDO";
-    if(s === "JUNK") return "DESCARTADO";
-    return s;
-  }
-
-  function badgesFromLead(it){
-    const b = [];
-
-    if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
-    if(it.ADDRESS_CITY) b.push(["CIDADE", it.ADDRESS_CITY]);
-    if(it.ADDRESS_REGION) b.push(["REGIÃO", it.ADDRESS_REGION]);
-    if(it.STATUS_ID) b.push(["STATUS", leadStageLabel(it.STATUS_ID)]);
-    if(it.DATE_CREATE) b.push(["DATA", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
-
-    return b.slice(0, 6);
+  function renderPendingCount(n){
+    state.pendingCount = n || 0;
+    const el = $("#pillPending");
+    if(el) el.textContent = `Pendentes: ${state.pendingCount}`;
   }
 
   function renderNewLeads(items){
@@ -882,19 +1014,14 @@ body{ padding-bottom: 90px !important; }
     if(!list) return;
 
     const alert = $("#alertNew");
-    const offline = $("#offlineNew");
-    const btnSoundOn = $("#btnSoundOn");
-
     list.innerHTML = "";
     if(alert) list.appendChild(alert);
-    if(offline) list.appendChild(offline);
 
     const has = (items||[]).length > 0;
     if(alert) alert.style.display = has ? "flex" : "none";
 
-    if(btnSoundOn){
-      btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
-    }
+    const btnSoundOn = $("#btnSoundOn");
+    if(btnSoundOn) btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
 
     if(!has){
       const empty = document.createElement("div");
@@ -908,14 +1035,12 @@ body{ padding-bottom: 90px !important; }
     (items||[]).forEach(it=>{
       const id = String(it.ID||"");
       const title = leadDisplayName(it);
-
-      const card = document.createElement("div");
-      card.className = "cgdCard";
-
-      const badges = badgesFromLead(it).map(([k,v]) =>
+      const badges = leadBadgesRich(it).map(([k,v]) =>
         `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`
       ).join("");
 
+      const card = document.createElement("div");
+      card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdCardRow">
           <div class="cgdLeadName">${esc(title)}</div>
@@ -936,18 +1061,15 @@ body{ padding-bottom: 90px !important; }
     $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
   }
 
-  // ordenação: ultima que puxou -> fila -> fora
   function computeUserOrder(){
     const users = CONFIG.USERS.slice();
-
     const queueSet = new Set((state.queue.order||[]).map(String));
     const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
-
     const visible = users.filter(u => !hiddenSet.has(String(u.id)));
 
     function lastTs(u){
       const h = state.userStats[u.id];
-      const d = h?.last?.[0]?.DATE_MODIFY;
+      const d = h?.lastTwo?.[0]?.DATE_MODIFY;
       if(!d) return 0;
       const t = Date.parse(String(d));
       return Number.isFinite(t) ? t : 0;
@@ -968,19 +1090,22 @@ body{ padding-bottom: 90px !important; }
     list.innerHTML = "";
 
     const ordered = computeUserOrder();
-
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, last:[] };
-      const last1 = us.last && us.last[0] ? `Último: ${us.last[0].TITLE || ("#"+us.last[0].ID)}` : "Último: —";
-      const last2 = us.last && us.last[1] ? `Anterior: ${us.last[1].TITLE || ("#"+us.last[1].ID)}` : "Anterior: —";
+      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const l1 = us.lastTwo[0];
+      const l2 = us.lastTwo[1];
+
+      const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
+      const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdCardRow">
           <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
-          <div style="display:flex; gap:8px; align-items:center">
-            <span class="cgdBadge">puxados hoje: ${esc(us.pulledToday||0)}</span>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+            <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
+            <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
             <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
           </div>
         </div>
@@ -1004,21 +1129,22 @@ body{ padding-bottom: 90px !important; }
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
-    // ✅ (ALTERAÇÃO #2) agora são 2 fixos: [0]=btnQueue, [1]=hint
     const keepA = row.children[0];
     const keepB = row.children[1];
-
     row.innerHTML = "";
     if(keepA) row.appendChild(keepA);
     if(keepB) row.appendChild(keepB);
 
     const order = state.queue.order || [];
     if(order.length === 0){
-      hint.textContent = "Fila vazia. Clique em Fila de atendimento e selecione quem entra.";
+      hint.textContent = "Fila vazia. Clique em Fila e selecione quem entra.";
+      row.appendChild(hint);
       return;
     }
 
     hint.textContent = "";
+    row.appendChild(hint);
+
     order.forEach((id, idx)=>{
       const u = CONFIG.USERS.find(x=> String(x.id)===String(id));
       const chip = document.createElement("div");
@@ -1032,10 +1158,48 @@ body{ padding-bottom: 90px !important; }
     const el = $("#statusLine");
     if(el) el.textContent = txt;
   }
-  function setOffline(flag){
-    state.netOk = !flag;
-    const off = $("#offlineNew");
-    if(off) off.style.display = flag ? "block" : "none";
+  function setLastServed(name){
+    state.lastServedUserName = name || "—";
+    const el = $("#lastServed");
+    if(el) el.textContent = state.lastServedUserName;
+  }
+
+  // =========================
+  // Fetch Usuárias (SEM storage) — usa DATE_MODIFY
+  // =========================
+  async function fetchUserStats(userId){
+    const startToday = todayISOStart();
+    const startMonth = monthISOStart();
+
+    const pulledToday = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID"]
+    }, 2000);
+
+    const pulledMonth = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID"]
+    }, 6000);
+
+    const last = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, CONFIG.LIMIT_USER_LAST);
+
+    const lastTwo = (last||[]).filter(x=>{
+      const st = String(x.STATUS_ID||"");
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO;
+    }).slice(0,2);
+
+    return {
+      pulledToday: (pulledToday||[]).length,
+      pulledMonth: (pulledMonth||[]).length,
+      lastTwo,
+      list: last || []
+    };
   }
 
   // =========================
@@ -1043,23 +1207,45 @@ body{ padding-bottom: 90px !important; }
   // =========================
   function modalGetEquipes(){
     const body = `
-      <div style="font-weight:900; opacity:.8; margin-bottom:10px">
-        GET (Equipes) — (atalhos/regras podem ser colocados aqui depois).
+      <div style="font-weight:950; margin-bottom:10px">GET (Equipes)</div>
+      <div class="cgdRow" style="margin-bottom:12px">
+        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.DELTA)}" target="_blank" rel="noopener">Equipe DELTA</a>
+        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.BETA)}" target="_blank" rel="noopener">Equipe BETA</a>
+        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.ALPHA)}" target="_blank" rel="noopener">Equipe ALPHA</a>
       </div>
-      <div class="cgdRow">
-        <button class="cgdBtn" data-close-modal>Ok</button>
-      </div>
+      <div style="font-size:11px;font-weight:900;opacity:.75">Abre em nova guia.</div>
     `;
     openModal("GET (Equipes)", body);
   }
 
   async function modalQueue(){
-    const q = await fetchQueue().catch(()=>null);
-    if(!q) return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
+    openModal("FILA", `<div style="font-weight:900;opacity:.75">Carregando fila…</div>`);
+    let q;
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("FILA", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
 
     state.queue = { ...state.queue, ...q };
+    const current = q.order || [];
+    const currentSet = new Set(current.map(String));
 
-    const currentSet = new Set((q.order||[]).map(String));
+    function rowFor(u){
+      const checked = currentSet.has(String(u.id)) ? "checked" : "";
+      return `<tr data-u="${esc(u.id)}">
+        <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
+        <td>
+          <b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span>
+          <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
+            <button class="cgdBtn" data-up="${esc(u.id)}">↑</button>
+            <button class="cgdBtn" data-down="${esc(u.id)}">↓</button>
+          </div>
+        </td>
+      </tr>`;
+    }
+
     const body = `
       <div style="font-weight:950; margin-bottom:10px">Gerenciar fila (sincroniza em todos os PCs)</div>
 
@@ -1069,71 +1255,81 @@ body{ padding-bottom: 90px !important; }
         <button class="cgdBtn" id="qApply">Aplicar alterações</button>
       </div>
 
+      <div style="font-weight:900;opacity:.75;margin:6px 0 10px">
+        Dica: use ↑ ↓ para reordenar visualmente.
+      </div>
+
       <table class="cgdTable">
         <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
-        <tbody id="qTbody">
-          ${CONFIG.USERS.map(u=>{
-            const checked = currentSet.has(String(u.id)) ? "checked" : "";
-            return `<tr>
-              <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
-              <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
-            </tr>`;
-          }).join("")}
-        </tbody>
+        <tbody id="qTbody">${CONFIG.USERS.map(rowFor).join("")}</tbody>
       </table>
-
-      <div style="margin-top:10px;font-size:11px;font-weight:900;opacity:.7">
-        Atualizado: ${q.updatedAt ? new Date(q.updatedAt).toLocaleString("pt-BR") : "—"}
-      </div>
     `;
 
-    openModal("FILA", body, `
-      <button class="cgdBtn" data-close-modal>Fechar</button>
-    `);
+    openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+
+    const tbody = $("#qTbody");
+    const getChecked = ()=> $$('input[type=checkbox][data-q-user]', tbody)
+      .filter(ch=>ch.checked)
+      .map(ch=> String(ch.getAttribute("data-q-user")));
+
+    function moveInTable(userId, dir){
+      const tr = tbody.querySelector(`tr[data-u="${CSS.escape(String(userId))}"]`);
+      if(!tr) return;
+      if(dir==="up" && tr.previousElementSibling){
+        tbody.insertBefore(tr, tr.previousElementSibling);
+      }
+      if(dir==="down" && tr.nextElementSibling){
+        tbody.insertBefore(tr.nextElementSibling, tr);
+      }
+    }
+
+    tbody.addEventListener("click", (e)=>{
+      const up = e.target.closest("[data-up]");
+      const dn = e.target.closest("[data-down]");
+      if(up) moveInTable(up.getAttribute("data-up"), "up");
+      if(dn) moveInTable(dn.getAttribute("data-down"), "down");
+    });
 
     $("#qAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = true);
     });
     $("#qNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = false);
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = false);
     });
 
     $("#qApply")?.addEventListener("click", async ()=>{
+      const btn = $("#qApply");
       try{
-        $("#qApply").disabled = true;
+        btn.disabled = true;
 
-        const checked = $$('input[type=checkbox][data-q-user]')
-          .filter(ch=>ch.checked)
-          .map(ch=> String(ch.getAttribute("data-q-user")));
-
-        const prev = (q.order||[]).map(String);
-        const next = [];
-        for(const id of prev){ if(checked.includes(id)) next.push(id); }
-        for(const id of checked){ if(!next.includes(id)) next.push(id); }
+        const visualOrder = $$("tr[data-u]", tbody).map(tr=> String(tr.getAttribute("data-u")));
+        const checked = new Set(getChecked());
+        const next = visualOrder.filter(id=> checked.has(id));
 
         await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
 
         const fresh = await fetchQueue();
-        q.order = fresh.order;
-        q.hiddenUsers = fresh.hiddenUsers;
-        q.updatedAt = fresh.updatedAt;
-
         state.queue = { ...state.queue, ...fresh };
         renderQueue();
         renderWho();
         setStatus(`Atualizado: ${nowBRTime()}`);
       }catch(err){
         console.error(err);
-        alert("Falha ao salvar fila agora. Mantive o painel.");
       }finally{
-        $("#qApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
 
   async function modalHideUsers(){
-    const q = await fetchQueue().catch(()=>null);
-    if(!q) return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
+    openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
+    let q;
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
 
     const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
 
@@ -1159,17 +1355,16 @@ body{ padding-bottom: 90px !important; }
       </table>
     `;
 
-    openModal("OCULTAR USUÁRIAS", body, `
-      <button class="cgdBtn" data-close-modal>Fechar</button>
-    `);
+    openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
     $("#huNone")?.addEventListener("click", ()=>{
       $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
     });
 
     $("#huApply")?.addEventListener("click", async ()=>{
+      const btn = $("#huApply");
       try{
-        $("#huApply").disabled = true;
+        btn.disabled = true;
         const hidden = $$('input[type=checkbox][data-hu-user]')
           .filter(ch=> ch.checked)
           .map(ch=> String(ch.getAttribute("data-hu-user")));
@@ -1183,66 +1378,257 @@ body{ padding-bottom: 90px !important; }
         setStatus(`Atualizado: ${nowBRTime()}`);
       }catch(err){
         console.error(err);
-        alert("Falha ao salvar agora. Mantive o painel.");
       }finally{
-        $("#huApply").disabled = false;
+        btn.disabled = false;
       }
     });
   }
 
-  // =========================
-  // Follow-up (Cria Deal na Pipeline 17)
-  // =========================
-  async function createFollowUpDeal(userId, lead, isoPrazo){
-    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)] || CONFIG.FOLLOWUP_DEALS.DEFAULT_STAGE_ID;
-    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
 
-    const fields = {
-      CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
-      STAGE_ID: stage,
-      ASSIGNED_BY_ID: String(userId),
-      TITLE: title,
-      COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
-    };
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="pickFirst">Pegar para a 1ª da fila</button>
+      </div>
 
-    // ✅ (ALTERAÇÃO #4) PRAZO MÁXIMO no NEGÓCIO (UF_CRM_1768175087)
-    if(isoPrazo){
-      fields[CONFIG.UF_PRAZO] = isoPrazo;
-    }
+      <div style="height:1px;background:rgba(30,40,70,.10);margin:10px 0"></div>
 
-    await bx("crm.deal.add", { fields });
+      <div style="font-weight:950;margin-bottom:8px">Ou selecionar usuária:</div>
+      <div class="cgdRow">
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+        <button class="cgdBtn" id="pickGo">Confirmar</button>
+      </div>
+      <div style="font-size:11px;font-weight:900;opacity:.75;margin-top:10px">
+        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+      </div>
+    `;
+    openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
+
+    $("#pickFirst")?.addEventListener("click", async ()=>{
+      const btn = $("#pickFirst");
+      try{
+        btn.disabled = true;
+
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const order = (q.order||[]).slice();
+        if(order.length === 0) return;
+
+        const firstId = order.shift();
+        order.push(firstId);
+
+        state.queue.order = order.slice();
+        renderQueue();
+        setLastServed((CONFIG.USERS.find(x=>String(x.id)===String(firstId))||{}).name || ("USER "+firstId));
+        setStatus(`Próxima: ${state.lastServedUserName} • ${nowBRTime()}`);
+
+        enqueueOp("saveQueueRotate", async ()=>{
+          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+        });
+        flushOps();
+
+        await actionPickLead(leadId, firstId);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      const btn = $("#pickGo");
+      try{
+        btn.disabled = true;
+        const uid = $("#pickUser").value;
+        await actionPickLead(leadId, uid);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
   }
 
-  // =========================
-  // ✅ Modal ABRIR (Gerenciar Usuária)
-  // =========================
+  async function modalBatchTransfer(){
+    openModal("TRANSFERIR EM LOTE", `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+      <div style="opacity:.75;font-weight:900">Carregando leads pendentes…</div>
+    `);
+
+    let all;
+    try{
+      all = state.newLeadsAll && state.newLeadsAll.length ? state.newLeadsAll.slice() : await fetchNewLeadsAll();
+    }catch(_){
+      closeModal();
+      return openModal("TRANSFERIR EM LOTE", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    const opsUser = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+
+    function uniq(arr){
+      const s = new Set(arr.filter(Boolean).map(String));
+      return Array.from(s).sort((a,b)=> String(a).localeCompare(String(b)));
+    }
+
+    const operadoras = uniq(all.map(it=> pickUF(it, CONFIG.UF_OPERADORA)));
+    const opsOper = [`<option value="ALL">Todas</option>`].concat(
+      operadoras.map(o=> `<option value="${esc(o)}">${esc(o)}</option>`)
+    ).join("");
+
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Operadora:</label>
+        <select class="cgdSelect" id="btOper">${opsOper}</select>
+
+        <label style="font-weight:950">Data do Lead:</label>
+        <input class="cgdInput" type="date" id="btDate" />
+
+        <label style="font-weight:950">Transferir para:</label>
+        <select class="cgdSelect" id="btUser">${opsUser}</select>
+
+        <button class="cgdBtn" id="btApply">Aplicar filtro</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Leads listados: <b id="btCount">0</b></div>
+        <div class="cgdBadge">Pendentes total: <b>${esc(state.pendingCount||all.length)}</b></div>
+      </div>
+
+      <table class="cgdTable">
+        <thead>
+          <tr>
+            <th style="width:80px">Sel.</th>
+            <th>Lead</th>
+            <th style="width:260px">Info</th>
+          </tr>
+        </thead>
+        <tbody id="btTbody"></tbody>
+      </table>
+    `;
+
+    openModal("TRANSFERIR EM LOTE", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
+    `);
+
+    const tbody = $("#btTbody");
+    const countEl = $("#btCount");
+
+    // ✅ (1) filtro por data corrigido: compara YYYY-MM-DD robusto
+    function matchDate(it, yyyy_mm_dd){
+      if(!yyyy_mm_dd) return true;
+      const dtuf = pickUF(it, CONFIG.UF_DT_LEAD);
+      const ymd = parseLeadDateToYMD(dtuf);
+      return ymd ? (ymd === yyyy_mm_dd) : false;
+    }
+
+    function filtered(){
+      const op = $("#btOper").value;
+      const date = $("#btDate").value;
+      return all.filter(it=>{
+        const oper = String(pickUF(it, CONFIG.UF_OPERADORA)||"");
+        if(op!=="ALL" && oper!==op) return false;
+        if(!matchDate(it, date)) return false;
+        return true;
+      });
+    }
+
+    function draw(list){
+      countEl.textContent = String(list.length);
+      tbody.innerHTML = list.length ? list.map(it=>{
+        const info = leadBadgesRich(it);
+        const infoHtml = info.map(([k,v])=> `<div style="font-weight:900;opacity:.85">${esc(k)}: ${esc(v)}</div>`).join("");
+        return `
+          <tr>
+            <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
+            <td>
+              <b>${esc(leadDisplayName(it))}</b>
+              <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(it.ID)} • STAGE: ${esc(leadStageName(it.STATUS_ID))}</div>
+            </td>
+            <td>${infoHtml}</td>
+          </tr>
+        `;
+      }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    draw(filtered());
+
+    $("#btApply")?.addEventListener("click", ()=> draw(filtered()));
+
+    $("#btDo")?.addEventListener("click", async ()=>{
+      const btn = $("#btDo");
+      const toId = $("#btUser").value;
+      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
+        .filter(x=>x.checked)
+        .map(x=> x.getAttribute("data-bt-id"));
+
+      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
+      try{
+        btn.disabled = true;
+
+        ids.forEach(id=>{
+          state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
+        });
+        state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+        renderNewLeads(state.newLeadsRender);
+
+        for(const id of ids){
+          await actionPickLead(id, toId);
+          await sleep(60);
+        }
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
-    let hist;
+    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, `
+      <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
+      <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
+    `);
+
+    let us;
     try{
-      hist = await fetchUserHistory(u.id);
-    }catch(err){
-      return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Falha ao carregar agora. Mantendo painel.</div>`);
+      us = await fetchUserStats(u.id);
+    }catch(_){
+      closeModal();
+      return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
+
+    state.userStats[u.id] = us;
+    renderWho();
 
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">FOLLOW-UP + Transferências + Ações em lote</div>
+        <div style="font-weight:950">ABRIR • Buscar • Mover • Follow-up</div>
         <button class="cgdBtn" id="muRefresh">Atualizar</button>
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Puxados hoje: <b>${esc(hist.pulledToday||0)}</b></div>
-        <div class="cgdBadge">Últimos encontrados: <b>${esc((hist.last||[]).length)}</b></div>
+        <div class="cgdBadge">EM ATENDIMENTO (dia): <b>${esc(us.pulledToday||0)}</b></div>
+        <div class="cgdBadge">EM ATENDIMENTO (mês): <b>${esc(us.pulledMonth||0)}</b></div>
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
         <input class="cgdInput" id="muSearch" placeholder="Buscar por palavra-chave…" style="min-width:260px" />
-        <select class="cgdSelect" id="muFilter">
-          <option value="ALL">Todos</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Somente QUALIFICADOS</option>
+        <select class="cgdSelect" id="muStage">
+          <option value="ALL">Todos os stages</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Em atendimento</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</option>
         </select>
         <button class="cgdBtn" id="muAll">Marcar todos</button>
         <button class="cgdBtn" id="muNone">Desmarcar</button>
@@ -1258,6 +1644,8 @@ body{ padding-bottom: 90px !important; }
           <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
         </select>
         <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
+
+        <button class="cgdBtn" id="muCreate">Criar lead (indicação)</button>
       </div>
 
       <table class="cgdTable">
@@ -1265,8 +1653,8 @@ body{ padding-bottom: 90px !important; }
           <tr>
             <th style="width:70px">Sel.</th>
             <th>Lead</th>
-            <th>FOLLOW-UP (1)</th>
-            <th>Transferir (1)</th>
+            <th style="width:250px">FOLLOW-UP</th>
+            <th style="width:250px">Mover</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -1277,47 +1665,46 @@ body{ padding-bottom: 90px !important; }
 
     const tbody = $("#muTbody");
     const search = $("#muSearch");
-    const filter = $("#muFilter");
+    const stageSel = $("#muStage");
 
-    function renderRows(){
+    function listFiltered(){
       const q = (search.value||"").trim().toLowerCase();
-      const f = (filter.value||"ALL");
-
-      const list = (hist.last||[]).filter(it=>{
-        const t = String(it.TITLE||"").toLowerCase();
-        if(q && !t.includes(q)) return false;
-        if(f!=="ALL" && String(it.STATUS_ID) !== String(f)) return false;
+      const st = (stageSel.value||"ALL");
+      return (us.list||[]).filter(it=>{
+        const title = leadDisplayName(it).toLowerCase();
+        const rawT = String(it.TITLE||"").toLowerCase();
+        if(q && !(title.includes(q) || rawT.includes(q))) return false;
+        if(st!=="ALL" && String(it.STATUS_ID)!==String(st)) return false;
         return true;
       });
+    }
 
-      const userOptions = CONFIG.USERS
-        .filter(x=> String(x.id)!==String(u.id))
-        .map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`)
-        .join("");
-
+    function renderRows(){
+      const list = listFiltered();
       tbody.innerHTML = list.length ? list.map(it=>{
         const id = String(it.ID);
-        const title = String(it.TITLE||("Lead #"+id));
+        const name = leadDisplayName(it);
+        const stName = leadStageName(it.STATUS_ID); // ✅ (3) stage por nome
         const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
-        // ✅ (ALTERAÇÃO #3) mostrar nome do stage
-        const st = leadStageLabel(it.STATUS_ID);
-
-        return `<tr data-row="${esc(id)}">
+        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? CONFIG.HOT_EMOJI+" " : "";
+        return `<tr>
           <td><input type="checkbox" data-sel="${esc(id)}" /></td>
           <td>
-            <b>${esc(title)}</b>
-            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(st)}</div>
+            <b>${esc(hot + name)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(stName)}</div>
           </td>
           <td>
             <div class="cgdRow">
               <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
               <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+              <button class="cgdBtn" data-save-fupdeal="${esc(id)}">Salvar + Criar CARD</button>
             </div>
           </td>
           <td>
             <div class="cgdRow">
-              <select class="cgdSelect" data-move-to="${esc(id)}">${userOptions}</select>
-              <button class="cgdBtn" data-do-transfer="${esc(id)}">Transferir</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
             </div>
           </td>
         </tr>`;
@@ -1332,7 +1719,7 @@ body{ padding-bottom: 90px !important; }
     });
 
     search?.addEventListener("input", renderRows);
-    filter?.addEventListener("change", renderRows);
+    stageSel?.addEventListener("change", renderRows);
 
     $("#muAll")?.addEventListener("click", ()=>{
       $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
@@ -1352,227 +1739,113 @@ body{ padding-bottom: 90px !important; }
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
       const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
       if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
-      try{
-        $("#muBulkPrazo").disabled = true;
-        for(const id of ids){
-          await actionSetPrazo(id, iso);
-          await sleep(120);
-        }
-        await hardRefreshAll();
-        alert("FOLLOW-UP em lote salvo ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#muBulkPrazo").disabled = false;
+      for(const id of ids){
+        await actionSetPrazoLead(id, iso);
+        await sleep(60);
       }
+      alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
     });
 
     $("#muBulkMove")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
       const to = $("#muMoveTo")?.value;
-      if(!to) return;
-      try{
-        $("#muBulkMove").disabled = true;
-        for(const id of ids){
-          await actionMoveLead(id, to);
-          await sleep(140);
-        }
-        await hardRefreshAll();
-        alert("Movimento em lote concluído ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#muBulkMove").disabled = false;
+      for(const id of ids){
+        await actionMoveLead(id, to);
+        await sleep(60);
       }
+      alert("Movimento em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+    });
+
+    $("#muCreate")?.addEventListener("click", ()=>{
+      const b = `
+        <div style="font-weight:950;margin-bottom:10px">Criar LEAD (indicação)</div>
+        <div class="cgdRow" style="margin-bottom:10px">
+          <input class="cgdInput" id="clName" placeholder="Nome do cliente" style="min-width:260px" />
+          <input class="cgdInput" id="clPhone" placeholder="Telefone" style="min-width:220px" />
+        </div>
+        <div class="cgdRow" style="margin-bottom:10px">
+          <input class="cgdInput" id="clOper" placeholder="Operadora" style="min-width:220px" />
+          <input class="cgdInput" id="clBairro" placeholder="Bairro" style="min-width:220px" />
+          <input class="cgdInput" id="clIdade" placeholder="Idade" style="min-width:120px" />
+        </div>
+        <div style="font-size:11px;font-weight:900;opacity:.75">
+          Será criado em <b>QUALIFICADO</b> e responsável será <b>${esc(u.name)}</b>.
+        </div>
+      `;
+      openModal("CRIAR LEAD", b, `
+        <button class="cgdBtn" data-close-modal>Cancelar</button>
+        <button class="cgdBtn" id="clGo">Criar</button>
+      `);
+
+      $("#clGo")?.addEventListener("click", async ()=>{
+        const btn = $("#clGo");
+        try{
+          btn.disabled = true;
+          const name = ($("#clName").value||"").trim();
+          if(!name) return alert("Preencha o nome.");
+          const phone = ($("#clPhone").value||"").trim();
+          const oper = ($("#clOper").value||"").trim();
+          const bairro=($("#clBairro").value||"").trim();
+          const idade = ($("#clIdade").value||"").trim();
+
+          enqueueOp("createLeadInd", async ()=>{
+            await bx("crm.lead.add", {
+              fields: {
+                TITLE: name,
+                NAME: name,
+                STATUS_ID: CONFIG.LEAD_STATUS.QUALIFICADO,
+                ASSIGNED_BY_ID: String(u.id),
+                [CONFIG.UF_OPERADORA]: oper,
+                [CONFIG.UF_BAIRRO]: bairro,
+                [CONFIG.UF_IDADE]: idade,
+                PHONE: phone ? [{ VALUE: phone, VALUE_TYPE: "WORK" }] : undefined
+              }
+            });
+          });
+          flushOps();
+          closeModal();
+          alert("Lead criado ✅ (sincroniza quando normalizar a conexão)");
+        } finally{
+          btn.disabled = false;
+        }
+      });
     });
 
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
       const sp = e.target.closest("[data-save-prazo]");
-      const tf = e.target.closest("[data-do-transfer]");
-      try{
-        if(sp){
-          const leadId = sp.getAttribute("data-save-prazo");
-          const inp = $(`input[data-prazo="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
-          const iso = isoFromLocalInput(inp?.value || "");
-          if(!iso) return alert("Preencha data/hora corretamente.");
-          sp.disabled = true;
+      const sd = e.target.closest("[data-save-fupdeal]");
+      const mv = e.target.closest("[data-move]");
 
-          // mantém no LEAD (seu fluxo atual)
-          await actionSetPrazo(leadId, iso);
-
-          // ✅ (ALTERAÇÃO #4) criar Deal na pipeline 17 com PRAZO MÁXIMO
-          const lead = await bx("crm.lead.get", { id: String(leadId) });
-          if(lead){
-            await createFollowUpDeal(u.id, lead, iso);
-          }
-
-          await hardRefreshAll();
-          alert("FOLLOW-UP salvo ✅");
-        }
-        if(tf){
-          const leadId = tf.getAttribute("data-do-transfer");
-          const sel = $(`select[data-move-to="${CSS.escape(leadId)}"]`, $(".cgdModalBody"));
-          const toId = sel?.value;
-          if(!toId) return;
-          tf.disabled = true;
-          await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toId) });
-          await hardRefreshAll();
-          alert("Transferido ✅");
-        }
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        if(sp) sp.disabled = false;
-        if(tf) tf.disabled = false;
+      if(sp){
+        const leadId = sp.getAttribute("data-save-prazo");
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(!iso) return alert("Preencha data/hora corretamente.");
+        await actionSetPrazoLead(leadId, iso);
+        alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
       }
-    });
-  }
 
-  // =========================
-  // Transferir em lote
-  // =========================
-  function pickUF(it, uf){
-    if(!it || !uf) return "";
-    return it[uf] ?? "";
-  }
+      if(sd){
+        const leadId = sd.getAttribute("data-save-fupdeal");
+        const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
 
-  // ✅ (ALTERAÇÃO #1) parse robusto de data BR/ISO para filtro por dia
-  function parseLeadDate(it){
-    const raw = String(pickUF(it, CONFIG.UF_DT_LEAD) || "").trim();
-    if(!raw) return null;
+        // mantém salvar no lead (se existir)
+        if(iso) await actionSetPrazoLead(leadId, iso);
 
-    const t1 = Date.parse(raw);
-    if(Number.isFinite(t1)) return new Date(t1);
+        // ✅ cria o DEAL e grava PRAZO no DEAL
+        if(lead) await createFollowUpDeal(u.id, lead, iso);
 
-    const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/);
-    if(m){
-      const dd = +m[1], mm = +m[2], yy = +m[3];
-      const hh = +(m[4]||0), mi = +(m[5]||0), ss = +(m[6]||0);
-      const dt = new Date(yy, mm-1, dd, hh, mi, ss, 0);
-      if(!Number.isNaN(dt.getTime())) return dt;
-    }
-    return null;
-  }
-
-  function matchDate(it, yyyy_mm_dd){
-    if(!yyyy_mm_dd) return true;
-    const d = parseLeadDate(it);
-    if(!d) return false;
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da= String(d.getDate()).padStart(2,"0");
-    return `${y}-${m}-${da}` === yyyy_mm_dd;
-  }
-
-  async function modalBatchTransfer(){
-    const items = state.newLeads || [];
-    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
-
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Data:</label>
-        <input class="cgdInput" type="date" id="btDate" />
-        <label style="font-weight:950">Transferir para:</label>
-        <select class="cgdSelect" id="btUser">${ops}</select>
-        <button class="cgdBtn" id="btApply">Aplicar filtro</button>
-      </div>
-
-      <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Leads listados: <b id="btCount">${esc(items.length)}</b></div>
-      </div>
-
-      <table class="cgdTable">
-        <thead><tr><th>Selecionar</th><th>Lead</th></tr></thead>
-        <tbody id="btTbody"></tbody>
-      </table>
-    `;
-
-    openModal("TRANSFERIR EM LOTE", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
-    `);
-
-    const tbody = $("#btTbody");
-    const countEl = $("#btCount");
-
-    function draw(list){
-      countEl.textContent = String(list.length);
-      tbody.innerHTML = list.length ? list.map(it=>`
-        <tr>
-          <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
-          <td><b>${esc(leadDisplayName(it))}</b> <span style="opacity:.65;font-weight:900">ID: ${esc(it.ID)}</span></td>
-        </tr>
-      `).join("") : `<tr><td colspan="2" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
-    }
-
-    draw(items);
-
-    $("#btApply")?.addEventListener("click", ()=>{
-      const d = ($("#btDate").value || "").trim(); // yyyy-mm-dd
-      if(!d) return draw(items);
-      draw(items.filter(it => matchDate(it, d)));
-    });
-
-    $("#btDo")?.addEventListener("click", async ()=>{
-      const toId = $("#btUser").value;
-      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
-        .filter(x=>x.checked)
-        .map(x=> x.getAttribute("data-bt-id"));
-
-      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
-      try{
-        $("#btDo").disabled = true;
-        for(const id of ids){
-          await actionPickLead(id, toId);
-          await sleep(150);
-        }
-        closeModal();
-        await hardRefreshAll();
-        alert("Transferência concluída ✅");
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#btDo").disabled = false;
+        alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
       }
-    });
-  }
 
-  async function modalPickLead(leadId){
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Escolha quem vai pegar este lead</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Usuária:</label>
-        <select class="cgdSelect" id="pickUser">${uops}</select>
-      </div>
-      <div style="font-size:11px;font-weight:900;opacity:.75">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
-      </div>
-    `;
-    openModal("PEGAR LEAD", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="pickGo">Confirmar</button>
-    `);
-
-    $("#pickGo")?.addEventListener("click", async ()=>{
-      try{
-        const uid = $("#pickUser").value;
-        $("#pickGo").disabled = true;
-        await actionPickLead(leadId, uid);
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#pickGo").disabled = false;
+      if(mv){
+        const leadId = mv.getAttribute("data-move");
+        const to = mv.getAttribute("data-to");
+        await actionMoveLead(leadId, to);
+        alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
       }
     });
   }
@@ -1582,24 +1855,29 @@ body{ padding-bottom: 90px !important; }
   // =========================
   async function refreshNewLeads(){
     try{
-      const items = await fetchNewLeads(CONFIG.LIMIT_NEW);
-      setOffline(false);
+      const items = await fetchNewLeadsAll();
+      state.newLeadsAll = items || [];
+      state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+      renderNewLeads(state.newLeadsRender);
 
       const newest = items && items[0] ? String(items[0].ID) : null;
-
       if(items.length > 0 && state.soundOn){
         if(newest && newest !== state.lastNewLeadId){
           state.lastNewLeadId = newest;
           tripleBeep();
         }
       }
-
-      state.newLeads = items || [];
-      renderNewLeads(state.newLeads);
-
     }catch(err){
       console.warn("new leads fetch failed", err);
-      setOffline(true);
+    }
+  }
+
+  async function refreshPendingCount(){
+    try{
+      const n = await fetchNewLeadsCount();
+      renderPendingCount(n);
+    }catch(err){
+      console.warn("pending count failed", err);
     }
   }
 
@@ -1616,8 +1894,8 @@ body{ padding-bottom: 90px !important; }
   async function refreshUsers(){
     try{
       const jobs = CONFIG.USERS.map(async u=>{
-        const h = await fetchUserHistory(u.id);
-        state.userStats[u.id] = h;
+        const st = await fetchUserStats(u.id);
+        state.userStats[u.id] = st;
       });
       await Promise.all(jobs);
       renderWho();
@@ -1639,7 +1917,13 @@ body{ padding-bottom: 90px !important; }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
-    await Promise.allSettled([refreshNewLeads(), refreshStats(), refreshUsers(), refreshQueue()]);
+    await Promise.allSettled([
+      refreshNewLeads(),
+      refreshPendingCount(),
+      refreshStats(),
+      refreshUsers(),
+      refreshQueue()
+    ]);
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
@@ -1666,7 +1950,7 @@ body{ padding-bottom: 90px !important; }
     $("#btnSoundOn")?.addEventListener("click", ()=>{
       state.soundOn = true;
       updateSoundUI();
-      if((state.newLeads||[]).length > 0) tripleBeep();
+      if((state.newLeadsAll||[]).length > 0) tripleBeep();
     });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
@@ -1691,24 +1975,34 @@ body{ padding-bottom: 90px !important; }
       });
     });
 
-    // ✅ (ALTERAÇÃO #2) botão unificado na barra inferior
     $("#btnQueue")?.addEventListener("click", modalQueue);
-
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
+
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
-        const q = await fetchQueue();
-        const order = (q.order||[]).slice();
+        if(!state.queue.dealId){
+          const q = await fetchQueue();
+          state.queue = { ...state.queue, ...q };
+        }
+        const order = (state.queue.order||[]).slice();
         if(order.length===0) return;
 
         const nextId = order.shift();
         order.push(nextId);
-        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
 
-        await refreshQueue();
-        setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()}`);
+        state.queue.order = order.slice();
+        renderQueue();
+
+        const nm = (CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId);
+        setLastServed(nm);
+        setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
+
+        const dealId = state.queue.dealId;
+        const hidden = state.queue.hiddenUsers || [];
+        enqueueOp("queueRotate", async ()=>{ await saveQueue(dealId, { order, hiddenUsers: hidden }); });
+        flushOps();
       }catch(err){
         console.error(err);
       }
@@ -1716,9 +2010,12 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnQueueReset")?.addEventListener("click", async ()=>{
       try{
-        const q = await fetchQueue();
-        await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
-        await refreshQueue();
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        state.queue = { ...state.queue, ...q };
+        state.queue.order = [];
+        renderQueue();
+        enqueueOp("queueReset", async ()=>{ await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] }); });
+        flushOps();
       }catch(err){
         console.error(err);
       }
@@ -1735,14 +2032,7 @@ body{ padding-bottom: 90px !important; }
       }
       if(d){
         const id = d.getAttribute("data-discard");
-        (async ()=>{
-          try{
-            await actionDiscardLead(id);
-            await hardRefreshAll();
-          }catch(err){
-            console.error(err);
-          }
-        })();
+        actionDiscardLead(id);
       }
       if(ou){
         const uid = ou.getAttribute("data-open-user");
@@ -1769,9 +2059,12 @@ body{ padding-bottom: 90px !important; }
     await hardRefreshAll();
 
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
+    setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
+
+    setInterval(flushOps, 2500);
   }
 
   if(document.readyState === "loading"){
