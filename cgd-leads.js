@@ -5,10 +5,10 @@
 (function(){
   "use strict";
 
-  const BUILD = "2026-02-18-LEADS-02";
+  const BUILD = "2026-02-18-LEADS-03";
 
   // =========================
-  // CONFIG — AJUSTE AQUI
+  // CONFIG — AJUSTE AQUI (se precisar)
   // =========================
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
@@ -24,15 +24,14 @@
     },
 
     // ✅ FOLLOW-UP cria CARD (DEAL) na PIPELINE 17
-    // Ajuste STAGE_ID se necessário (ex.: "C17:NEW" ou seu stage inicial)
     FOLLOWUP_DEAL: {
       ENABLED: true,
       CATEGORY_ID: 17,
-      STAGE_ID: "C17:NEW",
-      // texto no card (pode manter)
+      STAGE_ID_FALLBACK: "C17:NEW", // fallback se não achar stage pelo nome da user
       PREFIX_TITLE: "FOLLOW-UP"
     },
 
+    // Fila multi-PC via PIPELINE 27
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -45,10 +44,10 @@
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
     REFRESH_QUEUE_MS: 2500,
-    REFRESH_WHO_MS: 6000,
+    REFRESH_WHO_MS: 7000, // levemente maior p/ reduzir estouro
 
     LIMIT_NEW: 30,
-    LIMIT_USER_HISTORY: 80,
+    LIMIT_USER_HISTORY: 100,
 
     USERS: [
       { name:"ALINE", id:15 },
@@ -65,6 +64,7 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // ✅ fallback (será “auto-ajustado” em runtime via crm.status.list)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -79,13 +79,12 @@
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
 
-      // ✅ seus UFs explícitos
+      // ✅ UFs explícitos
       "UF_CRM_1771282782",
       "UF_CRM_1771333014",
       "UF_CRM_1771339221",
       "UF_CRM_LEAD_1731909705398",
       "UF_CRM_1767285733843",
-
       "UF_*"
     ],
 
@@ -119,12 +118,23 @@
     const m = String(d.getMonth()+1).padStart(2,"0");
     return `${y}-${m}-01T00:00:00`;
   }
-
   function isoFromLocalInput(v){
     if(!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     if(!m) return "";
     return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00`;
+  }
+  function isoDateStart(v){ // yyyy-mm-dd -> yyyy-mm-ddT00:00:00
+    if(!v) return "";
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!m) return "";
+    return `${m[1]}-${m[2]}-${m[3]}T00:00:00`;
+  }
+  function isoDateEnd(v){ // yyyy-mm-dd -> yyyy-mm-ddT23:59:59
+    if(!v) return "";
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!m) return "";
+    return `${m[1]}-${m[2]}-${m[3]}T23:59:59`;
   }
 
   // =========================
@@ -168,6 +178,19 @@
     return data.result;
   }
 
+  async function bxTry(method, params={}, tries=2, gap=220){
+    let err;
+    for(let i=0;i<tries;i++){
+      try{
+        return await bx(method, params);
+      }catch(e){
+        err = e;
+        await sleep(gap);
+      }
+    }
+    throw err;
+  }
+
   async function bxListAll(method, params, max=200){
     let start = 0;
     let out = [];
@@ -187,6 +210,97 @@
       if(out.length >= max) break;
     }
     return out.slice(0, max);
+  }
+
+  // =========================
+  // Runtime caches (somente RAM)
+  // =========================
+  const cache = {
+    leadStatusReady: false,
+    leadStatusByName: {},  // "QUALIFICADO" -> STATUS_ID
+    dealStagesByCategory: {}, // categoryId -> [{STATUS_ID, NAME}]
+  };
+
+  // =========================
+  // Auto-resolve Lead Status IDs (QUALIFICADO etc.)
+  // =========================
+  async function ensureLeadStatusMap(){
+    if(cache.leadStatusReady) return;
+    try{
+      const list = await bxTry("crm.status.list", { filter:{ ENTITY_ID:"STATUS" } }, 2, 250);
+      // cada item: {STATUS_ID, NAME, ...}
+      const up = (s)=> String(s||"").trim().toUpperCase();
+      const byName = {};
+      (list||[]).forEach(it=>{
+        const name = up(it.NAME);
+        const id = String(it.STATUS_ID || it.ID || "");
+        if(name && id) byName[name] = id;
+      });
+
+      // tenta achar por palavras
+      const pick = (keys)=>{
+        for(const k of keys){
+          const kk = Object.keys(byName).find(n => n.includes(k));
+          if(kk) return byName[kk];
+        }
+        return "";
+      };
+
+      const q = pick(["QUALIFIC", "QUALIF"]);
+      const ip = pick(["ATEND", "PROCESS", "EM ANDAMENTO", "IN PROCESS"]);
+      const nw = pick(["NOVO", "NEW"]);
+      const pj = pick(["PERD", "JUNK"]);
+      const cv = pick(["CONVERT", "CONVERTIDO"]);
+
+      if(nw) CONFIG.LEAD_STATUS.NOVO_LEAD = nw;
+      if(ip) CONFIG.LEAD_STATUS.EM_ATENDIMENTO = ip;
+      if(q)  CONFIG.LEAD_STATUS.QUALIFICADO = q;
+      if(pj) CONFIG.LEAD_STATUS.PERDIDO = pj;
+      if(cv) CONFIG.LEAD_STATUS.CONVERTIDO = cv;
+
+      cache.leadStatusReady = true;
+    }catch(_){
+      cache.leadStatusReady = true; // não trava; usa defaults
+    }
+  }
+
+  // =========================
+  // Deal stages list (Pipeline 17)
+  // =========================
+  async function getDealStages(categoryId){
+    const key = String(categoryId);
+    if(cache.dealStagesByCategory[key]) return cache.dealStagesByCategory[key];
+
+    try{
+      const list = await bxTry("crm.status.list", {
+        filter:{ ENTITY_ID:"DEAL_STAGE", CATEGORY_ID: String(categoryId) }
+      }, 2, 250);
+
+      const stages = (list||[]).map(it=>({
+        id: String(it.STATUS_ID || it.ID || ""),
+        name: String(it.NAME || "")
+      })).filter(x=>x.id);
+
+      cache.dealStagesByCategory[key] = stages;
+      return stages;
+    }catch(_){
+      cache.dealStagesByCategory[key] = [];
+      return [];
+    }
+  }
+
+  function findStageIdForUser(stages, userName){
+    const up = (s)=> String(s||"").toUpperCase().trim();
+    const target = up(userName);
+
+    // match mais “forte”: contém o nome completo
+    let hit = stages.find(s => up(s.name).includes(target));
+    if(hit) return hit.id;
+
+    // match “parcial”: remove espaços
+    const t2 = target.replace(/\s+/g,"");
+    hit = stages.find(s => up(s.name).replace(/\s+/g,"").includes(t2));
+    return hit ? hit.id : "";
   }
 
   // =========================
@@ -222,7 +336,7 @@
 
   // =========================
   // UI / CSS (ESTÉTICA MANTIDA)
-  // (✅ modal um pouco maior para caber infos no lote)
+  // (✅ modal maior já estava ok)
   // =========================
   function injectCSS(){
     const css = `
@@ -443,9 +557,7 @@
   color: rgba(18,26,40,.60);
   font-weight: 900;
 }
-.cgdOffline{
-  display:none !important;
-}
+.cgdOffline{ display:none !important; }
 
 /* ===== Modals modernos (mantidos) ===== */
 .cgdModalOverlay{
@@ -460,7 +572,7 @@
   padding: 16px;
 }
 .cgdModal{
-  width: min(1100px, 98vw); /* ✅ um pouco maior */
+  width: min(1100px, 98vw);
   max-height: min(90vh, 980px);
   background: rgba(255,255,255,.94);
   border: 1px solid rgba(30,40,70,.16);
@@ -593,11 +705,10 @@ body{ padding-bottom: 90px !important; }
     lastNewLeadId: null,
     newLeads: [],
     stats: { day:0, month:0 },
-    userStats: {},         // cache que não zera em falha
+    userStats: {},         // cache que NÃO zera
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     queueLoaded: false,
 
-    // ações offline (RAM)
     pending: [],
     flushing: false,
     netOk: true
@@ -625,7 +736,6 @@ body{ padding-bottom: 90px !important; }
     const nm = leadClientName(it);
     if(nm) return nm;
     const t = String(it.TITLE||"").trim();
-    if(t && !/^Lead\s*#\d+/i.test(t)) return t;
     if(t) return t;
     return `Lead #${it.ID}`;
   }
@@ -643,70 +753,17 @@ body{ padding-bottom: 90px !important; }
     if(bairro) b.push(["BAIRRO", bairro]);
     if(fonte) b.push(["FONTE", fonte]);
     if(dt) b.push(["DT LEAD", String(dt).replace("T"," ").slice(0,16)]);
-
     return b.slice(0, 6);
   }
 
-  // =========================
-  // LEADS: fetch / actions
-  // =========================
-  async function fetchNewLeads(){
-    return await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
-      order: { ID: "DESC" },
-      select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_NEW);
-  }
-
-  // stats “puxados” (IN_PROCESS no período)
-  async function fetchStatsPulled(){
-    const startToday = todayISOStart();
-    const startMonth = monthISOStart();
-
-    const dayItems = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 5000);
-
-    const monthItems = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
-      order: { DATE_MODIFY:"DESC" },
-      select: ["ID"]
-    }, 20000);
-
-    return { day: (dayItems||[]).length, month: (monthItems||[]).length };
-  }
-
-  // ✅ agora pega NAME/LAST_NAME também (pra não virar "Lead #")
-  async function fetchUserHistory(userId){
-    const startToday = todayISOStart();
-
-    const today = await bxListAll("crm.lead.list", {
-      filter: {
-        "ASSIGNED_BY_ID": String(userId),
-        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        ">DATE_MODIFY": startToday
-      },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","NAME","SECOND_NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, 5000);
-
-    const last = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId) },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID","TITLE","NAME","SECOND_NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
-    }, CONFIG.LIMIT_USER_HISTORY);
-
-    return { pulledToday: (today||[]).length, last: (last||[]) };
-  }
-
-  async function leadUpdate(id, fields){
-    return bx("crm.lead.update", { id: String(id), fields });
+  function parseDtLead(it){
+    const raw = pickVal(it, CONFIG.LEAD_UF.UF_DT_LEAD);
+    const t = Date.parse(String(raw||""));
+    return Number.isFinite(t) ? t : 0;
   }
 
   // =========================
-  // OFFLINE: execução otimista + fila RAM
+  // OFFLINE: fila RAM (sem storage)
   // =========================
   function enqueue(job){
     state.pending.push({ t: Date.now(), ...job });
@@ -729,13 +786,13 @@ body{ padding-bottom: 90px !important; }
     if(!state.pending.length) return;
     state.flushing = true;
     try{
-      await bx("app.info", {}); // ping
+      await bxTry("app.info", {}, 1, 0); // ping
       const q = state.pending.slice();
       state.pending = [];
 
       for(const job of q){
         if(job.kind === "lead.update"){
-          await leadUpdate(job.payload.id, job.payload.fields);
+          await bx("crm.lead.update", { id: String(job.payload.id), fields: job.payload.fields });
         }else if(job.kind === "queue.save"){
           if(!state.queue.dealId){
             const fresh = await fetchQueue();
@@ -749,98 +806,9 @@ body{ padding-bottom: 90px !important; }
         await sleep(120);
       }
     }catch(_){
-      // se caiu de novo, mantém o que sobrou (sem duplicar aqui por simplicidade)
-      // (não joga popup)
+      // se cair de novo, não polui UI
     }finally{
       state.flushing = false;
-    }
-  }
-
-  // =========================
-  // Actions
-  // =========================
-  async function actionPickLead(lead, userId){
-    const leadId = String(lead?.ID || lead);
-    const fields = { ASSIGNED_BY_ID: String(userId), STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO };
-
-    await execOptimistic(
-      {
-        kind: "lead.update",
-        payload: { id: leadId, fields },
-        applyLocal: ()=>{
-          state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==leadId);
-          renderNewLeads(state.newLeads);
-        }
-      },
-      async ()=> leadUpdate(leadId, fields)
-    );
-  }
-
-  async function actionDiscardLead(leadId){
-    leadId = String(leadId);
-    const fields = { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO };
-
-    await execOptimistic(
-      {
-        kind: "lead.update",
-        payload: { id: leadId, fields },
-        applyLocal: ()=>{
-          state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==leadId);
-          renderNewLeads(state.newLeads);
-        }
-      },
-      async ()=> leadUpdate(leadId, fields)
-    );
-  }
-
-  // ✅ mover + emoji 🔥 no MESMO update (sem lead.get)
-  async function actionMoveLeadOptimistic(it, statusId){
-    const leadId = String(it?.ID || it);
-    const curTitle = String(it?.TITLE || "");
-    const withHot = (statusId === CONFIG.LEAD_STATUS.QUALIFICADO)
-      ? (curTitle.includes(CONFIG.HOT_EMOJI) ? curTitle : `${CONFIG.HOT_EMOJI} ${curTitle || leadDisplayName(it)}`.trim())
-      : curTitle;
-
-    const fields = { STATUS_ID: statusId };
-    if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO && withHot) fields.TITLE = withHot;
-
-    await execOptimistic(
-      {
-        kind: "lead.update",
-        payload: { id: leadId, fields },
-        applyLocal: ()=>{ /* não bloqueia UI */ }
-      },
-      async ()=> leadUpdate(leadId, fields)
-    );
-  }
-
-  async function actionSetPrazo(lead, iso, userId){
-    const leadId = String(lead?.ID || lead);
-    const fields = { [CONFIG.UF_PRAZO]: iso };
-
-    // ✅ 1) atualiza o lead (UF)
-    await execOptimistic(
-      { kind:"lead.update", payload:{ id: leadId, fields }, applyLocal: ()=>{} },
-      async ()=> leadUpdate(leadId, fields)
-    );
-
-    // ✅ 2) cria card (deal) na pipeline 17
-    if(CONFIG.FOLLOWUP_DEAL && CONFIG.FOLLOWUP_DEAL.ENABLED){
-      const leadName = leadDisplayName(lead || { ID: leadId });
-      const title = `${CONFIG.FOLLOWUP_DEAL.PREFIX_TITLE} • ${leadName}`.trim();
-
-      const dealFields = {
-        CATEGORY_ID: CONFIG.FOLLOWUP_DEAL.CATEGORY_ID,
-        STAGE_ID: CONFIG.FOLLOWUP_DEAL.STAGE_ID,
-        TITLE: title,
-        ASSIGNED_BY_ID: String(userId || lead?.ASSIGNED_BY_ID || ""),
-        COMMENTS: `Lead ID: ${leadId}\nPrazo: ${iso}`
-      };
-
-      await execOptimistic(
-        { kind:"deal.add.followup", payload:{ fields: dealFields }, applyLocal: ()=>{} },
-        async ()=> bx("crm.deal.add", { fields: dealFields })
-      );
     }
   }
 
@@ -900,6 +868,191 @@ body{ padding-bottom: 90px !important; }
       id: String(dealId),
       fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
     });
+  }
+
+  // =========================
+  // LEADS: fetch
+  // =========================
+  async function fetchNewLeads(){
+    await ensureLeadStatusMap();
+    const items = await bxListAll("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      order: { ID: "DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, CONFIG.LIMIT_NEW);
+    return items || [];
+  }
+
+  // =========================
+  // Stage History for leads (preferido p/ contagem)
+  // Tenta usar crm.stagehistory.list (se existir). Se não, fallback.
+  // =========================
+  async function tryStageHistoryCounts(userId, isoStart, isoEnd){
+    // assinatura varia por portal. Tentamos parâmetros “comuns”.
+    // Se der erro, retorna null.
+    try{
+      const r = await bxTry("crm.stagehistory.list", {
+        filter: {
+          "ENTITY_TYPE_ID": 1, // lead
+          "STAGE_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+          ">=CREATED_TIME": isoStart,
+          "<=CREATED_TIME": isoEnd
+        },
+        order: { "CREATED_TIME": "DESC" },
+        select: ["OWNER_ID","CREATED_TIME","RESPONSIBLE_ID","ASSIGNED_BY_ID","STAGE_ID"]
+      }, 1, 0);
+
+      const items = (r && (r.items || r)) || [];
+      let count = 0;
+
+      for(const it of items){
+        const rid = String(it.RESPONSIBLE_ID || it.ASSIGNED_BY_ID || "");
+        if(rid && String(rid) === String(userId)) count++;
+      }
+      return { count, ok:true };
+    }catch(_){
+      return null;
+    }
+  }
+
+  // fallback: STATUS=IN_PROCESS + DATE_MODIFY no período
+  async function fallbackPulledCount(userId, isoStart, isoEnd){
+    const items = await bxListAll("crm.lead.list", {
+      filter: {
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+        ">=DATE_MODIFY": isoStart,
+        "<=DATE_MODIFY": isoEnd
+      },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, 50000);
+    return (items||[]).length;
+  }
+
+  async function fetchUserCounts(userId){
+    const stDay = todayISOStart();
+    const endDay = stDay.slice(0,10) + "T23:59:59";
+    const stMonth = monthISOStart();
+    // mês “até agora”
+    const nowIso = new Date().toISOString().slice(0,19);
+
+    const dayHist = await tryStageHistoryCounts(userId, stDay, endDay);
+    const monthHist = await tryStageHistoryCounts(userId, stMonth, nowIso);
+
+    const day = dayHist ? dayHist.count : await fallbackPulledCount(userId, stDay, endDay);
+    const month = monthHist ? monthHist.count : await fallbackPulledCount(userId, stMonth, nowIso);
+
+    return { day, month };
+  }
+
+  async function fetchUserHistory(userId){
+    // histórico “últimos atendidos”: usamos leads atribuídos ao user (indep. status)
+    const last = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID","TITLE","NAME","SECOND_NAME","LAST_NAME","DATE_MODIFY","STATUS_ID","ASSIGNED_BY_ID"]
+    }, CONFIG.LIMIT_USER_HISTORY);
+
+    // contagem dia/mês baseada em “entrada em atendimento”
+    const counts = await fetchUserCounts(userId);
+
+    return { pulledToday: counts.day, pulledMonth: counts.month, last: (last||[]) };
+  }
+
+  // =========================
+  // Actions
+  // =========================
+  async function leadUpdate(id, fields){
+    return bx("crm.lead.update", { id: String(id), fields });
+  }
+
+  async function actionPickLead(lead, userId){
+    await ensureLeadStatusMap();
+    const leadId = String(lead?.ID || lead);
+    const fields = { ASSIGNED_BY_ID: String(userId), STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO };
+
+    await execOptimistic(
+      {
+        kind: "lead.update",
+        payload: { id: leadId, fields },
+        applyLocal: ()=>{
+          state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==leadId);
+          renderNewLeads(state.newLeads);
+        }
+      },
+      async ()=> leadUpdate(leadId, fields)
+    );
+  }
+
+  async function actionDiscardLead(leadId){
+    await ensureLeadStatusMap();
+    leadId = String(leadId);
+    const fields = { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO };
+
+    await execOptimistic(
+      {
+        kind: "lead.update",
+        payload: { id: leadId, fields },
+        applyLocal: ()=>{
+          state.newLeads = (state.newLeads||[]).filter(x=>String(x.ID)!==leadId);
+          renderNewLeads(state.newLeads);
+        }
+      },
+      async ()=> leadUpdate(leadId, fields)
+    );
+  }
+
+  // ✅ mover QUALIFICADO + 🔥 no mesmo update (e com STATUS_ID real)
+  async function actionMoveLeadOptimistic(it, statusId){
+    await ensureLeadStatusMap();
+    const leadId = String(it?.ID || it);
+    const curTitle = String(it?.TITLE || leadDisplayName(it) || "");
+    const willHot = (String(statusId) === String(CONFIG.LEAD_STATUS.QUALIFICADO));
+    const withHot = willHot
+      ? (curTitle.includes(CONFIG.HOT_EMOJI) ? curTitle : `${CONFIG.HOT_EMOJI} ${curTitle}`.trim())
+      : curTitle;
+
+    const fields = { STATUS_ID: String(statusId) };
+    if(willHot && withHot) fields.TITLE = withHot;
+
+    await execOptimistic(
+      { kind:"lead.update", payload:{ id: leadId, fields }, applyLocal: ()=>{} },
+      async ()=> leadUpdate(leadId, fields)
+    );
+  }
+
+  // ✅ FOLLOW-UP: atualiza UF + cria DEAL na pipeline 17 na COLUNA da USER
+  async function actionSetPrazo(lead, iso, userId){
+    const leadId = String(lead?.ID || lead);
+    const fields = { [CONFIG.UF_PRAZO]: iso };
+
+    await execOptimistic(
+      { kind:"lead.update", payload:{ id: leadId, fields }, applyLocal: ()=>{} },
+      async ()=> leadUpdate(leadId, fields)
+    );
+
+    if(CONFIG.FOLLOWUP_DEAL && CONFIG.FOLLOWUP_DEAL.ENABLED){
+      const u = CONFIG.USERS.find(x=>String(x.id)===String(userId));
+      const stages = await getDealStages(CONFIG.FOLLOWUP_DEAL.CATEGORY_ID);
+      const stageId = findStageIdForUser(stages, u?.name || "") || CONFIG.FOLLOWUP_DEAL.STAGE_ID_FALLBACK;
+
+      const leadName = leadDisplayName(lead || { ID: leadId });
+      const title = `${CONFIG.FOLLOWUP_DEAL.PREFIX_TITLE} • ${leadName}`.trim();
+
+      const dealFields = {
+        CATEGORY_ID: CONFIG.FOLLOWUP_DEAL.CATEGORY_ID,
+        STAGE_ID: String(stageId),
+        TITLE: title,
+        ASSIGNED_BY_ID: String(userId || ""),
+        COMMENTS: `Lead ID: ${leadId}\nPrazo: ${iso}`
+      };
+
+      await execOptimistic(
+        { kind:"deal.add.followup", payload:{ fields: dealFields }, applyLocal: ()=>{} },
+        async ()=> bx("crm.deal.add", { fields: dealFields })
+      );
+    }
   }
 
   // =========================
@@ -992,23 +1145,22 @@ body{ padding-bottom: 90px !important; }
     const ordered = computeUserOrder();
 
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, last:[] };
+      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, last:[] };
 
       const l1 = us.last && us.last[0] ? us.last[0] : null;
       const l2 = us.last && us.last[1] ? us.last[1] : null;
 
-      const last1 = l1 ? `Último: ${leadDisplayName(l1)}`
-        : "Último: —";
-      const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}`
-        : "Anterior: —";
+      const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
+      const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdCardRow">
           <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
-          <div style="display:flex; gap:8px; align-items:center">
-            <span class="cgdBadge">puxados hoje: ${esc(us.pulledToday||0)}</span>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+            <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
+            <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
             <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
           </div>
         </div>
@@ -1159,16 +1311,16 @@ body{ padding-bottom: 90px !important; }
     `);
   }
 
-  // ✅ FILA com reorder manual (↑ ↓)
+  // ✅ FILA: agora com VISUAL “Ordem atual” dentro do modal
   async function modalQueue(){
-    // tenta rede, mas se falhar usa cache SEM atrapalhar
     let q = null;
     try{
-      q = await fetchQueue();
-      state.queue = { ...state.queue, ...q };
+      q = await bxTry("dummy", {}, 1, 0).catch(()=>null); // noop
+      const fresh = await fetchQueue();
+      state.queue = { ...state.queue, ...fresh };
       state.queueLoaded = true;
     }catch(_){
-      q = { dealId: state.queue.dealId, order: state.queue.order||[], hiddenUsers: state.queue.hiddenUsers||[], updatedAt: state.queue.updatedAt||0 };
+      // usa cache
     }
 
     const body = `
@@ -1180,94 +1332,123 @@ body{ padding-bottom: 90px !important; }
         <button class="cgdBtn" id="qApply">Aplicar alterações</button>
       </div>
 
-      <table class="cgdTable">
-        <thead><tr><th style="width:90px">Na fila</th><th>Usuária</th><th style="width:110px">Ordem</th></tr></thead>
-        <tbody id="qTbody"></tbody>
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Ordem atual (visual):</div>
+      </div>
+      <table class="cgdTable" style="margin-bottom:12px">
+        <thead><tr><th style="width:70px">#</th><th>Usuária</th><th style="width:140px">Mover</th><th style="width:110px">Remover</th></tr></thead>
+        <tbody id="qOrderBody"></tbody>
       </table>
 
-      <div style="margin-top:10px;font-size:11px;font-weight:900;opacity:.7">
-        Atualizado: ${q.updatedAt ? new Date(q.updatedAt).toLocaleString("pt-BR") : "—"}
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Selecionar quem entra na fila:</div>
       </div>
+      <table class="cgdTable">
+        <thead><tr><th style="width:90px">Na fila</th><th>Usuária</th></tr></thead>
+        <tbody id="qTbody"></tbody>
+      </table>
     `;
 
     openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
     const tbody = $("#qTbody");
+    const orderBody = $("#qOrderBody");
 
-    function currentCheckedOrder(){
-      const checked = $$('input[type=checkbox][data-q-user]')
-        .filter(ch=>ch.checked)
-        .map(ch=> String(ch.getAttribute("data-q-user")));
-
-      // ordem estável: primeiro a ordem atual, depois adicionadas
-      const prev = (state.queue.order||[]).map(String);
-      const next = [];
-      for(const id of prev){ if(checked.includes(id)) next.push(id); }
-      for(const id of checked){ if(!next.includes(id)) next.push(id); }
-      return next;
-    }
-
-    function renderTable(){
-      const set = new Set((state.queue.order||[]).map(String));
-      tbody.innerHTML = CONFIG.USERS.map(u=>{
-        const checked = set.has(String(u.id)) ? "checked" : "";
-        const idx = (state.queue.order||[]).map(String).indexOf(String(u.id));
-        const inOrder = idx >= 0;
+    function renderOrder(){
+      const order = (state.queue.order||[]).map(String);
+      if(!orderBody) return;
+      if(!order.length){
+        orderBody.innerHTML = `<tr><td colspan="4" style="opacity:.75;font-weight:900">Fila vazia.</td></tr>`;
+        return;
+      }
+      orderBody.innerHTML = order.map((id, idx)=>{
+        const u = CONFIG.USERS.find(x=>String(x.id)===String(id));
         return `<tr>
-          <td><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
-          <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
+          <td><b>${idx+1}</b></td>
+          <td><b>${esc(u ? u.name : ("USER "+id))}</b> <span style="opacity:.65;font-weight:900">(${esc(id)})</span></td>
           <td>
-            ${inOrder ? `
-              <button class="cgdBtn" style="padding:6px 10px" data-q-up="${esc(u.id)}">↑</button>
-              <button class="cgdBtn" style="padding:6px 10px" data-q-down="${esc(u.id)}">↓</button>
-            ` : `<span style="opacity:.6;font-weight:900">—</span>`}
+            <button class="cgdBtn" style="padding:6px 10px" data-q-up="${esc(id)}">↑</button>
+            <button class="cgdBtn" style="padding:6px 10px" data-q-down="${esc(id)}">↓</button>
           </td>
+          <td><button class="cgdBtn" style="padding:6px 10px" data-q-rm="${esc(id)}">Remover</button></td>
         </tr>`;
       }).join("");
     }
 
-    renderTable();
+    function renderSelectTable(){
+      const set = new Set((state.queue.order||[]).map(String));
+      tbody.innerHTML = CONFIG.USERS.map(u=>{
+        const checked = set.has(String(u.id)) ? "checked" : "";
+        return `<tr>
+          <td><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
+          <td><b>${esc(u.name)}</b> <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></td>
+        </tr>`;
+      }).join("");
+    }
 
-    $("#qAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
-      state.queue.order = CONFIG.USERS.map(u=>String(u.id));
-      renderTable();
-    });
-    $("#qNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = false);
-      state.queue.order = [];
-      renderTable();
-    });
+    function applyCheckboxesToOrder(){
+      const checked = $$('input[type=checkbox][data-q-user]')
+        .filter(ch=>ch.checked)
+        .map(ch=> String(ch.getAttribute("data-q-user")));
+      // ordem estável
+      const prev = (state.queue.order||[]).map(String);
+      const next = [];
+      for(const id of prev){ if(checked.includes(id)) next.push(id); }
+      for(const id of checked){ if(!next.includes(id)) next.push(id); }
+      state.queue.order = next;
+      renderOrder();
+      renderQueue();
+      renderWho();
+    }
+
+    renderOrder();
+    renderSelectTable();
 
     tbody?.addEventListener("change", (e)=>{
       const ch = e.target.closest('input[type=checkbox][data-q-user]');
       if(!ch) return;
-      state.queue.order = currentCheckedOrder();
-      renderTable();
-      renderQueue();
-      renderWho();
+      applyCheckboxesToOrder();
     });
 
-    tbody?.addEventListener("click", (e)=>{
+    orderBody?.addEventListener("click", (e)=>{
       const up = e.target.closest("[data-q-up]");
       const down = e.target.closest("[data-q-down]");
+      const rm = e.target.closest("[data-q-rm]");
+      const order = (state.queue.order||[]).map(String);
+
       if(up || down){
         const id = String((up||down).getAttribute(up ? "data-q-up" : "data-q-down"));
-        const arr = (state.queue.order||[]).map(String);
-        const i = arr.indexOf(id);
+        const i = order.indexOf(id);
         if(i<0) return;
-
-        if(up && i>0){
-          const tmp = arr[i-1]; arr[i-1]=arr[i]; arr[i]=tmp;
-        }
-        if(down && i<arr.length-1){
-          const tmp = arr[i+1]; arr[i+1]=arr[i]; arr[i]=tmp;
-        }
-        state.queue.order = arr;
-        renderTable();
-        renderQueue();
-        renderWho();
+        if(up && i>0){ const t=order[i-1]; order[i-1]=order[i]; order[i]=t; }
+        if(down && i<order.length-1){ const t=order[i+1]; order[i+1]=order[i]; order[i]=t; }
+        state.queue.order = order;
+        // manter checkboxes coerentes
+        renderOrder();
+        renderQueue(); renderWho();
       }
+
+      if(rm){
+        const id = String(rm.getAttribute("data-q-rm"));
+        state.queue.order = order.filter(x=>x!==id);
+        renderOrder();
+        renderSelectTable();
+        renderQueue(); renderWho();
+      }
+    });
+
+    $("#qAll")?.addEventListener("click", ()=>{
+      state.queue.order = CONFIG.USERS.map(u=>String(u.id));
+      renderOrder();
+      renderSelectTable();
+      renderQueue(); renderWho();
+    });
+
+    $("#qNone")?.addEventListener("click", ()=>{
+      state.queue.order = [];
+      renderOrder();
+      renderSelectTable();
+      renderQueue(); renderWho();
     });
 
     $("#qApply")?.addEventListener("click", async ()=>{
@@ -1277,15 +1458,10 @@ body{ padding-bottom: 90px !important; }
         const payload = { order: (state.queue.order||[]).map(String), hiddenUsers: (state.queue.hiddenUsers||[]).map(String) };
 
         await execOptimistic(
-          {
-            kind:"queue.save",
-            payload,
-            applyLocal: ()=>{
-              renderQueue();
-              renderWho();
-              setStatus(`Atualizado: ${nowBRTime()} • v${BUILD}`);
-            }
-          },
+          { kind:"queue.save", payload, applyLocal: ()=>{
+            renderQueue(); renderWho();
+            setStatus(`Atualizado: ${nowBRTime()} • v${BUILD}`);
+          }},
           async ()=>{
             if(!state.queue.dealId){
               const fresh = await fetchQueue();
@@ -1304,14 +1480,12 @@ body{ padding-bottom: 90px !important; }
   async function modalHideUsers(){
     let q = null;
     try{
-      q = await fetchQueue();
-      state.queue = { ...state.queue, ...q };
+      const fresh = await fetchQueue();
+      state.queue = { ...state.queue, ...fresh };
       state.queueLoaded = true;
-    }catch(_){
-      q = { dealId: state.queue.dealId, order: state.queue.order||[], hiddenUsers: state.queue.hiddenUsers||[] };
-    }
+    }catch(_){}
 
-    const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
+    const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
 
     const body = `
       <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
@@ -1372,7 +1546,7 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  // ✅ ABRIR sempre abre: se rede falhar, usa cache state.userStats[userId]
+  // ✅ Modal ABRIR (com contagem dia/mês e histórico) — robusto em rede instável
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -1380,9 +1554,9 @@ body{ padding-bottom: 90px !important; }
     let hist = null;
     try{
       hist = await fetchUserHistory(u.id);
-      state.userStats[u.id] = hist; // atualiza cache
+      state.userStats[u.id] = hist;
     }catch(_){
-      hist = state.userStats[u.id] || { pulledToday:0, last:[] };
+      hist = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, last:[] };
     }
 
     const body = `
@@ -1392,7 +1566,8 @@ body{ padding-bottom: 90px !important; }
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Puxados hoje: <b>${esc(hist.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Atendidos hoje: <b>${esc(hist.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Atendidos no mês: <b>${esc(hist.pulledMonth||0)}</b></div>
         <div class="cgdBadge">Últimos encontrados: <b>${esc((hist.last||[]).length)}</b></div>
       </div>
 
@@ -1512,7 +1687,6 @@ body{ padding-bottom: 90px !important; }
         .map(ch=> ch.getAttribute("data-sel"));
     }
 
-    // lote follow-up (✅ cria deal na pipeline 17)
     $("#muBulkPrazo")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
@@ -1521,9 +1695,9 @@ body{ padding-bottom: 90px !important; }
       try{
         $("#muBulkPrazo").disabled = true;
         for(const id of ids){
-          const obj = (hist.last||[]).find(x=>String(x.ID)===String(id)) || { ID:id, ASSIGNED_BY_ID: u.id };
+          const obj = (hist.last||[]).find(x=>String(x.ID)===String(id)) || { ID:id };
           await actionSetPrazo(obj, iso, u.id);
-          await sleep(120);
+          await sleep(140);
         }
         await hardRefreshAll();
         alert("FOLLOW-UP em lote salvo ✅");
@@ -1535,7 +1709,6 @@ body{ padding-bottom: 90px !important; }
       }
     });
 
-    // lote mover stage (✅ offline-friendly)
     $("#muBulkMove")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
@@ -1546,7 +1719,7 @@ body{ padding-bottom: 90px !important; }
         for(const id of ids){
           const obj = (hist.last||[]).find(x=>String(x.ID)===String(id)) || { ID:id, TITLE:"" };
           await actionMoveLeadOptimistic(obj, to);
-          await sleep(140);
+          await sleep(160);
         }
         await hardRefreshAll();
         alert("Movimento em lote concluído ✅");
@@ -1558,7 +1731,6 @@ body{ padding-bottom: 90px !important; }
       }
     });
 
-    // ações individuais
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
       const sp = e.target.closest("[data-save-prazo]");
       const tf = e.target.closest("[data-do-transfer]");
@@ -1569,7 +1741,7 @@ body{ padding-bottom: 90px !important; }
           const iso = isoFromLocalInput(inp?.value || "");
           if(!iso) return alert("Preencha data/hora corretamente.");
           sp.disabled = true;
-          const obj = (hist.last||[]).find(x=>String(x.ID)===String(leadId)) || { ID:leadId, ASSIGNED_BY_ID: u.id };
+          const obj = (hist.last||[]).find(x=>String(x.ID)===String(leadId)) || { ID:leadId };
           await actionSetPrazo(obj, iso, u.id);
           await hardRefreshAll();
           alert("Prazo salvo ✅");
@@ -1583,7 +1755,7 @@ body{ padding-bottom: 90px !important; }
 
           await execOptimistic(
             { kind:"lead.update", payload:{ id: leadId, fields:{ ASSIGNED_BY_ID: String(toId) } }, applyLocal: ()=>{} },
-            async ()=> leadUpdate(leadId, { ASSIGNED_BY_ID: String(toId) })
+            async ()=> bx("crm.lead.update", { id: String(leadId), fields:{ ASSIGNED_BY_ID: String(toId) } })
           );
 
           await hardRefreshAll();
@@ -1599,20 +1771,30 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  // ✅ TRANSFERIR EM LOTE agora mostra badges com as infos pedidas
+  // ✅ TRANSFERIR EM LOTE: agora com FILTRO por OPERADORA + DATA DO LEAD
   async function modalBatchTransfer(){
     const items = state.newLeads || [];
-    const ops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    const opsUsers = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+
+    const operadoras = Array.from(new Set(items.map(it => pickVal(it, CONFIG.LEAD_UF.UF_OPERADORA)).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    const opsOperadora = `<option value="">Todas</option>` + operadoras.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join("");
 
     const body = `
       <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Buscar (título/nome):</label>
-        <input class="cgdInput" id="btSearch" placeholder="Ex.: MEDSENIOR" />
+        <label style="font-weight:950">Operadora:</label>
+        <select class="cgdSelect" id="btOperadora">${opsOperadora}</select>
+
+        <label style="font-weight:950">Data do Lead (de):</label>
+        <input class="cgdInput" type="date" id="btDtDe" />
+        <label style="font-weight:950">até:</label>
+        <input class="cgdInput" type="date" id="btDtAte" />
+
         <label style="font-weight:950">Transferir para:</label>
-        <select class="cgdSelect" id="btUser">${ops}</select>
-        <button class="cgdBtn" id="btApply">Aplicar</button>
+        <select class="cgdSelect" id="btUser">${opsUsers}</select>
+
+        <button class="cgdBtn" id="btApply">Aplicar filtros</button>
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
@@ -1651,16 +1833,37 @@ body{ padding-bottom: 90px !important; }
       }).join("") : `<tr><td colspan="2" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
     }
 
+    function applyFilters(){
+      const op = ($("#btOperadora").value||"").trim();
+      const de = isoDateStart($("#btDtDe").value||"");
+      const ate = isoDateEnd($("#btDtAte").value||"");
+
+      let list = items.slice();
+
+      if(op){
+        list = list.filter(it => String(pickVal(it, CONFIG.LEAD_UF.UF_OPERADORA)) === op);
+      }
+      if(de){
+        const tDe = Date.parse(de);
+        list = list.filter(it => {
+          const t = parseDtLead(it);
+          return t ? (t >= tDe) : true;
+        });
+      }
+      if(ate){
+        const tAte = Date.parse(ate);
+        list = list.filter(it => {
+          const t = parseDtLead(it);
+          return t ? (t <= tAte) : true;
+        });
+      }
+
+      draw(list);
+    }
+
     draw(items);
 
-    $("#btApply")?.addEventListener("click", ()=>{
-      const q = ($("#btSearch").value||"").trim().toUpperCase();
-      if(!q) return draw(items);
-      draw(items.filter(it=>{
-        const t = (leadDisplayName(it) + " " + String(it.TITLE||"")).toUpperCase();
-        return t.includes(q);
-      }));
-    });
+    $("#btApply")?.addEventListener("click", applyFilters);
 
     $("#btDo")?.addEventListener("click", async ()=>{
       const toId = $("#btUser").value;
@@ -1674,7 +1877,7 @@ body{ padding-bottom: 90px !important; }
         for(const id of ids){
           const obj = (items||[]).find(x=>String(x.ID)===String(id)) || { ID:id };
           await actionPickLead(obj, toId);
-          await sleep(150);
+          await sleep(160);
         }
         closeModal();
         await hardRefreshAll();
@@ -1759,7 +1962,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Refresh
+  // Refresh orchestration
   // =========================
   async function refreshNewLeads(){
     try{
@@ -1783,25 +1986,45 @@ body{ padding-bottom: 90px !important; }
     }
   }
 
+  // stats globais: soma de “atendidos” (IN_PROCESS) no dia/mês (sem user)
   async function refreshStats(){
+    await ensureLeadStatusMap();
+    const stDay = todayISOStart();
+    const endDay = stDay.slice(0,10) + "T23:59:59";
+    const stMonth = monthISOStart();
+    const nowIso = new Date().toISOString().slice(0,19);
+
     try{
-      const s = await fetchStatsPulled();
-      state.stats = s;
-      renderStats(s);
+      // tenta stagehistory primeiro (sem user)
+      const dayHist = await tryStageHistoryCounts("0", stDay, endDay);
+      // se vier null ou count=0 por falta de responsible, cai no fallback:
+      const day = dayHist ? dayHist.count : await bxListAll("crm.lead.list", {
+        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">=DATE_MODIFY": stDay, "<=DATE_MODIFY": endDay },
+        select: ["ID"]
+      }, 50000).then(x=>(x||[]).length);
+
+      const monthHist = await tryStageHistoryCounts("0", stMonth, nowIso);
+      const month = monthHist ? monthHist.count : await bxListAll("crm.lead.list", {
+        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">=DATE_MODIFY": stMonth, "<=DATE_MODIFY": nowIso },
+        select: ["ID"]
+      }, 200000).then(x=>(x||[]).length);
+
+      state.stats = { day, month };
+      renderStats(state.stats);
     }catch(_){}
   }
 
-  // ✅ não apaga cache em falha
+  // ✅ refreshUsers mais robusto: sequencial + retry, sem apagar cache
   async function refreshUsers(){
-    const jobs = CONFIG.USERS.map(async u=>{
+    for(const u of CONFIG.USERS){
       try{
         const h = await fetchUserHistory(u.id);
         state.userStats[u.id] = h;
       }catch(_){
-        // mantém o que já tinha
+        // mantém cache
       }
-    });
-    await Promise.allSettled(jobs);
+      await sleep(110);
+    }
     renderWho();
   }
 
@@ -1813,7 +2036,6 @@ body{ padding-bottom: 90px !important; }
       renderQueue();
       renderWho();
     }catch(_){
-      // mantém cache
       renderQueue();
       renderWho();
     }
@@ -1875,7 +2097,6 @@ body{ padding-bottom: 90px !important; }
 
     $("#queueOpen")?.addEventListener("click", modalQueue);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
-
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
     $("#btnNext")?.addEventListener("click", async ()=>{
