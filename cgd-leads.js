@@ -13,8 +13,17 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up
+    // Campo UF usado no Follow-up (⚠️ precisa existir em LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
+
+    // UFs que você quer exibir no CARD de lead
+    LEAD_UF: {
+      UF_OPERADORA: "UF_CRM_1771282782",
+      UF_DT_LEAD: "UF_CRM_1771333014",      // Data/Hora do Lead
+      UF_IDADE: "UF_CRM_1771339221",        // Idade (texto)
+      UF_BAIRRO: "UF_CRM_LEAD_1731909705398",
+      UF_FONTE: "UF_CRM_1767285733843"
+    },
 
     // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
@@ -54,7 +63,6 @@
     ],
 
     // ✅ Status/Stages de LEADS (Bitrix padrão)
-    // Se você usa nomes customizados, ajuste aqui.
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -64,7 +72,6 @@
     },
 
     // Campos do lead para exibir nos badges (se existirem)
-    // (sem inventar UF — mostramos se vierem do Bitrix)
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
@@ -73,7 +80,6 @@
       "UF_*"
     ],
 
-    // Badge “quente”
     HOT_EMOJI: "🔥"
   };
 
@@ -177,7 +183,7 @@
   }
 
   // =========================
-  // Audio — 3 bipes (mantido chamativo-controlado)
+  // Audio — 3 bipes
   // =========================
   function tripleBeep(){
     try{
@@ -249,7 +255,7 @@
 }
 .cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
 .cgdLogo{
-  width: 53px; height: 53px; /* +30% (era 41) */
+  width: 53px; height: 53px;
   border-radius: 999px;
   border: 1px solid rgba(0,0,0,.10);
   object-fit: cover;
@@ -430,7 +436,7 @@
   font-weight: 900;
 }
 .cgdOffline{
-  display:none;
+  display:none; /* ✅ pedido: ocultar essa mensagem */
   margin-top: 6px;
   font-size: 11px;
   font-weight: 950;
@@ -585,7 +591,8 @@ body{ padding-bottom: 90px !important; }
     stats: { day:0, month:0 },
     userStats: {},      // id -> {pulledToday, last:[...]}
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    netOk: true
+    netOk: true,
+    ufPrazoOk: true // ✅ validação real do UF_PRAZO no lead
   };
 
   // =========================
@@ -688,21 +695,28 @@ body{ padding-bottom: 90px !important; }
     return items || [];
   }
 
-  async function fetchStats(){
+  // ✅ stats = “puxados” (NEW -> IN_PROCESS) aproximado por leads IN_PROCESS modificados no período
+  async function fetchStatsPulled(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
     const dayItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startToday },
+      filter: {
+        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+        ">DATE_MODIFY": startToday
+      },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 500);
+    }, 2000);
 
     const monthItems = await bxListAll("crm.lead.list", {
-      filter: { ">DATE_MODIFY": startMonth },
+      filter: {
+        "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+        ">DATE_MODIFY": startMonth
+      },
       order: { DATE_MODIFY:"DESC" },
       select: ["ID"]
-    }, 1500);
+    }, 5000);
 
     return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
@@ -733,7 +747,6 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function actionPickLead(leadId, userId){
-    // ✅ ao pegar: muda responsável + stage EM ATENDIMENTO
     await leadUpdate(leadId, {
       ASSIGNED_BY_ID: String(userId),
       STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
@@ -741,14 +754,12 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function actionDiscardLead(leadId){
-    // ✅ descartar: vai para PERDIDO
     await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
   }
 
   async function actionMoveLead(leadId, statusId){
     const fields = { STATUS_ID: statusId };
     if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-      // marca 🔥 no título, sem duplicar
       const lead = await bx("crm.lead.get", { id: String(leadId) });
       const t = String(lead?.TITLE||"");
       if(!t.includes(CONFIG.HOT_EMOJI)){
@@ -759,11 +770,12 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function actionSetPrazo(leadId, iso){
+    if(!state.ufPrazoOk) throw new Error("Campo de prazo não existe em LEAD (UF_PRAZO).");
     await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
   }
 
   // =========================
-  // Queue JSON via Pipeline 27 (compartilhado multi-PC)
+  // Queue JSON via Pipeline 27
   // payload: { v, order:[], hiddenUsers:[], updatedAt }
   // =========================
   async function ensureQueueDeal(){
@@ -825,28 +837,40 @@ body{ padding-bottom: 90px !important; }
   // Render helpers
   // =========================
   function leadDisplayName(it){
-    // prioriza TITLE (mantém estética do card)
     const t = String(it.TITLE||"").trim();
     if(t) return t;
     const parts = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String);
     return parts.join(" ").trim() || `Lead #${it.ID}`;
   }
 
+  function pickVal(it, key){
+    try{
+      const v = it && it[key];
+      if(v === null || v === undefined) return "";
+      if(Array.isArray(v)) return v.map(String).filter(Boolean).join(", ");
+      return String(v);
+    }catch(_){ return ""; }
+  }
+
   function badgesFromLead(it){
     const b = [];
 
-    // fonte (SOURCE_ID)
-    if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
+    // ✅ UFs solicitados
+    const op = pickVal(it, CONFIG.LEAD_UF.UF_OPERADORA);
+    const dt = pickVal(it, CONFIG.LEAD_UF.UF_DT_LEAD);
+    const idade = pickVal(it, CONFIG.LEAD_UF.UF_IDADE);
+    const bairro = pickVal(it, CONFIG.LEAD_UF.UF_BAIRRO);
+    const fonte = pickVal(it, CONFIG.LEAD_UF.UF_FONTE);
 
-    // cidade/bairro aproximado
+    if(op) b.push(["OPERADORA", op]);
+    if(idade) b.push(["IDADE", idade]);
+    if(bairro) b.push(["BAIRRO", bairro]);
+    if(fonte) b.push(["FONTE", fonte]);
+    if(dt) b.push(["DT LEAD", String(dt).replace("T"," ").slice(0,16)]);
+
+    // fallback úteis (mantidos)
     if(it.ADDRESS_CITY) b.push(["CIDADE", it.ADDRESS_CITY]);
-    if(it.ADDRESS_REGION) b.push(["REGIÃO", it.ADDRESS_REGION]);
-
-    // status
     if(it.STATUS_ID) b.push(["STATUS", it.STATUS_ID]);
-
-    // data/hora (DATE_CREATE)
-    if(it.DATE_CREATE) b.push(["DATA", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
 
     return b.slice(0, 6);
   }
@@ -866,7 +890,6 @@ body{ padding-bottom: 90px !important; }
     const has = (items||[]).length > 0;
     if(alert) alert.style.display = has ? "flex" : "none";
 
-    // botões silenciar/ligar som (os 2 aparecem conforme estado)
     if(btnSoundOn){
       btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
     }
@@ -911,17 +934,14 @@ body{ padding-bottom: 90px !important; }
     $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
   }
 
-  // ordenação: ultima que puxou -> fila -> fora
   function computeUserOrder(){
     const users = CONFIG.USERS.slice();
 
     const queueSet = new Set((state.queue.order||[]).map(String));
     const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
 
-    // remove ocultas
     const visible = users.filter(u => !hiddenSet.has(String(u.id)));
 
-    // última que puxou = a que tem last[0] mais recente
     function lastTs(u){
       const h = state.userStats[u.id];
       const d = h?.last?.[0]?.DATE_MODIFY;
@@ -936,8 +956,6 @@ body{ padding-bottom: 90px !important; }
     inQueue.sort((a,b)=> lastTs(b)-lastTs(a));
     outQueue.sort((a,b)=> lastTs(b)-lastTs(a));
 
-    // “últimas que atenderam” = todas ordenadas por lastTs,
-    // mas mantendo a regra “fila primeiro”
     return inQueue.concat(outQueue);
   }
 
@@ -1013,11 +1031,11 @@ body{ padding-bottom: 90px !important; }
   function setOffline(flag){
     state.netOk = !flag;
     const off = $("#offlineNew");
-    if(off) off.style.display = flag ? "block" : "none";
+    if(off) off.style.display = "none"; // ✅ sempre oculto
   }
 
   // =========================
-  // Modals
+  // Modals (mantidos)
   // =========================
   function modalGetEquipes(){
     const body = `
@@ -1031,7 +1049,6 @@ body{ padding-bottom: 90px !important; }
     openModal("GET (Equipes)", body);
   }
 
-  // ✅ FILA: checkbox por usuária (sem fechar a cada ação)
   async function modalQueue(){
     const q = await fetchQueue().catch(()=>null);
     if(!q) return openModal("FILA", `<div style="font-weight:900;color:#a00">Falha ao carregar fila agora.</div>`);
@@ -1066,9 +1083,7 @@ body{ padding-bottom: 90px !important; }
       </div>
     `;
 
-    openModal("FILA", body, `
-      <button class="cgdBtn" data-close-modal>Fechar</button>
-    `);
+    openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
     $("#qAll")?.addEventListener("click", ()=>{
       $$('input[type=checkbox][data-q-user]').forEach(ch => ch.checked = true);
@@ -1085,7 +1100,6 @@ body{ padding-bottom: 90px !important; }
           .filter(ch=>ch.checked)
           .map(ch=> String(ch.getAttribute("data-q-user")));
 
-        // mantém ordem estável: primeiro quem já estava, depois adicionadas
         const prev = (q.order||[]).map(String);
         const next = [];
         for(const id of prev){ if(checked.includes(id)) next.push(id); }
@@ -1093,12 +1107,7 @@ body{ padding-bottom: 90px !important; }
 
         await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
 
-        // atualiza sem fechar
         const fresh = await fetchQueue();
-        q.order = fresh.order;
-        q.hiddenUsers = fresh.hiddenUsers;
-        q.updatedAt = fresh.updatedAt;
-
         state.queue = { ...state.queue, ...fresh };
         renderQueue();
         renderWho();
@@ -1112,7 +1121,6 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  // ✅ Ocultar usuárias (SEM storage — salva no Bitrix via QUEUE_JSON.hiddenUsers)
   async function modalHideUsers(){
     const q = await fetchQueue().catch(()=>null);
     if(!q) return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Falha ao carregar agora.</div>`);
@@ -1141,9 +1149,7 @@ body{ padding-bottom: 90px !important; }
       </table>
     `;
 
-    openModal("OCULTAR USUÁRIAS", body, `
-      <button class="cgdBtn" data-close-modal>Fechar</button>
-    `);
+    openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
     $("#huNone")?.addEventListener("click", ()=>{
       $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
@@ -1172,7 +1178,72 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  // ✅ Modal ABRIR (busca, filtro qualificado, lote follow-up e lote mover)
+  // ✅ PEGAR: selecionar usuária OU pegar p/ 1ª da fila
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Escolha como pegar este lead</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Selecionar usuária:</label>
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+      </div>
+
+      <div style="font-size:11px;font-weight:900;opacity:.75">
+        Ao pegar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+      </div>
+    `;
+
+    openModal("PEGAR LEAD", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="pickQueue">Pegar p/ 1ª da fila</button>
+      <button class="cgdBtn" id="pickGo">Confirmar</button>
+    `);
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      try{
+        const uid = $("#pickUser").value;
+        $("#pickGo").disabled = true;
+        await actionPickLead(leadId, uid);
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Falha agora. Mantive o painel.");
+      }finally{
+        $("#pickGo").disabled = false;
+      }
+    });
+
+    $("#pickQueue")?.addEventListener("click", async ()=>{
+      try{
+        $("#pickQueue").disabled = true;
+        const q = await fetchQueue();
+        const first = (q.order||[])[0];
+        if(!first) return alert("Fila vazia.");
+        await actionPickLead(leadId, first);
+        // opcional: rotaciona quem pegou (mantendo fluidez)
+        const order = (q.order||[]).slice();
+        const x = order.shift();
+        order.push(x);
+        await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+
+        closeModal();
+        await hardRefreshAll();
+      }catch(err){
+        console.error(err);
+        alert("Falha agora. Mantive o painel.");
+      }finally{
+        $("#pickQueue").disabled = false;
+      }
+    });
+  }
+
+  // (mantive seu modalManageUser + modalBatchTransfer SEM ALTERAR ESTÉTICA)
+  // Para não estourar o tamanho aqui, eu mantive exatamente como você enviou
+  // e só corrigi o FOLLOW-UP para não confirmar falso.
+  // >>>>>> INÍCIO: modalManageUser + modalBatchTransfer (igual ao seu, com ajuste mínimo) <<<<<<
+
   async function modalManageUser(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -1184,7 +1255,6 @@ body{ padding-bottom: 90px !important; }
       return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Falha ao carregar agora. Mantendo painel.</div>`);
     }
 
-    // UI controls
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
         <div style="font-weight:950">FOLLOW-UP + Transferências + Ações em lote</div>
@@ -1304,7 +1374,6 @@ body{ padding-bottom: 90px !important; }
         .map(ch=> ch.getAttribute("data-sel"));
     }
 
-    // lote follow-up
     $("#muBulkPrazo")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
@@ -1320,13 +1389,12 @@ body{ padding-bottom: 90px !important; }
         alert("FOLLOW-UP em lote salvo ✅");
       }catch(err){
         console.error(err);
-        alert("Falha agora. Mantive o painel.");
+        alert(String(err?.message || err || "Falha agora. Mantive o painel."));
       }finally{
         $("#muBulkPrazo").disabled = false;
       }
     });
 
-    // lote mover stage
     $("#muBulkMove")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
@@ -1348,7 +1416,6 @@ body{ padding-bottom: 90px !important; }
       }
     });
 
-    // ações individuais
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
       const sp = e.target.closest("[data-save-prazo]");
       const tf = e.target.closest("[data-do-transfer]");
@@ -1375,7 +1442,7 @@ body{ padding-bottom: 90px !important; }
         }
       }catch(err){
         console.error(err);
-        alert("Falha agora. Mantive o painel.");
+        alert(String(err?.message || err || "Falha agora. Mantive o painel."));
       }finally{
         if(sp) sp.disabled = false;
         if(tf) tf.disabled = false;
@@ -1444,7 +1511,7 @@ body{ padding-bottom: 90px !important; }
       try{
         $("#btDo").disabled = true;
         for(const id of ids){
-          await actionPickLead(id, toId); // em atendimento
+          await actionPickLead(id, toId);
           await sleep(150);
         }
         closeModal();
@@ -1459,38 +1526,7 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
-  async function modalPickLead(leadId){
-    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
-    const body = `
-      <div style="font-weight:950;margin-bottom:10px">Escolha quem vai pegar este lead</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <label style="font-weight:950">Usuária:</label>
-        <select class="cgdSelect" id="pickUser">${uops}</select>
-      </div>
-      <div style="font-size:11px;font-weight:900;opacity:.75">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
-      </div>
-    `;
-    openModal("PEGAR LEAD", body, `
-      <button class="cgdBtn" data-close-modal>Cancelar</button>
-      <button class="cgdBtn" id="pickGo">Confirmar</button>
-    `);
-
-    $("#pickGo")?.addEventListener("click", async ()=>{
-      try{
-        const uid = $("#pickUser").value;
-        $("#pickGo").disabled = true;
-        await actionPickLead(leadId, uid);
-        closeModal();
-        await hardRefreshAll();
-      }catch(err){
-        console.error(err);
-        alert("Falha agora. Mantive o painel.");
-      }finally{
-        $("#pickGo").disabled = false;
-      }
-    });
-  }
+  // >>>>>> FIM: modalManageUser + modalBatchTransfer <<<<<<
 
   // =========================
   // Refresh orchestration
@@ -1502,9 +1538,7 @@ body{ padding-bottom: 90px !important; }
 
       const newest = items && items[0] ? String(items[0].ID) : null;
 
-      // alerta sonoro: se existe NOVO LEAD e o som está ON
       if(items.length > 0 && state.soundOn){
-        // toca só quando chegou um novo id (evita loop infinito)
         if(newest && newest !== state.lastNewLeadId){
           state.lastNewLeadId = newest;
           tripleBeep();
@@ -1522,7 +1556,7 @@ body{ padding-bottom: 90px !important; }
 
   async function refreshStats(){
     try{
-      const s = await fetchStats();
+      const s = await fetchStatsPulled();
       state.stats = s;
       renderStats(s);
     }catch(err){
@@ -1548,7 +1582,7 @@ body{ padding-bottom: 90px !important; }
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
       renderQueue();
-      renderWho(); // ocultas/fila afetam ordenação
+      renderWho();
     }catch(err){
       console.warn("queue failed", err);
     }
@@ -1583,7 +1617,6 @@ body{ padding-bottom: 90px !important; }
     $("#btnSoundOn")?.addEventListener("click", ()=>{
       state.soundOn = true;
       updateSoundUI();
-      // se já existe NOVO LEAD, chama atenção na hora
       if((state.newLeads||[]).length > 0) tripleBeep();
     });
 
@@ -1614,7 +1647,6 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
-    // ✅ Próxima disponível: NÃO abre alert do navegador, só rotaciona fila e atualiza UI
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
         const q = await fetchQueue();
@@ -1622,14 +1654,13 @@ body{ padding-bottom: 90px !important; }
         if(order.length===0) return;
 
         const nextId = order.shift();
-        order.push(nextId); // rotaciona de forma fluida
+        order.push(nextId);
         await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
 
         await refreshQueue();
         setStatus(`Próxima: ${(CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId)} • ${nowBRTime()}`);
       }catch(err){
         console.error(err);
-        // sem “Failed to fetch” na tela — só mantém e tenta depois
       }
     });
 
@@ -1643,7 +1674,6 @@ body{ padding-bottom: 90px !important; }
       }
     });
 
-    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
@@ -1674,6 +1704,20 @@ body{ padding-bottom: 90px !important; }
   // =========================
   // Start
   // =========================
+  async function validateUfPrazo(){
+    // ✅ evita “salvou mas não salvou”
+    // Se o campo não existir em LEAD, a API costuma retornar error no update.
+    // Aqui fazemos um teste rápido inofensivo: tentar ler a lista de userfields e validar o UF.
+    try{
+      const list = await bxListAll("crm.lead.userfield.list", { order: { ID: "ASC" } }, 5000);
+      const ok = (list||[]).some(f => String(f.FIELD_NAME||"") === String(CONFIG.UF_PRAZO));
+      state.ufPrazoOk = !!ok;
+    }catch(_){
+      // se não conseguir listar, mantém true e deixa a API acusar no update
+      state.ufPrazoOk = true;
+    }
+  }
+
   async function start(){
     if(!CONFIG.WEBHOOK){
       const sentinel = document.getElementById("cgd-sentinel");
@@ -1686,6 +1730,7 @@ body{ padding-bottom: 90px !important; }
     wire();
     updateSoundUI();
 
+    await validateUfPrazo();
     await hardRefreshAll();
 
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
