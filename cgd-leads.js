@@ -2,6 +2,7 @@
    - Velocidade: Histórico carrega só “últimos 2” por usuária (rápido).
    - Fila sem realtime: sincroniza via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Busca global por nome: mostra responsável + permite TRANSFERIR
+   - Contagem “PEGAR”: grava UF Data PEGAR (UF_CRM_1771741018) ao pegar lead
 */
 (function(){
   "use strict";
@@ -15,10 +16,8 @@
     // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
-    // (OPCIONAL) Para resolver 100% “contagem de leads do dia/mês”:
-    // Crie um campo UF do tipo Data/Hora no LEAD (ex.: UF_CRM_XXXXXXXXXXXX)
-    // e coloque aqui. O painel vai setar esse campo quando “PEGAR”.
-    // UF_PICK_TS: "",
+    // ✅ Data PEGAR (tipo Data/Hora no LEAD) — grava quando clicar em PEGAR
+    UF_PICK_TS: "UF_CRM_1771741018",
 
     UF_OPERADORA: "UF_CRM_1771282782",
     UF_DT_LEAD:   "UF_CRM_1771333014",
@@ -52,10 +51,15 @@
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
+    // Timers base (alguns serão “rodiziados” abaixo p/ reduzir custo)
     REFRESH_NEW_LEADS_MS: 4500,
-    REFRESH_STATS_MS: 8000,
+    REFRESH_STATS_MS: 12000,
     REFRESH_QUEUE_MS: 2500,
-    REFRESH_WHO_MS: 8500,
+
+    // Histórico: (rodízio) — não refaz tudo sempre
+    WHO_ROUND_MS: 8500,
+    WHO_CHUNK_SIZE: 4,     // quantas usuárias por rodada
+    WHO_FULL_EVERY_MS: 90000, // a cada 90s faz uma rodada full (segurança)
 
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
@@ -143,15 +147,6 @@
     const m = String(d.getMonth()+1).padStart(2,"0");
     return `${y}-${m}-01T00:00:00`;
   }
-  function isoFromLocalInput(v){
-    if(!v) return "";
-    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-    if(!m) return "";
-    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
-    const dt = new Date(y, mo, d, hh, mi, 0, 0);
-    if(Number.isNaN(dt.getTime())) return "";
-    return dt.toISOString();
-  }
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
     const t = Date.parse(String(iso));
@@ -195,7 +190,7 @@
   }
 
   async function bx(method, params={}, options={}){
-    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
+    const timeoutMs = Math.max(6500, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
@@ -235,7 +230,7 @@
 
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
-          await sleep(220 + attempt*420);
+          await sleep(240 + attempt*460);
           continue;
         }
         clearTimeout(t);
@@ -455,12 +450,11 @@
 .cgdGrid{
   flex: 1 1 auto;
   display:grid;
-  /* NOVOS +20% (antes 0.65fr -> ~0.78fr), HISTÓRICO reduz */
   grid-template-columns: 0.78fr 2.22fr;
   gap: 12px;
 }
 
-/* Sidebar FILA: +20% */
+/* Sidebar FILA */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -521,7 +515,6 @@
   display:flex;
   flex-direction: column;
 }
-/* Cabeçalho: 1 linha, título centralizado e destacado */
 .cgdColHead{
   padding: 8px 10px;
   background: rgba(255,255,255,.78);
@@ -598,7 +591,7 @@
   flex-wrap: wrap;
 }
 
-/* 🚨 NOVO LEAD: preto sempre, só fica “alerta vermelho” quando há leads */
+/* 🚨 NOVO LEAD */
 .cgdAlertBox{
   border: 1px solid rgba(255,255,255,.14);
   border-radius: 16px;
@@ -677,67 +670,6 @@
 }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
 .cgdCnpj{ font-size: 11px; line-height: 1.25; }
-
-/* Modals */
-.cgdModalOverlay{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.28);
-  backdrop-filter: blur(4px);
-  z-index: 200;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding: 16px;
-}
-.cgdModal{
-  width: min(1040px, 96vw);
-  max-height: min(88vh, 900px);
-  background: rgba(255,255,255,.94);
-  border: 1px solid rgba(30,40,70,.16);
-  border-radius: 20px;
-  box-shadow: 0 24px 70px rgba(20,30,60,.22);
-  overflow:hidden;
-  display:flex;
-  flex-direction: column;
-}
-.cgdModalHead{
-  padding: 12px 14px;
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid rgba(30,40,70,.12);
-  background: rgba(255,255,255,.75);
-}
-.cgdModalTitle{ font-weight: 950; font-size: 13px; }
-.cgdModalBody{ padding: 12px 14px; overflow: auto; min-height: 0; }
-.cgdModalFoot{
-  padding: 12px 14px;
-  border-top: 1px solid rgba(30,40,70,.12);
-  display:flex;
-  gap: 10px;
-  justify-content:flex-end;
-  flex-wrap: wrap;
-  background: rgba(255,255,255,.75);
-}
-
-.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.cgdTable{
-  width: 100%;
-  border-collapse: collapse;
-  overflow: hidden;
-  border-radius: 14px;
-  border: 1px solid rgba(30,40,70,.12);
-}
-.cgdTable th, .cgdTable td{
-  padding: 10px 10px;
-  border-bottom: 1px solid rgba(30,40,70,.10);
-  font-size: 12px;
-  vertical-align: top;
-}
-.cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
-.cgdTable tr:last-child td{ border-bottom: 0; }
 
 body{ padding-bottom: 110px !important; }
 
@@ -824,6 +756,9 @@ body{ padding-bottom: 110px !important; }
     userPhoto: new Map(),
     userPhotoTs: new Map(),
     userPhotoPending: new Set(),
+
+    whoCursor: 0,
+    whoLastFull: 0
   };
 
   // =========================
@@ -853,20 +788,15 @@ body{ padding-bottom: 110px !important; }
           photo = await fetchUserPhotoOnce(id);
           if(photo) break;
         }catch(_){}
-        await sleep(180 + i*240);
+        await sleep(160 + i*220);
       }
     } finally{
       state.userPhotoPending.delete(id);
     }
 
-    if(photo){
-      state.userPhoto.set(id, photo);
-      state.userPhotoTs.set(id, now);
-    }else{
-      state.userPhoto.set(id, "");
-      state.userPhotoTs.set(id, now);
-    }
-    return state.userPhoto.get(id) || "";
+    state.userPhoto.set(id, photo || "");
+    state.userPhotoTs.set(id, now);
+    return photo || "";
   }
 
   async function warmUserPhotos(){
@@ -876,7 +806,7 @@ body{ padding-bottom: 110px !important; }
     for(let i=0;i<all.length;i+=6){
       const part = all.slice(i,i+6);
       await Promise.all(part.map(id=>ensureUserPhoto(id)));
-      await sleep(120);
+      await sleep(80);
     }
   }
 
@@ -889,7 +819,8 @@ body{ padding-bottom: 110px !important; }
       const img = document.createElement("img");
       img.className = "cgdBossPic";
       img.alt = "Sócio";
-      img.loading = "lazy";
+      img.loading = "eager";
+      img.decoding = "async";
       img.src = state.userPhoto.get(id) || BLANK_IMG;
       img.onerror = ()=>{ img.src = BLANK_IMG; };
       box.appendChild(img);
@@ -901,7 +832,7 @@ body{ padding-bottom: 110px !important; }
         const url = state.userPhoto.get(id) || "";
         if(url) img.src = url;
       });
-    }, 600);
+    }, 250);
   }
 
   // =========================
@@ -1106,12 +1037,16 @@ body{ padding-bottom: 110px !important; }
     body.innerHTML = "";
 
     const order = (state.queue.order || []).map(String);
+
     if(order.length === 0){
       const d = document.createElement("div");
       d.style.opacity = ".75";
       d.style.fontWeight = "900";
-      d.textContent = "Fila vazia. Clique em Gerenciar para adicionar usuárias.";
+      d.innerHTML = `Fila vazia.<br/>Clique em <b>Gerenciar</b> para adicionar usuárias.`;
       body.appendChild(d);
+
+      // ✅ garante que botões não fiquem “travados” ao ficar vazio
+      const w = $("#btnQueueWalk"); if(w) w.disabled = false;
       return;
     }
 
@@ -1131,13 +1066,12 @@ body{ padding-bottom: 110px !important; }
       body.appendChild(row);
     });
 
-    // desabilita cliques durante “commit” (evita duplicar estado)
     if(state.queueBusyUI){
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = true);
-      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = true);
+      const w = $("#btnQueueWalk"); if(w) w.disabled = true;
     }else{
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = false);
-      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = false);
+      const w = $("#btnQueueWalk"); if(w) w.disabled = false;
     }
   }
 
@@ -1175,12 +1109,13 @@ body{ padding-bottom: 110px !important; }
     return (items||[]).length;
   }
 
-  // Mapa de “puxados” (NEW -> IN_PROCESS) via stagehistory (mais correto)
+  // Mapa de “puxados” (NEW -> IN_PROCESS) via stagehistory
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
     async function pulledBetween(isoStart){
+      // 1) tenta stagehistory (mais correto)
       try{
         const items = await bxListAll("crm.stagehistory.list", {
           filter: {
@@ -1200,12 +1135,14 @@ body{ padding-bottom: 110px !important; }
           if(uid) byUser[uid] = (byUser[uid]||0) + 1;
         });
         return { total, byUser };
-      }catch(_){
-        // fallback aproximado
+      }catch(_){}
+
+      // 2) ✅ se tiver UF_PICK_TS, usa ele (100% alinhado ao PEGAR)
+      if(CONFIG.UF_PICK_TS){
         const arr = await bxListAll("crm.lead.list", {
-          filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
-          order: { DATE_MODIFY:"DESC" },
-          select: ["ID","ASSIGNED_BY_ID"]
+          filter: { `>${CONFIG.UF_PICK_TS}`: isoStart },
+          order: { [CONFIG.UF_PICK_TS]:"DESC" },
+          select: ["ID","ASSIGNED_BY_ID", CONFIG.UF_PICK_TS]
         }, 5000);
 
         const byUser = {};
@@ -1215,6 +1152,20 @@ body{ padding-bottom: 110px !important; }
         });
         return { total:(arr||[]).length, byUser };
       }
+
+      // 3) fallback aproximado
+      const arr = await bxListAll("crm.lead.list", {
+        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
+        order: { DATE_MODIFY:"DESC" },
+        select: ["ID","ASSIGNED_BY_ID"]
+      }, 5000);
+
+      const byUser = {};
+      (arr||[]).forEach(x=>{
+        const uid = String(x.ASSIGNED_BY_ID||"");
+        if(uid) byUser[uid] = (byUser[uid]||0)+1;
+      });
+      return { total:(arr||[]).length, byUser };
     }
 
     const day = await pulledBetween(startToday);
@@ -1295,7 +1246,7 @@ body{ padding-bottom: 110px !important; }
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
       };
-      // Se você criar UF_PICK_TS, vai ficar 100% confiável p/ contagem
+      // ✅ grava Data PEGAR
       if(CONFIG.UF_PICK_TS){
         fields[CONFIG.UF_PICK_TS] = new Date().toISOString();
       }
@@ -1312,7 +1263,6 @@ body{ padding-bottom: 110px !important; }
           order.splice(i,1);
           order.push(uid);
           const next = await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
-          // protege contra “voltar” com polling
           state.queue = { ...state.queue, ...q, order, updatedAt: next.updatedAt, dealId: q.dealId };
         }
       });
@@ -1325,7 +1275,6 @@ body{ padding-bottom: 110px !important; }
     enqueueOp("transferLead", async ()=>{
       const lead = await bx("crm.lead.get", { id: String(leadId) });
       const fields = { ASSIGNED_BY_ID: String(toUserId) };
-      // se estiver em NEW, manda pra EM_ATENDIMENTO ao transferir
       if(String(lead?.STATUS_ID||"") === CONFIG.LEAD_STATUS.NOVO_LEAD){
         fields.STATUS_ID = CONFIG.LEAD_STATUS.EM_ATENDIMENTO;
       }
@@ -1353,12 +1302,9 @@ body{ padding-bottom: 110px !important; }
 
     const has = (items||[]).length > 0;
 
-    // Alert: sempre preto, só “hot” quando tem lead
     if(alert){
       alert.classList.toggle("hot", !!has);
-      // se quiser ocultar quando vazio, troque pra: alert.style.display = has ? "flex" : "none";
       alert.style.display = "flex";
-      // sem leads: deixa “quieto”
       alert.style.opacity = has ? "1" : ".55";
     }
 
@@ -1408,8 +1354,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Histórico MUITO mais rápido:
-  // - Só busca “últimos 2” por usuária
+  // Histórico rápido
   // =========================
   async function fetchUserLastTwo(userId){
     const st = [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO, CONFIG.LEAD_STATUS.ATENDIDO];
@@ -1421,14 +1366,14 @@ body{ padding-bottom: 110px !important; }
     return items || [];
   }
 
-  async function refreshUserCardsFast(){
-    // primeiro: garante stats já preenchidos, senão dia/mês ficam 0
-    const jobs = CONFIG.USERS.map(async u=>{
-      const lastTwo = await fetchUserLastTwo(u.id);
-      state.userCards[u.id] = {
+  async function refreshUserCardsFast(userIds){ // se não passar ids => full
+    const ids = (userIds && userIds.length) ? userIds : CONFIG.USERS.map(u=>u.id);
+    const jobs = ids.map(async uid=>{
+      const lastTwo = await fetchUserLastTwo(uid);
+      state.userCards[uid] = {
         lastTwo,
-        pulledToday: Number(state._pulledDayByUser?.[String(u.id)] || 0),
-        pulledMonth: Number(state._pulledMonthByUser?.[String(u.id)] || 0),
+        pulledToday: Number(state._pulledDayByUser?.[String(uid)] || 0),
+        pulledMonth: Number(state._pulledMonthByUser?.[String(uid)] || 0),
       };
     });
     await Promise.allSettled(jobs);
@@ -1470,7 +1415,8 @@ body{ padding-bottom: 110px !important; }
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdUserLine">
-          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
+          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" decoding="async"
+               src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
           <div style="width:100%">
             <div class="cgdCardRow">
               <div style="font-weight:950">${esc(u.name)}</div>
@@ -1496,7 +1442,7 @@ body{ padding-bottom: 110px !important; }
       list.appendChild(empty);
     }
 
-    // completa fotos em background
+    // completa fotos em background (mais agressivo + retry leve)
     setTimeout(async ()=>{
       const imgs = $$("img[data-user-pic]");
       const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
@@ -1504,18 +1450,19 @@ body{ padding-bottom: 110px !important; }
       imgs.forEach(img=>{
         const id = String(img.getAttribute("data-user-pic"));
         const url = state.userPhoto.get(id) || "";
-        if(url && img.src !== url) img.src = url;
+        if(url && img.src !== url){
+          img.src = url;
+        }
       });
-    }, 450);
+    }, 220);
   }
 
   // =========================
-  // Queue UI actions (bug fix intermitente)
+  // Queue UI actions
   // =========================
   async function refreshQueue(){
     try{
       const q = await fetchQueue();
-      // ✅ Só aceita se o remoto for mais novo que o local
       if((q.updatedAt||0) >= (state.queue.updatedAt||0)){
         state.queue = { ...state.queue, ...q };
         renderQueueSidebar();
@@ -1531,17 +1478,14 @@ body{ padding-bottom: 110px !important; }
     if(state.queueBusyUI) return;
     state.queueBusyUI = true;
     renderQueueSidebar();
-    $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = true);
 
     try{
       const q = state.queue.dealId ? state.queue : await fetchQueue();
 
-      // UI imediata + updatedAt local “avança” pra não voltar no polling
       const localUpdatedAt = Date.now();
       state.queue = { ...state.queue, ...q, order: nextOrder.slice(), updatedAt: localUpdatedAt, dealId: q.dealId };
       renderQueueSidebar();
 
-      // commit real
       const next = await saveQueue(q.dealId, { order: nextOrder, hiddenUsers: q.hiddenUsers||[] });
       state.queue.updatedAt = next.updatedAt;
       setStatus(`Fila salva: ${nowBRTime()}`);
@@ -1550,7 +1494,6 @@ body{ padding-bottom: 110px !important; }
     }finally{
       state.queueBusyUI = false;
       renderQueueSidebar();
-      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = false);
     }
   }
 
@@ -1596,15 +1539,15 @@ body{ padding-bottom: 110px !important; }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
-    // carrega “em paralelo” pra acelerar o first paint
     await Promise.allSettled([
       refreshNewLeads(),
       refreshPendingCount(),
       refreshQueue(),
       refreshStats()
     ]);
-    // depois dos stats, atualiza cards de usuária rápido
+    // ✅ primeiro load: histórico FULL
     await refreshUserCardsFast();
+    state.whoLastFull = Date.now();
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
@@ -1797,11 +1740,9 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalBatchTransfer(){
-    // (mantive como estava no seu arquivo anterior; se quiser eu simplifico depois)
     alert("Transferir em lote permanece como antes — se você quiser, eu também otimizo essa tela.");
   }
 
-  // Modal “Abrir usuário” (lista completa: só aqui, por isso o histórico ficou rápido)
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -1893,6 +1834,13 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalLeadDetails(leadId){
+    const drawError = (msg)=> openModal("LEAD", `
+      <div style="font-weight:900;color:#a00">${esc(msg||"Sem conexão no momento. Tente novamente.")}</div>
+      <div style="margin-top:10px">
+        <button class="cgdBtn" id="retryLead">Tentar novamente</button>
+      </div>
+    `);
+
     openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
     try{
       const it = await bx("crm.lead.get", { id: String(leadId) });
@@ -1942,7 +1890,7 @@ body{ padding-bottom: 110px !important; }
           btn.disabled = true;
           const to = $("#trUser").value;
           await actionTransferLead(it.ID, to);
-          alert("Transferência enfileirada ✅ (sincroniza quando normalizar a conexão)");
+          alert("Transferência enfileirada ✅");
         }finally{
           btn.disabled = false;
         }
@@ -1950,7 +1898,8 @@ body{ padding-bottom: 110px !important; }
 
     }catch(_){
       closeModal();
-      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      drawError("Sem conexão no momento. Tente novamente.");
+      $("#retryLead")?.addEventListener("click", ()=> modalLeadDetails(leadId));
     }
   }
 
@@ -2032,7 +1981,7 @@ body{ padding-bottom: 110px !important; }
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
     $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
-    $("#btnRefreshWho")?.addEventListener("click", refreshUserCardsFast);
+    $("#btnRefreshWho")?.addEventListener("click", ()=> refreshUserCardsFast());
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
     $("#btnQueueManage")?.addEventListener("click", modalQueueManage);
@@ -2071,7 +2020,6 @@ body{ padding-bottom: 110px !important; }
     $("#btnGET")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.GET, "_blank", "noopener"));
     $("#btnVendas")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener"));
 
-    // Busca
     $("#btnSearch")?.addEventListener("click", async ()=>{
       const term = ($("#searchBox").value||"").trim();
       if(!term) return;
@@ -2088,7 +2036,6 @@ body{ padding-bottom: 110px !important; }
     });
     $("#searchBox")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnSearch")?.click(); });
 
-    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
@@ -2096,7 +2043,6 @@ body{ padding-bottom: 110px !important; }
 
       if(g) modalPickLead(g.getAttribute("data-grab"));
       if(d){
-        // descarte simples (mantive)
         const id = d.getAttribute("data-discard");
         state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
         state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
@@ -2107,10 +2053,37 @@ body{ padding-bottom: 110px !important; }
       }
       if(ou) modalUserOpen(ou.getAttribute("data-open-user"));
     });
+
+    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
   }
 
   // =========================
-  // Start (carrega rápido)
+  // Rodízio do Histórico (mais rápido e leve)
+  // =========================
+  async function refreshWhoRound(){
+    const now = Date.now();
+    const fullDue = (now - (state.whoLastFull||0)) >= CONFIG.WHO_FULL_EVERY_MS;
+
+    if(fullDue){
+      state.whoLastFull = now;
+      await refreshUserCardsFast(); // full
+      state.whoCursor = 0;
+      return;
+    }
+
+    const ids = CONFIG.USERS.map(u=>u.id);
+    if(!ids.length) return;
+
+    const chunk = [];
+    for(let i=0;i<CONFIG.WHO_CHUNK_SIZE;i++){
+      chunk.push(ids[state.whoCursor % ids.length]);
+      state.whoCursor++;
+    }
+    await refreshUserCardsFast(chunk);
+  }
+
+  // =========================
+  // Start
   // =========================
   async function start(){
     injectCSS();
@@ -2118,19 +2091,18 @@ body{ padding-bottom: 110px !important; }
     wire();
     updateSoundUI();
 
-    // carrega a tela rápido: primeiro pinta, depois aquece fotos
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
-    // primeira carga: paralelizada
     await hardRefreshAll();
     renderBossPics();
 
-    // timers
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
-    setInterval(refreshUserCardsFast, CONFIG.REFRESH_WHO_MS);
+
+    // ✅ histórico em rodízio
+    setInterval(refreshWhoRound, CONFIG.WHO_ROUND_MS);
 
     setInterval(flushOps, 2500);
   }
