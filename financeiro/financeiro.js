@@ -261,11 +261,67 @@
     }
 
     // Normaliza estágios para {STATUS_ID, NAME}
-    S.stages = stages.map(x => ({
-      STATUS_ID: x.STATUS_ID || x.statusId || x.ID || x.Id || x.id,
-      NAME: x.NAME || x.name,
-      SORT: Number(x.SORT || x.sort || 0),
-    })).filter(x => x.STATUS_ID);
+    // Normaliza estágios para {STATUS_ID, NAME} e FILTRA só os da categoria 27
+const catPrefix = `C${CFG.DEAL_CATEGORY_ID}:`; // ex.: C27:
+
+// Normaliza estágios para {STATUS_ID, NAME} e FILTRA só os da categoria 27
+const catPrefix = `C${CFG.DEAL_CATEGORY_ID}:`; // ex.: C27:
+
+S.stages = stages.map(x => ({
+  STATUS_ID: x.STATUS_ID || x.statusId || x.ID || x.Id || x.id,
+  NAME: x.NAME || x.name,
+  SORT: Number(x.SORT || x.sort || 0),
+})).filter(st => {
+  const id = String(st.STATUS_ID || "");
+  const nm = String(st.NAME || "").trim().toUpperCase();
+
+  if (!id) return false;
+
+  // remove lixo conhecido
+  if (id.toUpperCase().includes("QUEUE_JSON") || nm === "QUEUE_JSON") return false;
+
+  // Pipeline 27 normalmente vem com prefixo C27:
+  // Mantém somente os que pertencem à categoria 27
+  if (CFG.DEAL_CATEGORY_ID !== 0) {
+    return id.startsWith(catPrefix);
+  }
+
+  // (categoria 0): mantém tudo
+  return true;
+});
+
+S.stages.sort((a, b) => (a.SORT - b.SORT));
+
+// mapa name -> status_id
+S.stageByName = {};
+for (const st of S.stages) {
+  S.stageByName[String(st.NAME || "").trim().toUpperCase()] = String(st.STATUS_ID);
+}
+  const id = String(st.STATUS_ID || "");
+  const nm = String(st.NAME || "").trim().toUpperCase();
+
+  if (!id) return false;
+
+  // remove lixo conhecido
+  if (id.toUpperCase().includes("QUEUE_JSON") || nm === "QUEUE_JSON") return false;
+
+  // Pipeline 27 normalmente vem com prefixo C27:
+  // Mantém somente os que pertencem à categoria 27
+  if (CFG.DEAL_CATEGORY_ID !== 0) {
+    return id.startsWith(catPrefix);
+  }
+
+  // (categoria 0): mantém tudo
+  return true;
+});
+
+S.stages.sort((a, b) => (a.SORT - b.SORT));
+
+// mapa name -> status_id
+S.stageByName = {};
+for (const st of S.stages) {
+  S.stageByName[String(st.NAME || "").trim().toUpperCase()] = String(st.STATUS_ID);
+}
 
     S.stages.sort((a, b) => (a.SORT - b.SORT));
 
