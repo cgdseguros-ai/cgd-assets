@@ -11,7 +11,7 @@
   // CONFIG — AJUSTE AQUI
   // =========================
   const CONFIG = {
-    WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
+    WEBHOOK: "https://https://painelleads.cgdseguros.workers.dev/bx/",
 
     // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
