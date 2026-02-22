@@ -1,8 +1,9 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - Cloudflare Worker PROXY + Realtime (WS) para atualização rápida entre navegadores
    - Fila multi-PC e ocultar usuárias via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
-   - Layout/estética MANTIDOS (não alterar estética)
-   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
+   - Layout/estética MANTIDOS (apenas ajustes solicitados: topbar dark, fotos, barra inferior etc.)
+   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, ATENDIDO, QUALIFICADO, PERDIDO, CONVERTIDO
 */
 (function(){
   "use strict";
@@ -11,10 +12,15 @@
   // CONFIG — AJUSTE AQUI
   // =========================
   const CONFIG = {
-    WEBHOOK: "https://https://painelleads.cgdseguros.workers.dev/bx/",
+    // ✅ Cloudflare Worker (Proxy do Bitrix)
+    WEBHOOK: "https://painelleads.cgdseguros.workers.dev/bx/",
+    // ✅ Cloudflare Worker (Realtime)
+    REALTIME_BASE: "https://painelleads.cgdseguros.workers.dev",
 
-    // Campo UF usado no Follow-up (no LEAD)
+    // Campo UF usado no Follow-up (no LEAD) + também no DEAL do follow-up
     UF_PRAZO: "UF_CRM_1768175087",
+    // ✅ Se o campo de prazo no DEAL tiver outro ID, troque aqui:
+    UF_PRAZO_DEAL: "UF_CRM_1768175087",
 
     // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
@@ -22,6 +28,7 @@
     UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
+    UF_TELEFONE:  "UF_CRM_1771282207",
 
     // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
@@ -51,15 +58,11 @@
       }
     },
 
-    // Logo (+30% em cima do que já estava)
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
+    // ✅ Logo (nova solicitada)
+    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
-    // Links GET (equipes)
-    GET_LINKS: {
-      "DELTA": "https://getcgdcorretora.bitrix24.site/equipedelta/",
-      "BETA":  "https://getcgdcorretora.bitrix24.site/equipebeta/",
-      "ALPHA": "https://getcgdcorretora.bitrix24.site/equipeALPHA/"
-    },
+    // ✅ GET EQUIPES (URL única)
+    GET_EQUIPES_URL: "https://getcgdcorretora.bitrix24.site/tfequipes/",
 
     // Refresh (mantendo seus tempos)
     REFRESH_NEW_LEADS_MS: 4500,
@@ -70,7 +73,7 @@
     // Limites
     LIMIT_NEW_RENDER: 30,          // renderiza 30 (visual), mas busca/conta mais no background
     LIMIT_BATCH_MAX:  600,         // transferir lote (puxa até 600 pendentes)
-    LIMIT_USER_LAST:  120,         // histórico por usuária (2 últimos + lista p/ abrir)
+    LIMIT_USER_LAST:  140,         // histórico por usuária
 
     // Usuárias do painel
     USERS: [
@@ -88,10 +91,15 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // ✅ Status/Stages de LEADS (seus IDs reais)
+    // ✅ Sócios (para fotos no rodapé)
+    PARTNERS: [27, 1, 15],
+
+    // ✅ Status/Stages de LEADS (IDs reais)
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
+      // ⚠️ Ajuste se ATENDIDO tiver um ID específico no seu Bitrix:
+      ATENDIDO: "UC_ATENDIDO_TROQUE_AQUI",
       QUALIFICADO: "UC_0NFA3H",
       PERDIDO: "UC_5IMTI4",
       CONVERTIDO: "UC_B3RQAF",
@@ -118,6 +126,7 @@
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+  const clamp = (n, a,b)=> Math.max(a, Math.min(b, n));
 
   function nowBRTime(){
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
@@ -152,7 +161,61 @@
     const dd = String(d.getDate()).padStart(2,"0");
     const mm = String(d.getMonth()+1).padStart(2,"0");
     const yy = d.getFullYear();
-    return `${dd}/${mm}/${yy}`;
+    const hh = String(d.getHours()).padStart(2,"0");
+    const mi = String(d.getMinutes()).padStart(2,"0");
+    return `${dd}/${mm}/${yy} ${hh}:${mi}`;
+  }
+
+  // =========================
+  // Realtime (Cloudflare WS)
+  // =========================
+  let _ws = null;
+  function realtimeConnect(){
+    try{
+      if(!CONFIG.REALTIME_BASE) return null;
+
+      const wsUrl = String(CONFIG.REALTIME_BASE)
+        .replace(/^https:/i, "wss:")
+        .replace(/^http:/i, "ws:")
+        .replace(/\/+$/,"") + "/realtime/connect";
+
+      const ws = new WebSocket(wsUrl);
+      _ws = ws;
+
+      ws.onmessage = (ev)=>{
+        try{
+          const msg = JSON.parse(ev.data);
+          if(msg.type === "QUEUE_UPDATED"){
+            refreshQueue();
+            refreshUsers();
+          }
+          if(msg.type === "LEADS_UPDATED"){
+            refreshNewLeads();
+            refreshPendingCount();
+            refreshUsers();
+          }
+        }catch(_){}
+      };
+
+      ws.onclose = ()=> setTimeout(realtimeConnect, 1200);
+      ws.onerror = ()=> { try{ ws.close(); }catch(_){} };
+
+      return ws;
+    }catch(_){
+      setTimeout(realtimeConnect, 1500);
+      return null;
+    }
+  }
+
+  async function realtimePublish(type, payload){
+    try{
+      if(!CONFIG.REALTIME_BASE) return;
+      await fetch(String(CONFIG.REALTIME_BASE).replace(/\/+$/,"") + "/realtime/publish", {
+        method:"POST",
+        headers:{ "content-type":"application/json" },
+        body: JSON.stringify({ type, payload: payload||{} })
+      });
+    }catch(_){}
   }
 
   // =========================
@@ -179,7 +242,7 @@
     return out;
   }
 
-  // ✅ AJUSTE (Item 3): tornar as chamadas mais resilientes (timeout + retry leve)
+  // chamadas resilientes
   async function bx(method, params={}, options={}){
     const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
@@ -188,7 +251,6 @@
 
     let lastErr = null;
 
-    // retry curto para falhas intermitentes
     for(let attempt=0; attempt<3; attempt++){
       const ctrl = new AbortController();
       const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, timeoutMs);
@@ -198,7 +260,8 @@
           method:"POST",
           headers:{"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
           body,
-          signal: ctrl.signal
+          signal: ctrl.signal,
+          cache: "no-store"
         });
 
         const data = await resp.json().catch(()=> ({}));
@@ -215,8 +278,6 @@
         return data.result;
       }catch(err){
         lastErr = err;
-
-        // só retry em falhas tipicamente intermitentes
         const http = err && err._httpStatus;
         const transientHTTP = (http===429 || http===500 || http===502 || http===503 || http===504);
         const aborted = (err && (err.name==="AbortError"));
@@ -237,7 +298,6 @@
     throw lastErr || new Error("Falha desconhecida");
   }
 
-  // Paginação robusta (resolve “só 50/30”)
   async function bxListAll(method, params, max=500){
     let start = 0;
     let out = [];
@@ -247,17 +307,14 @@
       out = out.concat(items);
       if(out.length >= max) break;
 
-      // next pode vir em r.next, ou quando list retorna array (nesse caso costuma não paginar)
       if(r && typeof r === "object" && r.next !== undefined && r.next !== null){
         start = r.next;
         if(!start) break;
       }else{
-        // fallback: se veio array e já veio menos que 50, para
         if(items.length < 50) break;
         start = start + 50;
       }
 
-      // proteção
       if(items.length === 0) break;
     }
     return out.slice(0, max);
@@ -265,14 +322,9 @@
 
   // =========================
   // “Offline”: fila de ações (só RAM)
-  // - NÃO mostra mensagem na tela
-  // - Executa UI otimista e tenta sincronizar quando normalizar
   // =========================
-  const pendingOps = []; // { name, run: async()=>void }
-
-  function enqueueOp(name, run){
-    pendingOps.push({ name, run });
-  }
+  const pendingOps = [];
+  function enqueueOp(name, run){ pendingOps.push({ name, run }); }
 
   let flushBusy = false;
   async function flushOps(){
@@ -280,7 +332,6 @@
     if(pendingOps.length === 0) return;
     flushBusy = true;
     try{
-      // tenta 1 por vez pra não explodir em rede ruim
       for(let i=0; i<25 && pendingOps.length; i++){
         const op = pendingOps[0];
         try{
@@ -288,7 +339,6 @@
           pendingOps.shift();
           await sleep(90);
         }catch(_){
-          // ainda sem rede: para e tenta depois
           break;
         }
       }
@@ -298,7 +348,7 @@
   }
 
   // =========================
-  // Audio — 3 bipes (mantido)
+  // Audio — 3 bipes
   // =========================
   function tripleBeep(){
     try{
@@ -329,7 +379,7 @@
   }
 
   // =========================
-  // UI / CSS (ESTÉTICA MANTIDA)
+  // UI / CSS
   // =========================
   function injectCSS(){
     const css = `
@@ -343,7 +393,7 @@
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 60px);
-  padding: 10px 12px 90px;
+  padding: 10px 12px 110px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
   color: var(--text);
   background:
@@ -357,45 +407,49 @@
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(255,255,255,.72);
+  background: rgba(18,18,20,.92);        /* ✅ topbar dark */
+  color: #fff;                           /* ✅ texto branco */
   backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255,255,255,.10);
   border-radius: 999px;
   padding: 10px 12px;
   display:flex;
   align-items:center;
   justify-content: space-between;
   gap: 10px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 14px 34px rgba(10,10,12,.22);
 }
 .cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
 .cgdLogo{
   width: 53px; height: 53px;
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,.10);
+  border: 1px solid rgba(255,255,255,.18);
   object-fit: cover;
   background: #fff;
 }
-.cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
+.cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; color:#fff; }
 .cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
 .cgdPill{
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.78);
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.10);
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 900;
+  color: #fff;
 }
 .cgdBtn{
   cursor:pointer;
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.12);
+  color:#fff;
   border-radius: 999px;
   padding: 7px 12px;
   font-size: 12px;
   font-weight: 950;
 }
 .cgdBtn:active{ transform: translateY(1px); }
+.cgdBtn:disabled{ opacity:.55; cursor:not-allowed; }
 
 .cgdGrid{
   margin-top: 12px;
@@ -536,7 +590,9 @@
   flex-direction: column;
   gap: 8px;
 }
-.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:space-between; }
+.cgdQueueRowLeft{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cgdQueueRowRight{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 .cgdQueueChip{
   border: 1px solid rgba(30,40,70,.14);
   background: rgba(255,255,255,.9);
@@ -551,7 +607,7 @@
   font-weight: 900;
 }
 
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
+/* ✅ QUEM PEGOU HOJE em 2 colunas */
 #listWho.cgdWhoGrid{
   display:grid !important;
   grid-template-columns: 1fr 1fr;
@@ -561,7 +617,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* ===== Modals modernos (mantidos) ===== */
+/* ===== Modals ===== */
 .cgdModalOverlay{
   position: fixed;
   inset: 0;
@@ -574,8 +630,8 @@
   padding: 16px;
 }
 .cgdModal{
-  width: min(1040px, 96vw);
-  max-height: min(88vh, 900px);
+  width: min(1100px, 96vw);
+  max-height: min(88vh, 920px);
   background: rgba(255,255,255,.94);
   border: 1px solid rgba(30,40,70,.16);
   border-radius: 20px;
@@ -635,6 +691,35 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
+.cgdUserCard{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
+.cgdAvatar{
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.08);
+  border: 1px solid rgba(0,0,0,.10);
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.cgdAvatarPH{
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.08);
+  border: 1px solid rgba(0,0,0,.10);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:950;
+  font-size: 12px;
+  color: rgba(18,26,40,.80);
+  flex: 0 0 auto;
+}
+
 .bitrix-footer{
   position: fixed !important;
   left: 0 !important;
@@ -643,7 +728,7 @@
   top: auto !important;
   z-index: 5 !important;
 }
-body{ padding-bottom: 90px !important; }
+body{ padding-bottom: 120px !important; }
 
 @media (max-width: 1100px){
   .cgdGrid{ grid-template-columns: 1fr; }
@@ -695,14 +780,60 @@ body{ padding-bottom: 90px !important; }
   const state = {
     soundOn: true,
     lastNewLeadId: null,
-    newLeadsAll: [],      // tudo (p/ filtros/lote)
-    newLeadsRender: [],   // render (até LIMIT_NEW_RENDER)
-    pendingCount: 0,      // total correto de pendentes
+    newLeadsAll: [],
+    newLeadsRender: [],
+    pendingCount: 0,
     stats: { day:0, month:0 },
-    userStats: {},        // id -> { pulledToday, pulledMonth, lastTwo:[...], list:[...] }
+    userStats: {},           // id -> { day, month, convertedMonth, convRate, lastTwo, list }
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    lastServedUserName: "—"
+    lastServedUserName: "—",
+    userPhotos: {},          // id -> url
+    partnerPhotos: {}        // id -> url
   };
+
+  // =========================
+  // User photos (Bitrix user.get)
+  // =========================
+  function initials(name){
+    const parts = String(name||"").trim().split(/\s+/).filter(Boolean);
+    const a = parts[0] ? parts[0][0] : "";
+    const b = parts[1] ? parts[1][0] : (parts[0] && parts[0][1] ? parts[0][1] : "");
+    return (a + b).toUpperCase();
+  }
+
+  function normalizePhotoUrl(v){
+    // Bitrix pode devolver URL absoluta ou relativa; tenta normalizar
+    const s = String(v||"").trim();
+    if(!s) return "";
+    if(/^https?:\/\//i.test(s)) return s;
+    // se vier /upload/...
+    if(s.startsWith("/")){
+      // não temos domínio do portal aqui (proxy), então devolve vazio para não quebrar.
+      // Se seu user.get já retorna absoluto, ok.
+      return "";
+    }
+    return "";
+  }
+
+  async function fetchUserPhotos(ids){
+    const uniq = Array.from(new Set((ids||[]).map(x=> String(x))));
+    const need = uniq.filter(id => !state.userPhotos[id] && !state.partnerPhotos[id]);
+    if(need.length === 0) return;
+
+    // Bitrix user.get aceita FILTER[ID]=... mas pode variar; aqui buscamos por ID 1 a 1 (mais seguro)
+    for(const id of need){
+      try{
+        const r = await bx("user.get", { FILTER: { ID: String(id) } });
+        const u = Array.isArray(r) ? r[0] : null;
+        const photo = normalizePhotoUrl(u?.PERSONAL_PHOTO) || normalizePhotoUrl(u?.UF_USR_...); // fallback (se existir)
+        if(photo){
+          state.userPhotos[String(id)] = photo;
+          if(CONFIG.PARTNERS.map(String).includes(String(id))) state.partnerPhotos[String(id)] = photo;
+        }
+      }catch(_){}
+      await sleep(60);
+    }
+  }
 
   // =========================
   // Mount
@@ -776,18 +907,26 @@ body{ padding-bottom: 90px !important; }
           </section>
         </div>
 
-        <!-- ✅ Barra inferior em 2 linhas -->
+        <!-- ✅ Barra inferior em 3 linhas (com créditos + fotos sócios) -->
         <div class="cgdBottom">
-          <div class="cgdQueueRow" id="queueRow">
-            <!-- ✅ AJUSTE (Item 1): juntar "FILA" + "FILA DE ATENDIMENTO" em 1 botão -->
-            <button class="cgdBtn" id="btnQueue">Fila de atendimento</button>
-            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
-          </div>
           <div class="cgdQueueRow">
+            <div class="cgdQueueRowLeft" id="queueRowLeft">
+              <button class="cgdBtn" id="btnQueue">Fila de atendimento</button>
+              <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
+            </div>
+            <div class="cgdQueueRowRight" id="queueRowRight"></div>
+          </div>
+
+          <div class="cgdQueueRow" style="justify-content:flex-start">
             <button class="cgdBtn" id="btnQueueReset">Resetar</button>
             <button class="cgdBtn" id="btnNext">Próxima disponível</button>
             <div class="cgdQueueChip">Última: <b id="lastServed">—</b></div>
             <div class="cgdStatusLine" id="statusLine">Atualizado: —</div>
+          </div>
+
+          <div class="cgdQueueRow" style="justify-content:space-between">
+            <div style="font-style:italic;font-weight:900;opacity:.75">System created by GRUPO CGD</div>
+            <div style="display:flex; gap:8px; align-items:center" id="partnersBar"></div>
           </div>
         </div>
       </div>
@@ -807,7 +946,6 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function fetchNewLeadsCount(){
-    // conta real (paginando IDs)
     const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
@@ -820,8 +958,6 @@ body{ padding-bottom: 90px !important; }
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
-    // “Leads do dia/mês” = puxados (mudados para EM_ATENDIMENTO) no dia/mês
-    // Aproximação consistente: DATE_MODIFY + STATUS_ID = EM_ATENDIMENTO
     const dayItems = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
@@ -838,7 +974,6 @@ body{ padding-bottom: 90px !important; }
   }
 
   function leadDisplayName(it){
-    // Preferir nome do cliente: NAME/LAST_NAME, senão TITLE
     const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
     if(nm) return nm;
     const t = String(it.TITLE||"").trim();
@@ -853,6 +988,16 @@ body{ padding-bottom: 90px !important; }
     }catch(_){ return ""; }
   }
 
+  function firstPhone(it){
+    // tenta UF_TELEFONE, depois PHONE do bitrix
+    const uf = pickUF(it, CONFIG.UF_TELEFONE);
+    if(uf) return String(uf);
+    const ph = it && it.PHONE;
+    if(Array.isArray(ph) && ph[0] && ph[0].VALUE) return String(ph[0].VALUE);
+    if(ph && ph.VALUE) return String(ph.VALUE);
+    return "";
+  }
+
   function leadBadgesRich(it){
     const b = [];
     const oper = pickUF(it, CONFIG.UF_OPERADORA);
@@ -864,85 +1009,20 @@ body{ padding-bottom: 90px !important; }
 
     if(oper)  b.push(["OPERADORA", oper]);
     if(idade) b.push(["IDADE", idade]);
+    if(firstPhone(it)) b.push(["TEL", firstPhone(it)]);
     if(bairro)b.push(["BAIRRO", bairro]);
     if(fonte) b.push(["FONTE", fonte]);
     if(dt)    b.push(["DATA", dt]);
 
-    // fallback se vierem poucos
     if(b.length < 2){
       if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
       if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
     }
-    return b.slice(0, 6);
+    return b.slice(0, 8);
   }
 
   async function leadUpdate(id, fields){
     return bx("crm.lead.update", { id: String(id), fields });
-  }
-
-  async function actionPickLead(leadId, userId){
-    // UI otimista (remove da lista)
-    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
-    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
-    renderNewLeads(state.newLeadsRender);
-
-    enqueueOp("pickLead", async ()=>{
-      await leadUpdate(leadId, {
-        ASSIGNED_BY_ID: String(userId),
-        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
-      });
-    });
-    flushOps();
-  }
-
-  async function actionDiscardLead(leadId){
-    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
-    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
-    renderNewLeads(state.newLeadsRender);
-
-    enqueueOp("discardLead", async ()=>{
-      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
-    });
-    flushOps();
-  }
-
-  async function actionMoveLead(leadId, statusId){
-    enqueueOp("moveLead", async ()=>{
-      const fields = { STATUS_ID: statusId };
-      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-        const lead = await bx("crm.lead.get", { id: String(leadId) });
-        const t = String(lead?.TITLE||"").trim();
-        if(!t.startsWith(CONFIG.HOT_EMOJI)){
-          fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
-        }
-      }
-      await leadUpdate(leadId, fields);
-    });
-    flushOps();
-  }
-
-  async function actionSetPrazo(leadId, iso){
-    enqueueOp("setPrazo", async ()=>{
-      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
-    });
-    flushOps();
-  }
-
-  async function createFollowUpDeal(userId, lead){
-    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
-    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
-    enqueueOp("createDealFollowUp", async ()=>{
-      await bx("crm.deal.add", {
-        fields: {
-          CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
-          STAGE_ID: stage || "C17:NEW",
-          ASSIGNED_BY_ID: String(userId),
-          TITLE: title,
-          COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
-        }
-      });
-    });
-    flushOps();
   }
 
   // =========================
@@ -984,10 +1064,8 @@ body{ padding-bottom: 90px !important; }
     }
   }
 
-  // ✅ AJUSTE (Item 3): lock + tentativas para evitar intermitência em "Sem conexão..."
   let queueBusy = false;
   async function withQueueLock(fn){
-    // espera curto (evita briga entre refreshQueue e modalQueue/modalHideUsers)
     for(let i=0; i<20 && queueBusy; i++) await sleep(60);
     queueBusy = true;
     try{ return await fn(); }
@@ -1027,6 +1105,10 @@ body{ padding-bottom: 90px !important; }
             id: String(dealId),
             fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
           });
+
+          // ✅ Realtime (todos os navegadores)
+          realtimePublish("QUEUE_UPDATED");
+
           return;
         }catch(err){
           lastErr = err;
@@ -1035,6 +1117,15 @@ body{ padding-bottom: 90px !important; }
       }
       throw lastErr || new Error("Falha ao salvar fila");
     });
+  }
+
+  function rotateToEnd(order, userId){
+    const uid = String(userId);
+    const arr = (order||[]).map(String).filter(Boolean);
+    const idx = arr.indexOf(uid);
+    if(idx >= 0) arr.splice(idx, 1);
+    arr.push(uid);
+    return arr;
   }
 
   // =========================
@@ -1121,33 +1212,51 @@ body{ padding-bottom: 90px !important; }
     return inQueue.concat(outQueue);
   }
 
+  function avatarHTML(u){
+    const id = String(u.id);
+    const url = state.userPhotos[id];
+    if(url){
+      return `<img class="cgdAvatar" src="${esc(url)}" alt="${esc(u.name)}" />`;
+    }
+    return `<div class="cgdAvatarPH" aria-hidden="true">${esc(initials(u.name))}</div>`;
+  }
+
   function renderWho(){
     const list = $("#listWho");
     if(!list) return;
     list.innerHTML = "";
 
     const ordered = computeUserOrder();
+
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const us = state.userStats[u.id] || { day:0, month:0, convertedMonth:0, convRate:0, lastTwo:[] };
       const l1 = us.lastTwo[0];
       const l2 = us.lastTwo[1];
 
       const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
       const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
+      const conv = clamp(Number(us.convRate||0), 0, 100).toFixed(0) + "%";
+
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
-        <div class="cgdCardRow">
-          <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
-            <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
-            <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
-            <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
+        <div class="cgdUserCard">
+          ${avatarHTML(u)}
+          <div style="width:100%">
+            <div class="cgdCardRow">
+              <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+                <span class="cgdBadge">dia: ${esc(us.day||0)}</span>
+                <span class="cgdBadge">mês: ${esc(us.month||0)}</span>
+                <span class="cgdBadge">conv: ${esc(conv)}</span>
+                <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
+              </div>
+            </div>
+            <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.85">${esc(last1)}</div>
+            <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.75">${esc(last2)}</div>
           </div>
         </div>
-        <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.85">${esc(last1)}</div>
-        <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.75">${esc(last2)}</div>
       `;
       list.appendChild(card);
     });
@@ -1162,31 +1271,52 @@ body{ padding-bottom: 90px !important; }
   }
 
   function renderQueue(){
-    const row = $("#queueRow");
+    const left = $("#queueRowLeft");
     const hint = $("#queueHint");
-    if(!row || !hint) return;
+    if(!left || !hint) return;
 
-    // ✅ agora só mantém o primeiro: botão "Fila de atendimento"
-    const keepA = row.children[0];
-    row.innerHTML = "";
-    if(keepA) row.appendChild(keepA);
+    // mantém o botão fila
+    const keepBtn = $("#btnQueue");
+    left.innerHTML = "";
+    if(keepBtn) left.appendChild(keepBtn);
 
     const order = state.queue.order || [];
     if(order.length === 0){
       hint.textContent = "Fila vazia. Clique em Fila e selecione quem entra.";
-      row.appendChild(hint);
+      left.appendChild(hint);
       return;
     }
 
     hint.textContent = "";
-    row.appendChild(hint);
+    left.appendChild(hint);
 
     order.forEach((id, idx)=>{
       const u = CONFIG.USERS.find(x=> String(x.id)===String(id));
       const chip = document.createElement("div");
       chip.className = "cgdQueueChip";
       chip.innerHTML = `<b>${esc(u ? u.name : ("USER "+id))}</b> <span style="opacity:.65">#${idx+1}</span>`;
-      row.appendChild(chip);
+      left.appendChild(chip);
+    });
+  }
+
+  function renderPartnersBar(){
+    const bar = $("#partnersBar");
+    if(!bar) return;
+    bar.innerHTML = "";
+    CONFIG.PARTNERS.forEach(pid=>{
+      const url = state.partnerPhotos[String(pid)] || state.userPhotos[String(pid)] || "";
+      if(url){
+        const img = document.createElement("img");
+        img.className = "cgdAvatar";
+        img.src = url;
+        img.alt = "Sócio";
+        bar.appendChild(img);
+      }else{
+        const ph = document.createElement("div");
+        ph.className = "cgdAvatarPH";
+        ph.textContent = "CG";
+        bar.appendChild(ph);
+      }
     });
   }
 
@@ -1201,42 +1331,163 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Fetch Usuárias (SEM storage) — usa DATE_MODIFY com STATUS IN_PROCESS
+  // User stats (dia/mês) conforme solicitado (5 etapas)
+  // - SEM storage: calcula via Bitrix
   // =========================
+  async function countByStatus(userId, statusId, sinceISO, max=4000){
+    if(!statusId || String(statusId).includes("TROQUE_AQUI")) return 0;
+    const items = await bxListAll("crm.lead.list", {
+      filter: {
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": String(statusId),
+        ">DATE_MODIFY": sinceISO
+      },
+      order: { DATE_MODIFY:"DESC" },
+      select: ["ID"]
+    }, max);
+    return (items||[]).length;
+  }
+
   async function fetchUserStats(userId){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
-    const pulledToday = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID"]
-    }, 2000);
+    const statusesAll = [
+      CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+      CONFIG.LEAD_STATUS.ATENDIDO,
+      CONFIG.LEAD_STATUS.QUALIFICADO,
+      CONFIG.LEAD_STATUS.PERDIDO,
+      CONFIG.LEAD_STATUS.CONVERTIDO
+    ];
 
-    const pulledMonth = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID"]
-    }, 6000);
+    // dia/mês = soma das 5 etapas
+    let day = 0, month = 0, convertedMonth = 0;
+    for(const st of statusesAll){
+      day += await countByStatus(userId, st, startToday, 2500);
+      month += await countByStatus(userId, st, startMonth, 6000);
+    }
+    convertedMonth = await countByStatus(userId, CONFIG.LEAD_STATUS.CONVERTIDO, startMonth, 6000);
 
+    const convRate = month > 0 ? (convertedMonth / month) * 100 : 0;
+
+    // últimos leads para “Último/Anterior”
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
       order: { DATE_MODIFY: "DESC" },
       select: CONFIG.LEAD_SELECT
     }, CONFIG.LIMIT_USER_LAST);
 
-    // lastTwo: preferir os últimos que realmente estão em EM_ATENDIMENTO ou QUALIFICADO
     const lastTwo = (last||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
-      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO;
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.CONVERTIDO;
     }).slice(0,2);
 
-    return {
-      pulledToday: (pulledToday||[]).length,
-      pulledMonth: (pulledMonth||[]).length,
-      lastTwo,
-      list: last || []
-    };
+    return { day, month, convertedMonth, convRate, lastTwo, list: last || [] };
+  }
+
+  // =========================
+  // Actions
+  // =========================
+  async function actionPickLead(leadId, userId, rotateQueue=true){
+    // UI otimista (sai mais rápido de NOVO LEAD)
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+    // puxa histórico da user mais rápido
+    setTimeout(()=>{ refreshUsers(); }, 350);
+
+    enqueueOp("pickLead", async ()=>{
+      await leadUpdate(leadId, {
+        ASSIGNED_BY_ID: String(userId),
+        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
+      });
+
+      // ✅ se escolher uma USER, manda ela pro final da fila
+      if(rotateQueue){
+        try{
+          const q = state.queue.dealId ? state.queue : await fetchQueue();
+          const newOrder = rotateToEnd(q.order||[], userId);
+          await saveQueue(q.dealId, { order: newOrder, hiddenUsers: q.hiddenUsers||[] });
+          state.queue.order = newOrder;
+        }catch(_){}
+      }
+
+      realtimePublish("LEADS_UPDATED");
+      // (queue já publica dentro do saveQueue)
+    });
+    flushOps();
+  }
+
+  async function actionDiscardLead(leadId){
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+    setTimeout(()=>{ refreshUsers(); }, 350);
+
+    enqueueOp("discardLead", async ()=>{
+      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+      realtimePublish("LEADS_UPDATED");
+    });
+    flushOps();
+  }
+
+  async function actionMoveLead(leadId, statusId){
+    enqueueOp("moveLead", async ()=>{
+      const fields = { STATUS_ID: statusId };
+      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
+        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const t = String(lead?.TITLE||"").trim();
+        if(!t.startsWith(CONFIG.HOT_EMOJI)){
+          fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
+        }
+      }
+      await leadUpdate(leadId, fields);
+      realtimePublish("LEADS_UPDATED");
+    });
+    flushOps();
+  }
+
+  async function actionSetPrazo(leadId, iso){
+    enqueueOp("setPrazo", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+      realtimePublish("LEADS_UPDATED");
+    });
+    flushOps();
+  }
+
+  async function actionTransferLead(leadId, toUserId){
+    enqueueOp("transferLead", async ()=>{
+      await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) });
+      // manda pro final da fila
+      try{
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const newOrder = rotateToEnd(q.order||[], toUserId);
+        await saveQueue(q.dealId, { order: newOrder, hiddenUsers: q.hiddenUsers||[] });
+        state.queue.order = newOrder;
+      }catch(_){}
+      realtimePublish("LEADS_UPDATED");
+    });
+    flushOps();
+  }
+
+  async function createFollowUpDeal(userId, lead, prazoIso){
+    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
+    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
+
+    enqueueOp("createDealFollowUp", async ()=>{
+      const fields = {
+        CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+        STAGE_ID: stage || "C17:NEW",
+        ASSIGNED_BY_ID: String(userId),
+        TITLE: title,
+        COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
+      };
+      if(prazoIso){
+        fields[CONFIG.UF_PRAZO_DEAL] = prazoIso; // ✅ cria o card na pipeline com dia/hora
+      }
+      await bx("crm.deal.add", { fields });
+    });
+    flushOps();
   }
 
   // =========================
@@ -1246,24 +1497,32 @@ body{ padding-bottom: 90px !important; }
     const body = `
       <div style="font-weight:950; margin-bottom:10px">GET (Equipes)</div>
       <div class="cgdRow" style="margin-bottom:12px">
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.DELTA)}" target="_blank" rel="noopener">Equipe DELTA</a>
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.BETA)}" target="_blank" rel="noopener">Equipe BETA</a>
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.ALPHA)}" target="_blank" rel="noopener">Equipe ALPHA</a>
+        <a class="cgdBtn" href="${esc(CONFIG.GET_EQUIPES_URL)}" target="_blank" rel="noopener">Abrir Equipes</a>
       </div>
       <div style="font-size:11px;font-weight:900;opacity:.75">Abre em nova guia.</div>
     `;
     openModal("GET (Equipes)", body);
   }
 
+  function usersOrderedForQueueModal(q){
+    // ✅ mostra primeiro quem está na fila, na ordem da fila; depois o resto
+    const inOrder = (q.order||[]).map(String);
+    const set = new Set(inOrder);
+    const queueUsers = inOrder
+      .map(id => CONFIG.USERS.find(u=>String(u.id)===String(id)))
+      .filter(Boolean);
+    const others = CONFIG.USERS.filter(u => !set.has(String(u.id)));
+    return queueUsers.concat(others);
+  }
+
   async function modalQueue(){
-    // abre rápido, carrega depois
-    openModal("FILA", `<div style="font-weight:900;opacity:.75">Carregando fila…</div>`);
+    openModal("FILA DE ATENDIMENTO", `<div style="font-weight:900;opacity:.75">Carregando fila…</div>`);
     let q;
     try{
       q = await fetchQueue();
     }catch(_){
       closeModal();
-      return openModal("FILA", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      return openModal("FILA DE ATENDIMENTO", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
 
     state.queue = { ...state.queue, ...q };
@@ -1294,25 +1553,25 @@ body{ padding-bottom: 90px !important; }
       </div>
 
       <div style="font-weight:900;opacity:.75;margin:6px 0 10px">
-        Dica: use ↑ ↓ para reordenar visualmente.
+        Dica: use ↑ ↓ para ordenar. A ordem salva em todos os navegadores.
       </div>
 
       <table class="cgdTable">
         <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
-        <tbody id="qTbody">${CONFIG.USERS.map(rowFor).join("")}</tbody>
+        <tbody id="qTbody">${usersOrderedForQueueModal(q).map(rowFor).join("")}</tbody>
       </table>
     `;
 
-    openModal("FILA", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+    openModal("FILA DE ATENDIMENTO", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
 
     const tbody = $("#qTbody");
     const getChecked = ()=> $$('input[type=checkbox][data-q-user]', tbody)
       .filter(ch=>ch.checked)
       .map(ch=> String(ch.getAttribute("data-q-user")));
 
-    // reordenação visual (sem salvar ainda)
     function moveInTable(userId, dir){
-      const tr = tbody.querySelector(`tr[data-u="${CSS.escape(String(userId))}"]`);
+      const sel = `tr[data-u="${CSS.escape(String(userId))}"]`;
+      const tr = tbody.querySelector(sel);
       if(!tr) return;
       if(dir==="up" && tr.previousElementSibling){
         tbody.insertBefore(tr, tr.previousElementSibling);
@@ -1341,7 +1600,6 @@ body{ padding-bottom: 90px !important; }
       try{
         btn.disabled = true;
 
-        // ordem = ordem VISUAL da tabela, mas somente os marcados
         const visualOrder = $$("tr[data-u]", tbody).map(tr=> String(tr.getAttribute("data-u")));
         const checked = new Set(getChecked());
         const next = visualOrder.filter(id=> checked.has(id));
@@ -1425,13 +1683,12 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalPickLead(leadId){
-    // modal com 2 opções: selecionar usuária OU pegar para primeira da fila
     const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)} (${esc(u.id)})</option>`).join("");
     const body = `
       <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <button class="cgdBtn" id="pickFirst">Pegar para a 1ª da fila</button>
+        <button class="cgdBtn" id="pickFirst">PRIMEIRA DA FILA</button>
       </div>
 
       <div style="height:1px;background:rgba(30,40,70,.10);margin:10px 0"></div>
@@ -1442,7 +1699,7 @@ body{ padding-bottom: 90px !important; }
         <button class="cgdBtn" id="pickGo">Confirmar</button>
       </div>
       <div style="font-size:11px;font-weight:900;opacity:.75;margin-top:10px">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+        Ao confirmar: muda responsável, envia para <b>EM ATENDIMENTO</b> e coloca a usuária no final da fila.
       </div>
     `;
     openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
@@ -1457,20 +1714,20 @@ body{ padding-bottom: 90px !important; }
         if(order.length === 0) return;
 
         const firstId = order.shift();
-        order.push(firstId); // volta pro fim (regra)
-        // UI rápida: atualiza na hora
+        order.push(firstId);
+
+        // UI imediata
         state.queue.order = order.slice();
         renderQueue();
         setLastServed((CONFIG.USERS.find(x=>String(x.id)===String(firstId))||{}).name || ("USER "+firstId));
         setStatus(`Próxima: ${state.lastServedUserName} • ${nowBRTime()}`);
 
-        // salva fila (async)
         enqueueOp("saveQueueRotate", async ()=>{
           await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
         });
         flushOps();
 
-        await actionPickLead(leadId, firstId);
+        await actionPickLead(leadId, firstId, false); // já rotacionou fila acima
         closeModal();
       }catch(err){
         console.error(err);
@@ -1484,7 +1741,7 @@ body{ padding-bottom: 90px !important; }
       try{
         btn.disabled = true;
         const uid = $("#pickUser").value;
-        await actionPickLead(leadId, uid);
+        await actionPickLead(leadId, uid, true); // ✅ manda usuário pro final da fila
         closeModal();
       }catch(err){
         console.error(err);
@@ -1495,7 +1752,6 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function modalBatchTransfer(){
-    // (mantido)
     openModal("TRANSFERIR EM LOTE", `
       <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
       <div style="opacity:.75;font-weight:900">Carregando leads pendentes…</div>
@@ -1547,7 +1803,7 @@ body{ padding-bottom: 90px !important; }
           <tr>
             <th style="width:80px">Sel.</th>
             <th>Lead</th>
-            <th style="width:260px">Info</th>
+            <th style="width:280px">Info</th>
           </tr>
         </thead>
         <tbody id="btTbody"></tbody>
@@ -1617,7 +1873,7 @@ body{ padding-bottom: 90px !important; }
       if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
       try{
         btn.disabled = true;
-        // otimista: remove da lista local
+
         ids.forEach(id=>{
           state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
         });
@@ -1625,9 +1881,10 @@ body{ padding-bottom: 90px !important; }
         renderNewLeads(state.newLeadsRender);
 
         for(const id of ids){
-          await actionPickLead(id, toId);
+          await actionPickLead(id, toId, true);
           await sleep(60);
         }
+
         closeModal();
       }catch(err){
         console.error(err);
@@ -1637,12 +1894,41 @@ body{ padding-bottom: 90px !important; }
     });
   }
 
+  function leadDetailsHTML(it){
+    const oper = pickUF(it, CONFIG.UF_OPERADORA);
+    const idade = pickUF(it, CONFIG.UF_IDADE);
+    const tel = firstPhone(it);
+    const bairro= pickUF(it, CONFIG.UF_BAIRRO);
+    const fonte = pickUF(it, CONFIG.UF_FONTE);
+    const dtuf  = pickUF(it, CONFIG.UF_DT_LEAD);
+    const dt = dtuf ? fmtDateBRFromISO(dtuf) : "";
+
+    const rows = [
+      ["OPERADORA", oper],
+      ["IDADE", idade],
+      ["TELEFONE", tel],
+      ["BAIRRO", bairro],
+      ["LEAD FONTE", fonte],
+      ["DATA/HORA DO LEAD", dt],
+      ["STAGE", String(it.STATUS_ID||"")],
+      ["MODIFICADO", String(it.DATE_MODIFY||"").replace("T"," ").slice(0,19)],
+    ].filter(r => r[1]);
+
+    return `
+      <table class="cgdTable">
+        <thead><tr><th style="width:220px">Campo</th><th>Valor</th></tr></thead>
+        <tbody>
+          ${rows.map(([k,v])=> `<tr><td><b>${esc(k)}</b></td><td>${esc(v)}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
   async function modalManageUser(userId){
-    // (mantido)
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
-    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, `
+    openModal(`ABRIR • ${u.name} (${u.id})`, `
       <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
       <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
     `);
@@ -1652,7 +1938,7 @@ body{ padding-bottom: 90px !important; }
       us = await fetchUserStats(u.id);
     }catch(_){
       closeModal();
-      return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
 
     state.userStats[u.id] = us;
@@ -1660,13 +1946,15 @@ body{ padding-bottom: 90px !important; }
 
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">ABRIR • Buscar • Mover • Follow-up</div>
+        <div style="font-weight:950">ABRIR • Buscar • Dados • Transferir • Follow-up</div>
         <button class="cgdBtn" id="muRefresh">Atualizar</button>
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">EM ATENDIMENTO (dia): <b>${esc(us.pulledToday||0)}</b></div>
-        <div class="cgdBadge">EM ATENDIMENTO (mês): <b>${esc(us.pulledMonth||0)}</b></div>
+        <div class="cgdBadge">Leads do dia (5 etapas): <b>${esc(us.day||0)}</b></div>
+        <div class="cgdBadge">Leads do mês (5 etapas): <b>${esc(us.month||0)}</b></div>
+        <div class="cgdBadge">Convertidos no mês: <b>${esc(us.convertedMonth||0)}</b></div>
+        <div class="cgdBadge">Taxa conversão: <b>${esc((clamp(us.convRate||0,0,100)).toFixed(0))}%</b></div>
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
@@ -1674,6 +1962,7 @@ body{ padding-bottom: 90px !important; }
         <select class="cgdSelect" id="muStage">
           <option value="ALL">Todos os stages</option>
           <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Em atendimento</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</option>
           <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</option>
           <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</option>
           <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</option>
@@ -1701,19 +1990,20 @@ body{ padding-bottom: 90px !important; }
           <tr>
             <th style="width:70px">Sel.</th>
             <th>Lead</th>
-            <th style="width:250px">FOLLOW-UP</th>
-            <th style="width:250px">Mover</th>
+            <th style="width:320px">Dados + FOLLOW-UP</th>
+            <th style="width:320px">Mover / Transferir</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
       </table>
     `;
 
-    openModal(`GERENCIAR USUÁRIA • ${u.name} (${u.id})`, body);
+    openModal(`ABRIR • ${u.name} (${u.id})`, body);
 
     const tbody = $("#muTbody");
     const search = $("#muSearch");
     const stageSel = $("#muStage");
+    const allUsersOps = CONFIG.USERS.map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`).join("");
 
     function listFiltered(){
       const q = (search.value||"").trim().toLowerCase();
@@ -1742,6 +2032,8 @@ body{ padding-bottom: 90px !important; }
             <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(st)}</div>
           </td>
           <td>
+            ${leadDetailsHTML(it)}
+            <div style="height:8px"></div>
             <div class="cgdRow">
               <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
               <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
@@ -1749,10 +2041,16 @@ body{ padding-bottom: 90px !important; }
             </div>
           </td>
           <td>
-            <div class="cgdRow">
+            <div class="cgdRow" style="margin-bottom:10px">
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
+            </div>
+
+            <div style="font-weight:950; margin-bottom:6px">Transferir para outra usuária:</div>
+            <div class="cgdRow">
+              <select class="cgdSelect" data-xfer-user="${esc(id)}">${allUsersOps}</select>
+              <button class="cgdBtn" data-xfer-go="${esc(id)}">Transferir</button>
             </div>
           </td>
         </tr>`;
@@ -1850,6 +2148,7 @@ body{ padding-bottom: 90px !important; }
                 PHONE: phone ? [{ VALUE: phone, VALUE_TYPE: "WORK" }] : undefined
               }
             });
+            realtimePublish("LEADS_UPDATED");
           });
           flushOps();
           closeModal();
@@ -1865,6 +2164,7 @@ body{ padding-bottom: 90px !important; }
       const sp = e.target.closest("[data-save-prazo]");
       const sd = e.target.closest("[data-save-fupdeal]");
       const mv = e.target.closest("[data-move]");
+      const xf = e.target.closest("[data-xfer-go]");
 
       if(sp){
         const leadId = sp.getAttribute("data-save-prazo");
@@ -1881,7 +2181,7 @@ body{ padding-bottom: 90px !important; }
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
         const iso = isoFromLocalInput(inp?.value || "");
         if(iso) await actionSetPrazo(leadId, iso);
-        if(lead) await createFollowUpDeal(u.id, lead);
+        if(lead) await createFollowUpDeal(u.id, lead, iso); // ✅ cria card com dia/hora no campo
         alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
       }
 
@@ -1890,6 +2190,15 @@ body{ padding-bottom: 90px !important; }
         const to = mv.getAttribute("data-to");
         await actionMoveLead(leadId, to);
         alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
+      }
+
+      if(xf){
+        const leadId = xf.getAttribute("data-xfer-go");
+        const sel = $(`select[data-xfer-user="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const toUser = sel?.value;
+        if(!toUser) return;
+        await actionTransferLead(leadId, toUser);
+        alert("Transferência enfileirada ✅ (sincroniza quando normalizar a conexão)");
       }
     });
   }
@@ -1904,7 +2213,6 @@ body{ padding-bottom: 90px !important; }
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
-      // alerta sonoro: se existe NOVO LEAD e o som está ON
       const newest = items && items[0] ? String(items[0].ID) : null;
       if(items.length > 0 && state.soundOn){
         if(newest && newest !== state.lastNewLeadId){
@@ -1938,6 +2246,11 @@ body{ padding-bottom: 90px !important; }
 
   async function refreshUsers(){
     try{
+      // fotos (usuárias + sócios)
+      const ids = CONFIG.USERS.map(u=>u.id).concat(CONFIG.PARTNERS||[]);
+      await fetchUserPhotos(ids);
+      renderPartnersBar();
+
       const jobs = CONFIG.USERS.map(async u=>{
         const st = await fetchUserStats(u.id);
         state.userStats[u.id] = st;
@@ -2022,10 +2335,9 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnQueue")?.addEventListener("click", modalQueue);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
-
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
-    // ✅ Próxima disponível ultra-rápido (UI imediata; salva em background)
+    // ✅ Próxima disponível (UI imediata; salva em background; realtime)
     $("#btnNext")?.addEventListener("click", async ()=>{
       try{
         if(!state.queue.dealId){
@@ -2038,7 +2350,6 @@ body{ padding-bottom: 90px !important; }
         const nextId = order.shift();
         order.push(nextId);
 
-        // UI na hora
         state.queue.order = order.slice();
         renderQueue();
 
@@ -2046,7 +2357,6 @@ body{ padding-bottom: 90px !important; }
         setLastServed(nm);
         setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
 
-        // salva depois
         const dealId = state.queue.dealId;
         const hidden = state.queue.hiddenUsers || [];
         enqueueOp("queueRotate", async ()=>{ await saveQueue(dealId, { order, hiddenUsers: hidden }); });
@@ -2105,16 +2415,17 @@ body{ padding-bottom: 90px !important; }
     wire();
     updateSoundUI();
 
+    // ✅ conecta realtime
+    realtimeConnect();
+
     await hardRefreshAll();
 
-    // refreshes
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
 
-    // offline flush (em RAM)
     setInterval(flushOps, 2500);
   }
 
