@@ -208,6 +208,14 @@
     return it?.NAME || String(stageId);
   }
 
+  function enumIdByValue(fieldId, valueText) {
+    if (!valueText) return "";
+    const list = S.enums?.[fieldId]?.items || [];
+    const target = String(valueText).trim().toUpperCase();
+    const it = list.find(x => String(x.VALUE || "").trim().toUpperCase() === target);
+    return it ? String(it.ID) : "";
+  }
+
   // ========= META =========
   async function loadMeta() {
     // fields/enums
@@ -334,6 +342,8 @@
         ],
         filter: {
           "CATEGORY_ID": String(CFG.DEAL_CATEGORY_ID),
+          // ✅ só traz registros financeiros (elimina __QUEUE__ e afins)
+          ["!" + CFG.F.TIPO_FIN]: ""
         },
         order: { "ID": "DESC" },
         start
@@ -349,23 +359,24 @@
     return all;
   }
 
-  // ✅ Ocultar CONCLUÍDO por padrão:
-  // - Se o filtro de etapa estiver vazio (— Todos —), NÃO mostra CONCLUÍDO
-  // - Se o usuário selecionar uma etapa específica (incluindo CONCLUÍDO), respeita.
+  // ✅ Ocultar CONCLUÍDO por padrão + remover lixo de fila (backup)
   function applyFilters() {
     const q = (S.filters.q || "").trim().toLowerCase();
 
     S.filtered = S.deals.filter(d => {
+      const favRaw = String(d[CFG.F.FAVORECIDO] || "");
+      const favUp = favRaw.toUpperCase();
+      if (favRaw.startsWith("__QUEUE__")) return false;
+      if (favUp.includes("FILA ATENDIMENTO")) return false;
+
       if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
       if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
       if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
       if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
 
-      // etapa selecionada: filtro normal
       if (S.filters.stageId) {
         if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
       } else {
-        // sem etapa selecionada: oculta CONCLUÍDO por padrão
         if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
       }
 
@@ -403,7 +414,7 @@
     };
 
     const res = await api("crm.deal.add", { fields });
-    return res?.result; // ID
+    return res?.result;
   }
 
   async function updateDeal(id, values) {
@@ -452,7 +463,6 @@
           [CFG.F.DATA_REAL]: dt,
         };
 
-        // tenta setar status financeiro por nome (se existir enum compatível)
         const tipoTxt = (enumName(CFG.F.TIPO_FIN, tipo) || "").toUpperCase();
         if (tipoTxt.includes("DESP")) {
           const idPago = enumIdByValue(CFG.F.STATUS_FIN, "PAGO") || enumIdByValue(CFG.F.STATUS_FIN, "PAGA");
@@ -505,14 +515,6 @@
         setLoading(false);
       }
     });
-  }
-
-  function enumIdByValue(fieldId, valueText) {
-    if (!valueText) return "";
-    const list = S.enums?.[fieldId]?.items || [];
-    const target = String(valueText).trim().toUpperCase();
-    const it = list.find(x => String(x.VALUE || "").trim().toUpperCase() === target);
-    return it ? String(it.ID) : "";
   }
 
   function openEditModal(deal) {
@@ -596,7 +598,6 @@
 
     const m = modal(html);
 
-    // prefill
     m.q("#f-tipo").value = String(v(CFG.F.TIPO_FIN));
     m.q("#f-comp").value = String(v(CFG.F.COMPETENCIA));
     m.q("#f-cc").value = String(v(CFG.F.CENTRO_CUSTO));
@@ -625,7 +626,6 @@
         payload[CFG.F.STATUS_FIN] = m.q("#f-status").value || "";
         payload[CFG.F.OBS] = (m.q("#f-obs").value || "").trim();
 
-        // estágio automático no "Novo"
         if (!isEdit) {
           const st = initialStageForTipo(tipo);
           if (st) payload.STAGE_ID = st;
@@ -649,7 +649,6 @@
     });
   }
 
-  // ========= EXPORT CSV =========
   function exportCSV() {
     const rows = S.filtered.map(d => ({
       ID: d.ID,
@@ -686,7 +685,6 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1200);
   }
 
-  // ========= RENDER =========
   function render() {
     root.innerHTML = `
       <div class="fin-app" id="fin-app">
@@ -811,7 +809,6 @@
     if (!tb) return;
 
     const list = S.filtered || [];
-
     if (!list.length) {
       tb.innerHTML = `<tr><td colspan="9" class="fin-muted">Nenhum item encontrado com os filtros atuais.</td></tr>`;
       return;
