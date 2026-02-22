@@ -1,8 +1,8 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - Velocidade: Histórico carrega só “últimos 2” por usuária (rápido).
+   - Histórico rápido: busca “últimos 2” por usuária
    - Fila sem realtime: sincroniza via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Busca global por nome: mostra responsável + permite TRANSFERIR
-   - Contagem “PEGAR”: grava UF Data PEGAR (UF_CRM_1771741018) ao pegar lead
+   - Contagem PEGAR: grava UF Data PEGAR (UF_CRM_1771741018) ao pegar lead
 */
 (function(){
   "use strict";
@@ -51,15 +51,15 @@
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
-    // Timers base (alguns serão “rodiziados” abaixo p/ reduzir custo)
+    // Timers base
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 12000,
     REFRESH_QUEUE_MS: 2500,
 
-    // Histórico: (rodízio) — não refaz tudo sempre
+    // Histórico “rodiziado” (não refaz tudo sempre)
     WHO_ROUND_MS: 8500,
-    WHO_CHUNK_SIZE: 4,     // quantas usuárias por rodada
-    WHO_FULL_EVERY_MS: 90000, // a cada 90s faz uma rodada full (segurança)
+    WHO_CHUNK_SIZE: 4,
+    WHO_FULL_EVERY_MS: 90000,
 
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
@@ -116,9 +116,7 @@
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
       "UF_*"
-    ],
-
-    HOT_EMOJI: "🔥"
+    ]
   };
 
   // =========================
@@ -126,7 +124,7 @@
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
-  const esc = (s)=> String(s??"").replace(/[&<>"']/g, m => ({
+  const esc = (s)=> String(s ?? "").replace(/[&<>"']/g, (m)=>({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
@@ -171,6 +169,7 @@
   function toPairs(prefix, obj, out){
     out = out || [];
     if(obj === null || obj === undefined) return out;
+
     if(typeof obj === "object" && !Array.isArray(obj)){
       for(const k of Object.keys(obj)){
         const key = prefix ? `${prefix}[${k}]` : k;
@@ -190,7 +189,7 @@
   }
 
   async function bx(method, params={}, options={}){
-    const timeoutMs = Math.max(6500, Number(options.timeoutMs || 12000));
+    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
@@ -319,25 +318,24 @@
   }
 
   // =========================
-  // Plane
+  // Paper plane animation
   // =========================
   function flyPlane(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
-      d.innerHTML = `
-        <svg viewBox="0 0 64 64" width="50" height="50" aria-hidden="true">
-          <path d="M4 30 L60 6 L38 58 L30 36 L4 30 Z" fill="rgba(255,255,255,.95)" stroke="rgba(0,0,0,.25)" stroke-width="2"/>
-          <path d="M30 36 L60 6" stroke="rgba(0,0,0,.25)" stroke-width="2"/>
-        </svg>
-      `;
+      d.innerHTML =
+        '<svg viewBox="0 0 64 64" width="50" height="50" aria-hidden="true">' +
+        '<path d="M4 30 L60 6 L38 58 L30 36 L4 30 Z" fill="rgba(255,255,255,.95)" stroke="rgba(0,0,0,.25)" stroke-width="2"/>' +
+        '<path d="M30 36 L60 6" stroke="rgba(0,0,0,.25)" stroke-width="2"/>' +
+        '</svg>';
       document.body.appendChild(d);
       setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
     }catch(_){}
   }
 
   // =========================
-  // CSS (contraste alto + títulos centralizados)
+  // CSS
   // =========================
   function injectCSS(){
     const css = `
@@ -346,8 +344,6 @@
   --border: rgba(30,40,70,.12);
   --text: rgba(18,26,40,.92);
   --muted: rgba(18,26,40,.62);
-  --card: rgba(255,255,255,.82);
-  --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 90px);
@@ -386,15 +382,8 @@
   font-weight: 950;
 }
 .cgdMiniBtn:active{ transform: translateY(1px); }
-
-.cgdMiniBtn.primary{
-  background: rgba(0,0,0,.92);
-  border-color: rgba(255,255,255,.18);
-}
-.cgdMiniBtn.danger{
-  background: rgba(160,10,30,.92);
-  border-color: rgba(255,255,255,.18);
-}
+.cgdMiniBtn.primary{ background: rgba(0,0,0,.92); border-color: rgba(255,255,255,.18); }
+.cgdMiniBtn.danger{ background: rgba(160,10,30,.92); border-color: rgba(255,255,255,.18); }
 
 /* Top */
 .cgdTop{
@@ -441,12 +430,7 @@
 }
 
 /* Layout */
-.cgdLayout{
-  margin-top: 12px;
-  display:flex;
-  gap: 12px;
-  align-items: stretch;
-}
+.cgdLayout{ margin-top: 12px; display:flex; gap: 12px; align-items: stretch; }
 .cgdGrid{
   flex: 1 1 auto;
   display:grid;
@@ -544,7 +528,6 @@
   overflow:auto;
   min-height: 0;
 }
-
 .cgdCard{
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -552,25 +535,9 @@
   box-shadow: 0 8px 20px rgba(20,30,60,.08);
   padding: 10px 10px 10px;
 }
-.cgdCardRow{
-  display:flex;
-  align-items:flex-start;
-  justify-content: space-between;
-  gap:10px;
-}
-.cgdLeadName{
-  font-weight: 950;
-  font-size: 14px;
-  line-height: 1.2;
-  word-break: break-word;
-  flex: 1 1 auto;
-}
-.cgdBadges{
-  display:flex;
-  gap:6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
+.cgdCardRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
+.cgdLeadName{ font-weight: 950; font-size: 14px; line-height: 1.2; word-break: break-word; flex: 1 1 auto; }
+.cgdBadges{ display:flex; gap:6px; flex-wrap: wrap; margin-top: 8px; }
 .cgdBadge{
   font-size: 10px;
   font-weight: 950;
@@ -579,17 +546,8 @@
   border-radius: 999px;
   background: rgba(255,255,255,.9);
 }
-.cgdBadge.oper{
-  border: 0;
-  padding: 5px 10px;
-}
-.cgdActions{
-  margin-top: 10px;
-  display:flex;
-  gap:8px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
+.cgdBadge.oper{ border: 0; padding: 5px 10px; }
+.cgdActions{ margin-top: 10px; display:flex; gap:8px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* 🚨 NOVO LEAD */
 .cgdAlertBox{
@@ -607,12 +565,7 @@
   border-color: rgba(255,40,90,.55);
   box-shadow: 0 0 0 2px rgba(255,40,90,.18), 0 10px 30px rgba(255,40,90,.14);
 }
-.cgdAlertBox .txt{
-  font-weight: 950;
-  font-size: 12px;
-  line-height: 1.25;
-  width: 100%;
-}
+.cgdAlertBox .txt{ font-weight: 950; font-size: 12px; line-height: 1.25; width: 100%; }
 .cgdAlertBox .txt small{
   display:block;
   margin-top: 4px;
@@ -631,7 +584,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* Usuária: foto maior */
+/* Usuária: foto */
 .cgdUserLine{ display:flex; gap:10px; align-items:flex-start; }
 .cgdUserPic{
   width: 52px; height: 52px;
@@ -673,6 +626,67 @@
 
 body{ padding-bottom: 110px !important; }
 
+/* Modals */
+.cgdModalOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 16px;
+}
+.cgdModal{
+  width: min(1040px, 96vw);
+  max-height: min(88vh, 900px);
+  background: rgba(255,255,255,.94);
+  border: 1px solid rgba(30,40,70,.16);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(20,30,60,.22);
+  overflow:hidden;
+  display:flex;
+  flex-direction: column;
+}
+.cgdModalHead{
+  padding: 12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(30,40,70,.12);
+  background: rgba(255,255,255,.75);
+}
+.cgdModalTitle{ font-weight: 950; font-size: 13px; }
+.cgdModalBody{ padding: 12px 14px; overflow: auto; min-height: 0; }
+.cgdModalFoot{
+  padding: 12px 14px;
+  border-top: 1px solid rgba(30,40,70,.12);
+  display:flex;
+  gap: 10px;
+  justify-content:flex-end;
+  flex-wrap: wrap;
+  background: rgba(255,255,255,.75);
+}
+
+.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.cgdTable{
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(30,40,70,.12);
+}
+.cgdTable th, .cgdTable td{
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(30,40,70,.10);
+  font-size: 12px;
+  vertical-align: top;
+}
+.cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
+.cgdTable tr:last-child td{ border-bottom: 0; }
+
 /* Paper plane */
 .cgdPlane{
   position: fixed;
@@ -690,7 +704,6 @@ body{ padding-bottom: 110px !important; }
   10%  { opacity: .95; }
   100% { transform: translateX(calc(100vw + 240px)) rotate(-6deg); opacity: 0; }
 }
-
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
@@ -715,7 +728,7 @@ body{ padding-bottom: 110px !important; }
           <button class="cgdBtn" data-close-modal>Fechar</button>
         </div>
         <div class="cgdModalBody">${bodyHTML||""}</div>
-        <div class="cgdModalFoot">${footHTML||`<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
+        <div class="cgdModalFoot">${footHTML || `<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
       </div>
     `;
     ov.addEventListener("click", (e)=>{
@@ -747,7 +760,7 @@ body{ padding-bottom: 110px !important; }
     _pulledDayByUser: {},
     _pulledMonthByUser: {},
 
-    userCards: {}, // { uid: { lastTwo: [lead,lead], pulledToday, pulledMonth } }
+    userCards: {},
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     queueBusyUI: false,
 
@@ -756,9 +769,6 @@ body{ padding-bottom: 110px !important; }
     userPhoto: new Map(),
     userPhotoTs: new Map(),
     userPhotoPending: new Set(),
-
-    whoCursor: 0,
-    whoLastFull: 0
   };
 
   // =========================
@@ -788,7 +798,7 @@ body{ padding-bottom: 110px !important; }
           photo = await fetchUserPhotoOnce(id);
           if(photo) break;
         }catch(_){}
-        await sleep(160 + i*220);
+        await sleep(180 + i*240);
       }
     } finally{
       state.userPhotoPending.delete(id);
@@ -796,7 +806,7 @@ body{ padding-bottom: 110px !important; }
 
     state.userPhoto.set(id, photo || "");
     state.userPhotoTs.set(id, now);
-    return photo || "";
+    return state.userPhoto.get(id) || "";
   }
 
   async function warmUserPhotos(){
@@ -806,7 +816,7 @@ body{ padding-bottom: 110px !important; }
     for(let i=0;i<all.length;i+=6){
       const part = all.slice(i,i+6);
       await Promise.all(part.map(id=>ensureUserPhoto(id)));
-      await sleep(80);
+      await sleep(120);
     }
   }
 
@@ -819,20 +829,11 @@ body{ padding-bottom: 110px !important; }
       const img = document.createElement("img");
       img.className = "cgdBossPic";
       img.alt = "Sócio";
-      img.loading = "eager";
-      img.decoding = "async";
+      img.loading = "lazy";
       img.src = state.userPhoto.get(id) || BLANK_IMG;
       img.onerror = ()=>{ img.src = BLANK_IMG; };
       box.appendChild(img);
     });
-    setTimeout(()=>{
-      ids.forEach((id, idx)=>{
-        const img = box.children[idx];
-        if(!img) return;
-        const url = state.userPhoto.get(id) || "";
-        if(url) img.src = url;
-      });
-    }, 250);
   }
 
   // =========================
@@ -1037,16 +1038,12 @@ body{ padding-bottom: 110px !important; }
     body.innerHTML = "";
 
     const order = (state.queue.order || []).map(String);
-
     if(order.length === 0){
       const d = document.createElement("div");
       d.style.opacity = ".75";
       d.style.fontWeight = "900";
-      d.innerHTML = `Fila vazia.<br/>Clique em <b>Gerenciar</b> para adicionar usuárias.`;
+      d.textContent = "Fila vazia. Clique em Gerenciar para adicionar usuárias.";
       body.appendChild(d);
-
-      // ✅ garante que botões não fiquem “travados” ao ficar vazio
-      const w = $("#btnQueueWalk"); if(w) w.disabled = false;
       return;
     }
 
@@ -1068,10 +1065,12 @@ body{ padding-bottom: 110px !important; }
 
     if(state.queueBusyUI){
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = true);
-      const w = $("#btnQueueWalk"); if(w) w.disabled = true;
+      if($("#btnQueueWalk")) $("#btnQueueWalk").disabled = true;
+      if($("#btnQueueReset")) $("#btnQueueReset").disabled = true;
     }else{
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = false);
-      const w = $("#btnQueueWalk"); if(w) w.disabled = false;
+      if($("#btnQueueWalk")) $("#btnQueueWalk").disabled = false;
+      if($("#btnQueueReset")) $("#btnQueueReset").disabled = false;
     }
   }
 
@@ -1109,13 +1108,11 @@ body{ padding-bottom: 110px !important; }
     return (items||[]).length;
   }
 
-  // Mapa de “puxados” (NEW -> IN_PROCESS) via stagehistory
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
 
     async function pulledBetween(isoStart){
-      // 1) tenta stagehistory (mais correto)
       try{
         const items = await bxListAll("crm.stagehistory.list", {
           filter: {
@@ -1135,14 +1132,11 @@ body{ padding-bottom: 110px !important; }
           if(uid) byUser[uid] = (byUser[uid]||0) + 1;
         });
         return { total, byUser };
-      }catch(_){}
-
-      // 2) ✅ se tiver UF_PICK_TS, usa ele (100% alinhado ao PEGAR)
-      if(CONFIG.UF_PICK_TS){
+      }catch(_){
         const arr = await bxListAll("crm.lead.list", {
-          filter: { `>${CONFIG.UF_PICK_TS}`: isoStart },
-          order: { [CONFIG.UF_PICK_TS]:"DESC" },
-          select: ["ID","ASSIGNED_BY_ID", CONFIG.UF_PICK_TS]
+          filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
+          order: { DATE_MODIFY:"DESC" },
+          select: ["ID","ASSIGNED_BY_ID"]
         }, 5000);
 
         const byUser = {};
@@ -1152,20 +1146,6 @@ body{ padding-bottom: 110px !important; }
         });
         return { total:(arr||[]).length, byUser };
       }
-
-      // 3) fallback aproximado
-      const arr = await bxListAll("crm.lead.list", {
-        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
-        order: { DATE_MODIFY:"DESC" },
-        select: ["ID","ASSIGNED_BY_ID"]
-      }, 5000);
-
-      const byUser = {};
-      (arr||[]).forEach(x=>{
-        const uid = String(x.ASSIGNED_BY_ID||"");
-        if(uid) byUser[uid] = (byUser[uid]||0)+1;
-      });
-      return { total:(arr||[]).length, byUser };
     }
 
     const day = await pulledBetween(startToday);
@@ -1246,7 +1226,6 @@ body{ padding-bottom: 110px !important; }
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
       };
-      // ✅ grava Data PEGAR
       if(CONFIG.UF_PICK_TS){
         fields[CONFIG.UF_PICK_TS] = new Date().toISOString();
       }
@@ -1366,14 +1345,13 @@ body{ padding-bottom: 110px !important; }
     return items || [];
   }
 
-  async function refreshUserCardsFast(userIds){ // se não passar ids => full
-    const ids = (userIds && userIds.length) ? userIds : CONFIG.USERS.map(u=>u.id);
-    const jobs = ids.map(async uid=>{
-      const lastTwo = await fetchUserLastTwo(uid);
-      state.userCards[uid] = {
+  async function refreshUserCardsFast(){
+    const jobs = CONFIG.USERS.map(async u=>{
+      const lastTwo = await fetchUserLastTwo(u.id);
+      state.userCards[u.id] = {
         lastTwo,
-        pulledToday: Number(state._pulledDayByUser?.[String(uid)] || 0),
-        pulledMonth: Number(state._pulledMonthByUser?.[String(uid)] || 0),
+        pulledToday: Number(state._pulledDayByUser?.[String(u.id)] || 0),
+        pulledMonth: Number(state._pulledMonthByUser?.[String(u.id)] || 0),
       };
     });
     await Promise.allSettled(jobs);
@@ -1415,8 +1393,7 @@ body{ padding-bottom: 110px !important; }
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdUserLine">
-          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" decoding="async"
-               src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
+          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
           <div style="width:100%">
             <div class="cgdCardRow">
               <div style="font-weight:950">${esc(u.name)}</div>
@@ -1442,7 +1419,6 @@ body{ padding-bottom: 110px !important; }
       list.appendChild(empty);
     }
 
-    // completa fotos em background (mais agressivo + retry leve)
     setTimeout(async ()=>{
       const imgs = $$("img[data-user-pic]");
       const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
@@ -1450,15 +1426,13 @@ body{ padding-bottom: 110px !important; }
       imgs.forEach(img=>{
         const id = String(img.getAttribute("data-user-pic"));
         const url = state.userPhoto.get(id) || "";
-        if(url && img.src !== url){
-          img.src = url;
-        }
+        if(url && img.src !== url) img.src = url;
       });
-    }, 220);
+    }, 450);
   }
 
   // =========================
-  // Queue UI actions
+  // Queue refresh / commit
   // =========================
   async function refreshQueue(){
     try{
@@ -1481,7 +1455,6 @@ body{ padding-bottom: 110px !important; }
 
     try{
       const q = state.queue.dealId ? state.queue : await fetchQueue();
-
       const localUpdatedAt = Date.now();
       state.queue = { ...state.queue, ...q, order: nextOrder.slice(), updatedAt: localUpdatedAt, dealId: q.dealId };
       renderQueueSidebar();
@@ -1498,7 +1471,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Stats + refreshes
+  // Refreshers
   // =========================
   async function refreshNewLeads(){
     try{
@@ -1545,14 +1518,12 @@ body{ padding-bottom: 110px !important; }
       refreshQueue(),
       refreshStats()
     ]);
-    // ✅ primeiro load: histórico FULL
     await refreshUserCardsFast();
-    state.whoLastFull = Date.now();
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
   // =========================
-  // Modals (ocultar / fila / pegar / batch / user / busca)
+  // Modals
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
@@ -1740,7 +1711,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalBatchTransfer(){
-    alert("Transferir em lote permanece como antes — se você quiser, eu também otimizo essa tela.");
+    alert("Transferir em lote: mantenho sua tela anterior — se você quiser eu reimplanto aqui otimizado também.");
   }
 
   async function modalUserOpen(userId){
@@ -1834,13 +1805,6 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalLeadDetails(leadId){
-    const drawError = (msg)=> openModal("LEAD", `
-      <div style="font-weight:900;color:#a00">${esc(msg||"Sem conexão no momento. Tente novamente.")}</div>
-      <div style="margin-top:10px">
-        <button class="cgdBtn" id="retryLead">Tentar novamente</button>
-      </div>
-    `);
-
     openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
     try{
       const it = await bx("crm.lead.get", { id: String(leadId) });
@@ -1898,8 +1862,7 @@ body{ padding-bottom: 110px !important; }
 
     }catch(_){
       closeModal();
-      drawError("Sem conexão no momento. Tente novamente.");
-      $("#retryLead")?.addEventListener("click", ()=> modalLeadDetails(leadId));
+      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
   }
 
@@ -1945,7 +1908,7 @@ body{ padding-bottom: 110px !important; }
       }
       if(tr){
         const id = tr.getAttribute("data-tr-go");
-        const sel = $(`select[data-tr-sel="${CSS.escape(String(id))}"]`, $(".cgdModalBody"));
+        const sel = $(".cgdModalBody").querySelector(`select[data-tr-sel="${CSS.escape(String(id))}"]`);
         const to = sel?.value;
         if(!to) return;
         tr.disabled = true;
@@ -1960,7 +1923,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // UI
+  // UI wire
   // =========================
   function updateSoundUI(){
     const so = $("#btnSoundOn");
@@ -1972,7 +1935,6 @@ body{ padding-bottom: 110px !important; }
       state.soundOn = false;
       updateSoundUI();
     });
-
     $("#btnSoundOn")?.addEventListener("click", ()=>{
       state.soundOn = true;
       updateSoundUI();
@@ -1981,7 +1943,7 @@ body{ padding-bottom: 110px !important; }
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
     $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
-    $("#btnRefreshWho")?.addEventListener("click", ()=> refreshUserCardsFast());
+    $("#btnRefreshWho")?.addEventListener("click", refreshUserCardsFast);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
     $("#btnQueueManage")?.addEventListener("click", modalQueueManage);
@@ -2020,6 +1982,9 @@ body{ padding-bottom: 110px !important; }
     $("#btnGET")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.GET, "_blank", "noopener"));
     $("#btnVendas")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener"));
 
+    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
+
+    // Busca
     $("#btnSearch")?.addEventListener("click", async ()=>{
       const term = ($("#searchBox").value||"").trim();
       if(!term) return;
@@ -2036,6 +2001,7 @@ body{ padding-bottom: 110px !important; }
     });
     $("#searchBox")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnSearch")?.click(); });
 
+    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
@@ -2053,33 +2019,6 @@ body{ padding-bottom: 110px !important; }
       }
       if(ou) modalUserOpen(ou.getAttribute("data-open-user"));
     });
-
-    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
-  }
-
-  // =========================
-  // Rodízio do Histórico (mais rápido e leve)
-  // =========================
-  async function refreshWhoRound(){
-    const now = Date.now();
-    const fullDue = (now - (state.whoLastFull||0)) >= CONFIG.WHO_FULL_EVERY_MS;
-
-    if(fullDue){
-      state.whoLastFull = now;
-      await refreshUserCardsFast(); // full
-      state.whoCursor = 0;
-      return;
-    }
-
-    const ids = CONFIG.USERS.map(u=>u.id);
-    if(!ids.length) return;
-
-    const chunk = [];
-    for(let i=0;i<CONFIG.WHO_CHUNK_SIZE;i++){
-      chunk.push(ids[state.whoCursor % ids.length]);
-      state.whoCursor++;
-    }
-    await refreshUserCardsFast(chunk);
   }
 
   // =========================
@@ -2100,9 +2039,7 @@ body{ padding-bottom: 110px !important; }
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
-
-    // ✅ histórico em rodízio
-    setInterval(refreshWhoRound, CONFIG.WHO_ROUND_MS);
+    setInterval(refreshUserCardsFast, CONFIG.WHO_ROUND_MS);
 
     setInterval(flushOps, 2500);
   }
