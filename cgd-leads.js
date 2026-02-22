@@ -4,7 +4,11 @@
    - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
    - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
-   - Correções: aviãozinho amarelo 5cm só em lead novo; alerta NOVO LEAD preto→vermelho; bug intermitente da fila reduzido
+   - Correções:
+     ✅ Data PEGAR em formato Bitrix (-03:00) p/ destravar contagens
+     ✅ Barra inferior: CNPJs lado a lado + fundo cinza escuro + label "Endereço"
+     ✅ Avião amarelo só quando ENTRA lead novo (não quando pega/descarta)
+     ✅ PREVENT com badge azul escuro
 */
 (function(){
   "use strict";
@@ -67,15 +71,15 @@
 
     // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
-    REFRESH_STATS_MS: 9000,     // um pouco mais espaçado
+    REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
-    REFRESH_WHO_MS: 12000,      // MAIS leve (histórico não travar)
+    REFRESH_WHO_MS: 12000,
 
     // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
     LIMIT_USER_LAST:  120, // usado só no modal ABRIR (lista completa)
-    LIMIT_LAST_TWO_FETCH: 12, // rápido
+    LIMIT_LAST_TWO_FETCH: 12,
 
     // Usuárias do painel
     USERS: [
@@ -144,15 +148,29 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
+  // ✅ helpers: datas no formato Bitrix com offset (-03:00)
+  function pad2(n){ return String(n).padStart(2,"0"); }
+  function toBXDateTime(d){
+    const dt = (d instanceof Date) ? d : new Date(d);
+    const y = dt.getFullYear();
+    const m = pad2(dt.getMonth()+1);
+    const da= pad2(dt.getDate());
+    const hh= pad2(dt.getHours());
+    const mi= pad2(dt.getMinutes());
+    const ss= pad2(dt.getSeconds());
+    return `${y}-${m}-${da}T${hh}:${mi}:${ss}-03:00`;
+  }
+
+  // ✅ ranges no formato Bitrix (para filtros >= e <)
   function dayRange(){
     const d0 = new Date(); d0.setHours(0,0,0,0);
     const d1 = new Date(d0.getTime() + 24*60*60*1000);
-    return { startISO: d0.toISOString(), endISO: d1.toISOString() };
+    return { startISO: toBXDateTime(d0), endISO: toBXDateTime(d1) };
   }
   function monthRange(){
     const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
     const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
-    return { startISO: d0.toISOString(), endISO: d1.toISOString() };
+    return { startISO: toBXDateTime(d0), endISO: toBXDateTime(d1) };
   }
 
   function isoFromLocalInput(v){
@@ -242,7 +260,7 @@
           e._bxError = data.error;
           throw e;
         }
-        return data; // ✅ objeto completo
+        return data;
       }catch(err){
         lastErr = err;
         const http = err && err._httpStatus;
@@ -469,7 +487,6 @@
 .cgdGrid{
   flex: 1 1 auto;
   display:grid;
-  /* ✅ NOVOS LEADS +20% e HISTÓRICO reduzido (aprox) */
   grid-template-columns: 0.85fr 2.15fr;
   gap: 12px;
 }
@@ -678,7 +695,7 @@
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(10,10,12,.95);
+  background: rgba(32,34,38,.98); /* ✅ cinza bem escuro */
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -699,8 +716,23 @@
   border: 1px solid rgba(255,255,255,.18);
   background: rgba(255,255,255,.08);
 }
+.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .92; margin-bottom: 2px; } /* ✅ label */
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
 .cgdCnpj{ font-size: 11px; line-height: 1.25; }
+.cgdCnpjRow{
+  display:flex;
+  gap: 18px;
+  align-items:flex-start;
+  justify-content:flex-end;
+  flex-wrap: wrap;
+}
+.cgdCnpjBlock{
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 900;
+  opacity: .92;
+  white-space: nowrap;
+}
 
 /* Modals */
 .cgdModalOverlay{
@@ -868,7 +900,8 @@ body.cgdDark .cgdBadge{
     soundOn: true,
     dark: false,
 
-    lastNewLeadId: null,
+    // ✅ avião só quando entrar lead novo
+    lastNewLeadIds: new Set(),
     _newLeadFirstLoadDone: false,
 
     newLeadsAll: [],
@@ -876,8 +909,7 @@ body.cgdDark .cgdBadge{
     pendingCount: 0,
 
     stats: { day:0, month:0 },
-
-    userStats: {}, // {id: { pulledToday, pulledMonth, lastTwo, list? }}
+    userStats: {},
 
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     queueLocalTouchTs: 0,
@@ -885,13 +917,13 @@ body.cgdDark .cgdBadge{
     lastServedUserName: "—",
 
     // cache fotos usuários (RAM)
-    userPhoto: new Map(),         // id -> url (string)
-    userPhotoTs: new Map(),       // id -> ms
-    userPhotoPending: new Set(),  // id
+    userPhoto: new Map(),
+    userPhotoTs: new Map(),
+    userPhotoPending: new Set(),
   };
 
   // =========================
-  // Fotos: robusto + rápido
+  // Fotos
   // =========================
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -1069,16 +1101,22 @@ body.cgdDark .cgdBadge{
         <div class="cgdBottom">
           <div class="bLeft">
             <div class="cgdBossPics" id="bossPics"></div>
-            <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+            <div>
+              <div class="cgdAddrLabel">Endereço</div>
+              <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+            </div>
           </div>
           <div class="bCenter">System created by GRUPO CGD</div>
           <div class="bRight">
-            <div class="cgdCnpj">
-              <div><b>CGD CORRETORA</b></div>
-              <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              <div style="height:6px"></div>
-              <div><b>CGD BARRA</b></div>
-              <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+            <div class="cgdCnpjRow">
+              <div class="cgdCnpjBlock">
+                <div><b>CGD CORRETORA</b></div>
+                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              </div>
+              <div class="cgdCnpjBlock">
+                <div><b>CGD BARRA</b></div>
+                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1330,7 +1368,7 @@ body.cgdDark .cgdBadge{
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("PREVENT")) return { bg:"#111", fg:"#fff" };
+    if(op.includes("PREVENT")) return { bg:"#0b2a5b", fg:"#fff" }; // ✅ azul escuro
     if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
     if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
     if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
@@ -1380,7 +1418,7 @@ body.cgdDark .cgdBadge{
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        [CONFIG.UF_DATA_PEGAR]: new Date().toISOString() // ✅ grava Data PEGAR
+        [CONFIG.UF_DATA_PEGAR]: toBXDateTime(new Date()) // ✅ grava Data PEGAR em formato Bitrix
       });
     });
 
@@ -1482,7 +1520,7 @@ body.cgdDark .cgdBadge{
     const has = (items||[]).length > 0;
     if(alert){
       alert.style.display = has ? "flex" : "none";
-      alert.classList.toggle("hot", has); // ✅ preto->vermelho quando há leads
+      alert.classList.toggle("hot", has);
     }
 
     const btnSoundOn = $("#btnSoundOn");
@@ -1623,7 +1661,6 @@ body.cgdDark .cgdBadge{
     return { lastTwo };
   }
 
-  // Lista completa (somente quando abrir modal ABRIR)
   async function fetchUserStatsFull(userId){
     const { startISO: dayS, endISO: dayE } = dayRange();
     const { startISO: monS, endISO: monE } = monthRange();
@@ -1647,7 +1684,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Modals
+  // Modals (mantidos como estavam)
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
@@ -1862,6 +1899,12 @@ body.cgdDark .cgdBadge{
       }
     });
   }
+
+  // (resto dos modais e busca global: mantém igual ao seu script anterior)
+  // Para não cortar funcionalidade, mantive as funções originais aqui (batch, abrir user, busca, etc.)
+  // =========================
+  // Batch / Abrir User / Busca global (copiado do seu código original)
+  // =========================
 
   async function modalBatchTransfer(){
     openModal("TRANSFERIR EM LOTE", `
@@ -2203,8 +2246,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Busca global no Bitrix por nome (independente da etapa)
-  // + RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+  // Busca global (igual ao seu)
   // =========================
   function uniqById(list){
     const m = new Map();
@@ -2416,21 +2458,34 @@ body.cgdDark .cgdBadge{
   async function refreshNewLeads(){
     try{
       const items = await fetchNewLeadsAll();
-      state.newLeadsAll = items || [];
+      const list = items || [];
+
+      // conjunto atual
+      const currentIds = new Set(list.map(x=>String(x.ID)));
+
+      state.newLeadsAll = list;
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
-      const newest = items && items[0] ? String(items[0].ID) : null;
-
-      // ✅ aviãozinho só quando entrar lead novo (não na primeira carga)
+      // ✅ primeira carga: só registra (sem animação)
       if(!state._newLeadFirstLoadDone){
         state._newLeadFirstLoadDone = true;
-        state.lastNewLeadId = newest;
+        state.lastNewLeadIds = currentIds;
         return;
       }
 
-      if(items.length > 0 && newest && newest !== state.lastNewLeadId){
-        state.lastNewLeadId = newest;
+      // ✅ detecta chegada de pelo menos 1 lead novo (ID que não existia antes)
+      let hasIncoming = false;
+      for(const id of currentIds){
+        if(!state.lastNewLeadIds.has(id)){
+          hasIncoming = true;
+          break;
+        }
+      }
+
+      state.lastNewLeadIds = currentIds;
+
+      if(hasIncoming){
         flyPlaneYellow();
         if(state.soundOn) tripleBeep();
       }
@@ -2454,8 +2509,8 @@ body.cgdDark .cgdBadge{
       const { startISO: monS, endISO: monE } = monthRange();
 
       const [day, month] = await Promise.all([
-        fetchPegCountRangeAll(dayS, dayE),  // ✅ dia por Data PEGAR
-        fetchPegCountRangeAll(monS, monE)   // ✅ mês por Data PEGAR
+        fetchPegCountRangeAll(dayS, dayE),
+        fetchPegCountRangeAll(monS, monE)
       ]);
 
       state.stats = { day: day||0, month: month||0 };
@@ -2465,13 +2520,11 @@ body.cgdDark .cgdBadge{
     }
   }
 
-  // ✅ Histórico mais rápido: (1) contagens por PEGAR (total) (2) lastTwo pequeno
   async function refreshUsersFast(){
     try{
       const { startISO: dayS, endISO: dayE } = dayRange();
       const { startISO: monS, endISO: monE } = monthRange();
 
-      // chunk para não estourar
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=4){
         const part = users.slice(i,i+4);
@@ -2499,9 +2552,7 @@ body.cgdDark .cgdBadge{
 
   async function refreshQueue(){
     try{
-      // ✅ evita “volta e vai de novo”: não sobrescreve logo após toque local
       if(Date.now() - state.queueLocalTouchTs < 1400) return;
-
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
       renderQueueSidebar();
@@ -2532,7 +2583,6 @@ body.cgdDark .cgdBadge{
     if(so) so.style.display = state.soundOn ? "none" : "inline-block";
   }
 
-  // ✅ botão mostra o ESTADO atual (Claro/Escuro)
   function applyDark(){
     document.body.classList.toggle("cgdDark", !!state.dark);
     const b = $("#btnDark");
@@ -2684,8 +2734,6 @@ body.cgdDark .cgdBadge{
   // =========================
   async function start(){
     if(!CONFIG.WEBHOOK){
-      const sentinel = document.getElementById("cgd-sentinel");
-      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
       return;
     }
 
@@ -2695,20 +2743,17 @@ body.cgdDark .cgdBadge{
     updateSoundUI();
     applyDark();
 
-    // aquece fotos em background
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
     await hardRefreshAll();
     renderBossPics();
 
-    // refreshes
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsersFast, CONFIG.REFRESH_WHO_MS);
 
-    // offline flush
     setInterval(flushOps, 2500);
   }
 
