@@ -3,8 +3,15 @@
    - UI refinada + ajustes de layout (títulos centralizados, botões abaixo do título, contrastes)
    - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
+     ✅ Considera apenas etapas: EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO, CONVERTIDO
    - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
-   - Correções: avião de papel amarelo 3D (10cm) só em lead novo; alerta NOVO LEAD preto→vermelho; histórico mais rápido com batch; ABRIR com info do lead (sem “atualizado/id”, modal mais largo)
+   - Correções:
+     ✅ Avião só quando ENTRA lead novo em NOVOS LEADS (não quando remove por PEGAR/DESCARTAR)
+     ✅ Avião maior (~10cm), papel amarelo 3D de lado
+     ✅ PREVENT com fundo azul escuro na badge OPERADORA
+     ✅ Barra inferior: cinza bem escuro + CNPJs lado a lado + label "Endereço"
+     ✅ ABRIR: lista com informações do lead (operadora, idade, tel, bairro, fonte, data)
+     ✅ ABRIR mais robusto (retry) para reduzir erro intermitente "Sem conexão"
 */
 (function(){
   "use strict";
@@ -56,7 +63,7 @@
       }
     },
 
-    // Logo topo
+    // Logo topo (troque aqui quando quiser)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
     // Links
@@ -74,7 +81,7 @@
     // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
-    LIMIT_USER_LAST:  120, // usado no modal ABRIR
+    LIMIT_USER_LAST:  160, // ABRIR: lista completa (um pouco maior)
     LIMIT_LAST_TWO_FETCH: 12,
 
     // Usuárias do painel
@@ -96,28 +103,31 @@
     // Sócios (fotos na barra inferior)
     BOSSES: [27, 1, 15],
 
-    // ✅ Status/Stages de LEADS (Bitrix)
+    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
       ATENDIDO: "UC_JT9G60",
       QUALIFICADO: "UC_0NFA3H",
-      PERDIDO: "UC_5IMTI4",       // (seu “Perdido” do funil)
-      CONVERTIDO: "UC_B3RQAF",    // (seu “Convertido” do funil)
-      CONVERTED_SYS: "CONVERTED", // ✅ Convertido do sistema
-      JUNK_SYS: "JUNK"            // ✅ Descartado do sistema
+      PERDIDO: "UC_5IMTI4",
+      CONVERTIDO: "UC_B3RQAF",
+      DESCARTADO_SISTEMA: "JUNK",       // lead descartado (sistema)
+      CONVERTIDO_SISTEMA: "CONVERTED"   // lead convertido (sistema)
     },
 
-    // ✅ Etapas que entram no CÁLCULO (dia/mês)
-    COUNT_STATUS: [
-      "IN_PROCESS",   // Em atendimento
-      "UC_JT9G60",    // Atendido
-      "UC_0NFA3H",    // Qualificado
-      "JUNK",         // Lead descartado (sistema)
-      "CONVERTED"     // Lead convertido (sistema)
+    // ✅ Contagem deve considerar APENAS estas colunas:
+    // EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO, CONVERTIDO
+    COUNT_STATUS_ALLOWED: [
+      "IN_PROCESS",     // EM ATENDIMENTO
+      "UC_JT9G60",      // ATENDIDO
+      "UC_0NFA3H",      // QUALIFICADO
+      "JUNK",           // LEAD DESCARTADO (sistema)
+      "UC_B3RQAF"       // CONVERTIDO (custom)
+      // se você quiser também contar "CONVERTED" (sistema), adicione aqui:
+      // "CONVERTED"
     ],
 
-    // Nomes (para exibir)
+    // Nomes (para exibir na busca)
     LEAD_STATUS_NAMES: {
       "NEW": "NOVO LEAD",
       "IN_PROCESS": "EM ATENDIMENTO",
@@ -155,27 +165,45 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
-  // Formata Date local em "YYYY-MM-DDTHH:MM:SS" (sem Z)
-  // (Bitrix aceita bem esse padrão em filtros e evita confusão de timezone)
-  function fmtLocalNoZ(dt){
+  // =========================
+  // Datas: ISO com offset BR (-03:00) por padrão
+  // =========================
+  function pad2(n){ return String(n).padStart(2,"0"); }
+
+  function isoLocalWithOffset(dt, offsetMinutes){
+    // offsetMinutes: ex -180 para -03:00
+    offsetMinutes = Number.isFinite(offsetMinutes) ? offsetMinutes : -180;
+
     const y = dt.getFullYear();
-    const m = String(dt.getMonth()+1).padStart(2,"0");
-    const d = String(dt.getDate()).padStart(2,"0");
-    const hh = String(dt.getHours()).padStart(2,"0");
-    const mi = String(dt.getMinutes()).padStart(2,"0");
-    const ss = String(dt.getSeconds()).padStart(2,"0");
-    return `${y}-${m}-${d}T${hh}:${mi}:${ss}`;
+    const mo = pad2(dt.getMonth()+1);
+    const d = pad2(dt.getDate());
+    const hh = pad2(dt.getHours());
+    const mi = pad2(dt.getMinutes());
+    const ss = pad2(dt.getSeconds());
+
+    const sign = offsetMinutes <= 0 ? "-" : "+";
+    const abs = Math.abs(offsetMinutes);
+    const oh = pad2(Math.floor(abs/60));
+    const om = pad2(abs%60);
+    return `${y}-${mo}-${d}T${hh}:${mi}:${ss}${sign}${oh}:${om}`;
   }
 
   function dayRange(){
     const d0 = new Date(); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0); d1.setHours(23,59,59,999);
-    return { startISO: fmtLocalNoZ(d0), endISO: fmtLocalNoZ(d1) };
+    const d1 = new Date(d0.getTime() + 24*60*60*1000);
+    return {
+      startISO: isoLocalWithOffset(d0, -180),
+      endISO: isoLocalWithOffset(d1, -180)
+    };
   }
+
   function monthRange(){
     const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1); d1.setMilliseconds(-1); // último ms do mês anterior
-    return { startISO: fmtLocalNoZ(d0), endISO: fmtLocalNoZ(d1) };
+    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
+    return {
+      startISO: isoLocalWithOffset(d0, -180),
+      endISO: isoLocalWithOffset(d1, -180)
+    };
   }
 
   function isoFromLocalInput(v){
@@ -185,9 +213,10 @@
     const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
     const dt = new Date(y, mo, d, hh, mi, 0, 0);
     if(Number.isNaN(dt.getTime())) return "";
-    // Para gravar no UF, mantém ISO "Z" (padrão) — consistente no banco
-    return dt.toISOString();
+    // salva como ISO com offset BR para ficar coerente no Bitrix
+    return isoLocalWithOffset(dt, -180);
   }
+
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
     const t = Date.parse(String(iso));
@@ -200,14 +229,31 @@
     const mi = String(d.getMinutes()).padStart(2,"0");
     return `${dd}/${mm}/${yy} ${hh}:${mi}`;
   }
+
   function stageName(id){
     return CONFIG.LEAD_STATUS_NAMES[String(id||"")] || String(id||"—");
   }
+
   function userNameById(id){
     const s = String(id||"");
     const u = CONFIG.USERS.find(x=>String(x.id)===s);
     if(u) return u.name;
     return s ? ("USER " + s) : "—";
+  }
+
+  // =========================
+  // Robust retry helper
+  // =========================
+  async function retryAsync(fn, tries=3, baseDelay=250){
+    let last;
+    for(let i=0;i<tries;i++){
+      try{ return await fn(); }
+      catch(err){
+        last = err;
+        await sleep(baseDelay + i*baseDelay);
+      }
+    }
+    throw last;
   }
 
   // =========================
@@ -235,14 +281,14 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(7000, Number(options.timeoutMs || 14000));
+    const timeoutMs = Math.max(8000, Number(options.timeoutMs || 18000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
 
     let lastErr = null;
 
-    for(let attempt=0; attempt<3; attempt++){
+    for(let attempt=0; attempt<4; attempt++){
       const ctrl = new AbortController();
       const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, timeoutMs);
 
@@ -265,7 +311,7 @@
           e._bxError = data.error;
           throw e;
         }
-        return data;
+        return data; // ✅ objeto completo
       }catch(err){
         lastErr = err;
         const http = err && err._httpStatus;
@@ -273,7 +319,7 @@
         const aborted = (err && (err.name==="AbortError"));
         const net = (err && String(err.message||err).toLowerCase().includes("failed to fetch"));
 
-        if(attempt < 2 && (transientHTTP || aborted || net)){
+        if(attempt < 3 && (transientHTTP || aborted || net)){
           clearTimeout(t);
           await sleep(260 + attempt*520);
           continue;
@@ -311,36 +357,6 @@
       if(items.length === 0) break;
     }
     return out.slice(0, max);
-  }
-
-  // Batch helper (acelera MUITO as contagens/histórico)
-  function qsFromObj(obj){
-    const parts = [];
-    const enc = encodeURIComponent;
-    const walk = (prefix, val)=>{
-      if(val === null || val === undefined) return;
-      if(Array.isArray(val)){
-        for(let i=0;i<val.length;i++){
-          walk(prefix ? `${prefix}[${i}]` : String(i), val[i]);
-        }
-        return;
-      }
-      if(typeof val === "object"){
-        for(const k of Object.keys(val)){
-          walk(prefix ? `${prefix}[${k}]` : k, val[k]);
-        }
-        return;
-      }
-      if(prefix) parts.push(`${enc(prefix)}=${enc(String(val))}`);
-    };
-    walk("", obj);
-    return parts.join("&");
-  }
-
-  async function bxBatch(cmdMap, options={}){
-    // cmdMap: { key: "method?query", ... }
-    const data = await bxRaw("batch", { cmd: cmdMap }, { timeoutMs: options.timeoutMs || 20000 });
-    return data && data.result ? data.result : {};
   }
 
   // =========================
@@ -399,44 +415,40 @@
   }
 
   // =========================
-  // Paper plane animation — 3D side view, ~10cm (≈380px)
+  // Paper plane animation — AMARELO ~10cm (maior) — 3D side
   // =========================
   function flyPlaneYellow(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
       d.innerHTML = `
-        <svg viewBox="0 0 260 140" width="380" height="210" aria-hidden="true">
+        <svg viewBox="0 0 240 140" width="380" height="380" aria-hidden="true">
           <defs>
-            <linearGradient id="plA" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stop-color="#ffe36a"/>
+            <linearGradient id="gBody" x1="0" x2="1">
+              <stop offset="0" stop-color="#ffe86a"/>
               <stop offset="0.55" stop-color="#ffd400"/>
-              <stop offset="1" stop-color="#f3b800"/>
+              <stop offset="1" stop-color="#ffbf00"/>
             </linearGradient>
-            <linearGradient id="plB" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stop-color="rgba(255,255,255,.65)"/>
-              <stop offset="1" stop-color="rgba(0,0,0,.06)"/>
+            <linearGradient id="gShadow" x1="0" x2="1">
+              <stop offset="0" stop-color="rgba(0,0,0,0.22)"/>
+              <stop offset="1" stop-color="rgba(0,0,0,0)"/>
             </linearGradient>
-            <filter id="plSh" x="-20%" y="-30%" width="140%" height="200%">
-              <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="rgba(0,0,0,.25)"/>
-            </filter>
           </defs>
 
-          <!-- “lado” do avião (estilo 3D) -->
-          <g filter="url(#plSh)" transform="translate(10,18)">
-            <!-- asa principal -->
-            <path d="M0 62 L232 0 L172 108 L122 76 L0 62 Z"
-              fill="url(#plA)" stroke="rgba(0,0,0,.35)" stroke-width="2.4" />
-            <!-- dobra (highlight) -->
-            <path d="M122 76 L232 0"
-              fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3.2" />
-            <!-- sombra/dobra inferior -->
-            <path d="M0 62 L122 76 L172 108"
-              fill="none" stroke="rgba(0,0,0,.18)" stroke-width="3.0" />
-            <!-- detalhe (flap) -->
-            <path d="M60 66 L120 76 L92 94 Z"
-              fill="url(#plB)" stroke="rgba(0,0,0,.18)" stroke-width="1.6" />
-          </g>
+          <!-- “corpo” do avião (lateral 3D) -->
+          <path d="M12 74 L220 18 L148 112 L120 86 L12 74 Z"
+                fill="url(#gBody)" stroke="rgba(0,0,0,.28)" stroke-width="4" />
+
+          <!-- dobra superior -->
+          <path d="M120 86 L220 18"
+                stroke="rgba(0,0,0,.28)" stroke-width="4" />
+
+          <!-- sombra/dobra inferior para dar 3D -->
+          <path d="M12 74 L120 86 L148 112"
+                fill="url(#gShadow)" opacity="0.55"/>
+
+          <!-- “bico” -->
+          <path d="M220 18 L210 48 L196 30 Z" fill="rgba(255,255,255,.22)" />
         </svg>
       `;
       document.body.appendChild(d);
@@ -458,7 +470,7 @@
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 90px);
-  padding: 10px 12px 110px;
+  padding: 10px 12px 120px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
   color: var(--text);
   background:
@@ -554,7 +566,7 @@
   gap: 12px;
 }
 
-/* Sidebar FILA */
+/* Sidebar FILA — +20% largura */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -758,7 +770,7 @@
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(18,20,24,.96); /* ✅ cinza bem escuro */
+  background: rgba(16,16,18,.96); /* ✅ cinza bem escuro */
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -768,9 +780,9 @@
   justify-content: space-between;
   gap: 12px;
 }
-.cgdBottom .bLeft{ display:flex; align-items:flex-start; gap:10px; min-width: 340px; }
+.cgdBottom .bLeft{ display:flex; align-items:flex-start; gap:10px; min-width: 360px; }
 .cgdBottom .bCenter{ flex:1; text-align:center; font-style: italic; font-weight: 900; opacity:.92; }
-.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 360px; }
+.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 520px; }
 .cgdBossPics{ display:flex; gap:8px; align-items:center; margin-top:2px; }
 .cgdBossPic{
   width: 34px; height: 34px;
@@ -780,18 +792,19 @@
   background: rgba(255,255,255,.08);
 }
 .cgdAddrWrap{ display:flex; flex-direction:column; gap:4px; }
-.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity:.78; }
+.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .85; }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
-
-.cgdCnpj{
+.cgdCnpjRow{
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+  justify-content:flex-end;
+  flex-wrap: wrap;
   font-size: 11px;
   line-height: 1.25;
-  display:flex;              /* ✅ lado a lado */
-  gap: 16px;
-  justify-content:flex-end;
-  flex-wrap:wrap;
 }
-.cgdCnpj .blk{ min-width: 220px; text-align:right; }
+.cgdCnpjBox{ white-space: nowrap; }
+.cgdCnpjBox b{ font-size: 11px; }
 
 /* Modals */
 .cgdModalOverlay{
@@ -806,7 +819,7 @@
   padding: 16px;
 }
 .cgdModal{
-  width: min(1040px, 96vw);
+  width: min(1180px, 96vw);
   max-height: min(88vh, 900px);
   background: rgba(255,255,255,.94);
   border: 1px solid rgba(30,40,70,.16);
@@ -816,8 +829,6 @@
   display:flex;
   flex-direction: column;
 }
-.cgdModal.cgdModalWide{ width: min(1280px, 98vw); } /* ✅ ABRIR mais largo */
-
 .cgdModalHead{
   padding: 12px 14px;
   display:flex;
@@ -869,24 +880,25 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
-body{ padding-bottom: 110px !important; }
+body{ padding-bottom: 120px !important; }
 
 /* Paper plane */
 .cgdPlane{
   position: fixed;
-  top: 85px;
-  left: -480px;
+  top: 88px;
+  left: -520px;
   width: 380px;
-  height: 210px;
+  height: 380px;
   z-index: 9999;
   pointer-events:none;
   opacity: .98;
-  animation: planeFly 1.8s linear forwards;
+  animation: planeFly 1.9s linear forwards;
+  filter: drop-shadow(0 18px 20px rgba(0,0,0,.18));
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(8deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(6deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 920px)) rotate(-6deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 920px)) rotate(-8deg); opacity: 0; }
 }
 
 /* DARK MODE */
@@ -915,6 +927,7 @@ body.cgdDark .cgdBadge{
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
+  .cgdBottom .bRight{ min-width: unset; }
 }
     `;
     const st = document.createElement("style");
@@ -961,10 +974,8 @@ body.cgdDark .cgdBadge{
     soundOn: true,
     dark: false,
 
-    lastNewLeadId: null,
     _newLeadFirstLoadDone: false,
-    _lastNewCount: null,
-    _lastLocalPickTs: 0,
+    _newTopIds: [],
 
     newLeadsAll: [],
     newLeadsRender: [],
@@ -991,7 +1002,7 @@ body.cgdDark .cgdBadge{
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
   async function fetchUserPhotoOnce(userId){
-    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
+    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 12000 });
     const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
     const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
     return photo || "";
@@ -1169,17 +1180,13 @@ body.cgdDark .cgdBadge{
               <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
             </div>
           </div>
+
           <div class="bCenter">System created by GRUPO CGD</div>
+
           <div class="bRight">
-            <div class="cgdCnpj">
-              <div class="blk">
-                <div><b>CGD CORRETORA</b></div>
-                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              </div>
-              <div class="blk">
-                <div><b>CGD BARRA</b></div>
-                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
-              </div>
+            <div class="cgdCnpjRow">
+              <div class="cgdCnpjBox"><b>CGD CORRETORA</b> CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              <div class="cgdCnpjBox"><b>CGD BARRA</b> CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
             </div>
           </div>
         </div>
@@ -1244,7 +1251,7 @@ body.cgdDark .cgdBadge{
           return { dealId: String(deal.ID), ...parseQueue(raw) };
         }catch(err){
           lastErr = err;
-          await sleep(200 + attempt*350);
+          await sleep(220 + attempt*420);
         }
       }
       throw lastErr || new Error("Falha ao carregar fila");
@@ -1270,7 +1277,7 @@ body.cgdDark .cgdBadge{
           return;
         }catch(err){
           lastErr = err;
-          await sleep(220 + attempt*420);
+          await sleep(260 + attempt*520);
         }
       }
       throw lastErr || new Error("Falha ao salvar fila");
@@ -1349,16 +1356,6 @@ body.cgdDark .cgdBadge{
   // =========================
   // LEADS: fetch / actions
   // =========================
-  function countFilterBase(startISO, endISO, userIdOrNull){
-    const f = {
-      "STATUS_ID": CONFIG.COUNT_STATUS.slice(),
-      [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
-      ["<=" + CONFIG.UF_DATA_PEGAR]: endISO
-    };
-    if(userIdOrNull) f["ASSIGNED_BY_ID"] = String(userIdOrNull);
-    return f;
-  }
-
   async function fetchNewLeadsAll(){
     const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
@@ -1374,50 +1371,74 @@ body.cgdDark .cgdBadge{
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 14000 });
+    }, { timeoutMs: 22000 });
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
     return items.length;
   }
 
-  // ✅ Contagens rápidas (TOTAL + POR USER) via BATCH
-  async function refreshCountsFast(){
-    const { startISO: dayS, endISO: dayE } = dayRange();
-    const { startISO: monS, endISO: monE } = monthRange();
-
-    const cmd = {};
-    cmd["T_DAY"]  = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(dayS, dayE, null), select:["ID"], start:0, order:{ID:"DESC"} });
-    cmd["T_MON"]  = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(monS, monE, null), select:["ID"], start:0, order:{ID:"DESC"} });
-
-    // chunk: 12 users -> 24 cmds (OK)
-    CONFIG.USERS.forEach(u=>{
-      const id = String(u.id);
-      cmd["U"+id+"_DAY"] = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(dayS, dayE, u.id), select:["ID"], start:0, order:{ID:"DESC"} });
-      cmd["U"+id+"_MON"] = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(monS, monE, u.id), select:["ID"], start:0, order:{ID:"DESC"} });
-    });
-
-    const r = await bxBatch(cmd, { timeoutMs: 22000 });
-
-    const totals = r?.result_total || {};
-    const rr = r?.result || {};
-
-    const getTotal = (k)=>{
-      const t = Number(totals && totals[k]);
-      if(Number.isFinite(t)) return t;
-      const arr = rr && Array.isArray(rr[k]) ? rr[k] : [];
-      return arr.length;
+  // =========================
+  // ✅ Contagens por Data PEGAR (dia e mês) + múltiplos STATUS + tolerância de offset
+  // =========================
+  function countFilterBase(startISO, endISO){
+    return {
+      [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+      ["<"  + CONFIG.UF_DATA_PEGAR]: endISO,
+      "@STATUS_ID": CONFIG.COUNT_STATUS_ALLOWED.slice()
     };
+  }
 
-    state.stats = { day: getTotal("T_DAY"), month: getTotal("T_MON") };
-    renderStats(state.stats);
+  async function countOnce(filter){
+    const data = await bxRaw("crm.lead.list", {
+      filter,
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 24000 });
 
-    CONFIG.USERS.forEach(u=>{
-      const id = String(u.id);
-      const d = getTotal("U"+id+"_DAY");
-      const m = getTotal("U"+id+"_MON");
-      state.userStats[u.id] = { ...(state.userStats[u.id]||{}), pulledToday: d, pulledMonth: m };
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
+
+  function rangesWithOffsets(startISO, endISO){
+    const swapOffset = (iso, newOff) => String(iso).replace(/([+-]\d{2}:\d{2})$/, newOff);
+    const noOffset = (iso) => String(iso).replace(/([+-]\d{2}:\d{2})$/, "");
+
+    const s = String(startISO), e = String(endISO);
+
+    const variants = [
+      { s, e },
+      { s: swapOffset(s, "+03:00"), e: swapOffset(e, "+03:00") },
+      { s: swapOffset(s, "-03:00"), e: swapOffset(e, "-03:00") },
+      { s: noOffset(s), e: noOffset(e) }
+    ];
+
+    const seen = new Set();
+    return variants.filter(v=>{
+      const k = v.s + "||" + v.e;
+      if(seen.has(k)) return false;
+      seen.add(k);
+      return true;
     });
+  }
+
+  async function fetchPegCountRangeAll(startISO, endISO){
+    const vars = rangesWithOffsets(startISO, endISO);
+    const totals = await Promise.all(vars.map(v => countOnce(countFilterBase(v.s, v.e)).catch(()=>0)));
+    return Math.max(0, ...totals);
+  }
+
+  async function fetchPegCountRangeUser(userId, startISO, endISO){
+    const vars = rangesWithOffsets(startISO, endISO);
+    const totals = await Promise.all(vars.map(v => {
+      const f = { ...countFilterBase(v.s, v.e), "ASSIGNED_BY_ID": String(userId) };
+      return countOnce(f).catch(()=>0);
+    }));
+    return Math.max(0, ...totals);
   }
 
   function leadDisplayName(it){
@@ -1446,7 +1467,8 @@ body.cgdDark .cgdBadge{
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("PREVENT")) return { bg:"#0b1f3a", fg:"#fff" }; // ✅ PREVENT azul escuro
+    // ✅ PREVENT: azul escuro
+    if(op.includes("PREVENT")) return { bg:"#0b2a6b", fg:"#fff" };
     if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
     if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
     if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
@@ -1486,8 +1508,6 @@ body.cgdDark .cgdBadge{
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
-    state._lastLocalPickTs = Date.now(); // ✅ evita avião por remoção local
-
     // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
@@ -1498,7 +1518,7 @@ body.cgdDark .cgdBadge{
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        [CONFIG.UF_DATA_PEGAR]: new Date().toISOString() // ✅ grava Data PEGAR
+        [CONFIG.UF_DATA_PEGAR]: isoLocalWithOffset(new Date(), -180) // ✅ grava Data PEGAR coerente
       });
     });
 
@@ -1522,8 +1542,6 @@ body.cgdDark .cgdBadge{
   }
 
   async function actionDiscardLead(leadId){
-    state._lastLocalPickTs = Date.now();
-
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
@@ -1539,7 +1557,7 @@ body.cgdDark .cgdBadge{
     enqueueOp("moveLead", async ()=>{
       const fields = { STATUS_ID: statusId };
       if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const lead = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 24000 });
         const t = String(lead?.TITLE||"").trim();
         if(!t.startsWith(CONFIG.HOT_EMOJI)){
           fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
@@ -1577,7 +1595,7 @@ body.cgdDark .cgdBadge{
           COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
           [CONFIG.UF_PRAZO]: iso || undefined
         }
-      });
+      }, { timeoutMs: 24000 });
     });
     flushOps();
   }
@@ -1726,45 +1744,44 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Histórico rápido: lastTwo em batch por chunk (e contagens separadas via refreshCountsFast)
+  // Fetch Usuárias (RÁPIDO pro Histórico)
   // =========================
-  async function refreshUsersFast(){
-    try{
-      // 1) contagens rápidas (total + user) em batch único
-      await refreshCountsFast();
+  async function fetchUserLastTwoFast(userId){
+    const last = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"]
+    }, CONFIG.LIMIT_LAST_TWO_FETCH);
 
-      // 2) lastTwo por user (mais leve) em chunks com batch
-      const users = CONFIG.USERS.slice();
-      for(let i=0;i<users.length;i+=4){
-        const part = users.slice(i,i+4);
-        const cmd = {};
-        part.forEach(u=>{
-          const id = String(u.id);
-          cmd["LT_"+id] = "crm.lead.list?" + qsFromObj({
-            filter: { "ASSIGNED_BY_ID": id, "STATUS_ID": [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO, CONFIG.LEAD_STATUS.ATENDIDO] },
-            order: { DATE_MODIFY: "DESC" },
-            select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"],
-            start: 0
-          });
-        });
+    const lastTwo = (last||[]).filter(x=>{
+      const st = String(x.STATUS_ID||"");
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+    }).slice(0,2);
 
-        const r = await bxBatch(cmd, { timeoutMs: 20000 });
-        const rr = r?.result || {};
-        part.forEach(u=>{
-          const id = String(u.id);
-          const list = Array.isArray(rr["LT_"+id]) ? rr["LT_"+id] : [];
-          state.userStats[u.id] = {
-            ...(state.userStats[u.id]||{}),
-            lastTwo: (list||[]).slice(0,2)
-          };
-        });
+    return { lastTwo };
+  }
 
-        renderWho();
-        await sleep(120);
-      }
-    }catch(err){
-      console.warn("user stats failed", err);
-    }
+  // Lista completa (somente quando abrir modal ABRIR)
+  async function fetchUserStatsFull(userId){
+    const { startISO: dayS, endISO: dayE } = dayRange();
+    const { startISO: monS, endISO: monE } = monthRange();
+
+    const [pulledToday, pulledMonth, list] = await Promise.all([
+      fetchPegCountRangeUser(userId, dayS, dayE),
+      fetchPegCountRangeUser(userId, monS, monE),
+      bxListAll("crm.lead.list", {
+        filter: { "ASSIGNED_BY_ID": String(userId) },
+        order: { DATE_MODIFY: "DESC" },
+        select: CONFIG.LEAD_SELECT
+      }, CONFIG.LIMIT_USER_LAST)
+    ]);
+
+    const lastTwo = (list||[]).filter(x=>{
+      const st = String(x.STATUS_ID||"");
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+    }).slice(0,2);
+
+    return { pulledToday, pulledMonth, lastTwo, list: list || [] };
   }
 
   // =========================
@@ -2106,7 +2123,6 @@ body.cgdDark .cgdBadge{
       try{
         btn.disabled = true;
 
-        state._lastLocalPickTs = Date.now();
         ids.forEach(id=>{
           state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
         });
@@ -2126,7 +2142,6 @@ body.cgdDark .cgdBadge{
     });
   }
 
-  // ABRIR (mais leve visualmente, mas mantém ferramentas)
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -2136,35 +2151,17 @@ body.cgdDark .cgdBadge{
       <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
     `);
 
-    // deixa modal mais largo (somente aqui)
-    try{ document.querySelector(".cgdModal")?.classList.add("cgdModalWide"); }catch(_){}
-
-    let list = null;
-    // ✅ 2 tentativas para reduzir erro intermitente
-    for(let attempt=0; attempt<2; attempt++){
-      try{
-        list = await bxListAll("crm.lead.list", {
-          filter: { "ASSIGNED_BY_ID": String(u.id) },
-          order: { DATE_MODIFY: "DESC" },
-          select: CONFIG.LEAD_SELECT
-        }, CONFIG.LIMIT_USER_LAST);
-        break;
-      }catch(err){
-        if(attempt===0){ await sleep(380); continue; }
-        closeModal();
-        return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
-      }
+    let us;
+    try{
+      // ✅ retry para reduzir erro intermitente
+      us = await retryAsync(()=>fetchUserStatsFull(u.id), 3, 350);
+    }catch(err){
+      console.error(err);
+      closeModal();
+      return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
 
-    // stats já estão no state (refreshUsersFast), mas garante preenchimento
-    const pulledToday = Number(state.userStats[u.id]?.pulledToday||0);
-    const pulledMonth = Number(state.userStats[u.id]?.pulledMonth||0);
-
-    state.userStats[u.id] = {
-      ...(state.userStats[u.id]||{}),
-      pulledToday, pulledMonth,
-      list: list || []
-    };
+    state.userStats[u.id] = us;
     renderWho();
 
     const body = `
@@ -2174,12 +2171,12 @@ body.cgdDark .cgdBadge{
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">Puxados (dia): <b>${esc(pulledToday)}</b></div>
-        <div class="cgdBadge">Puxados (mês): <b>${esc(pulledMonth)}</b></div>
+        <div class="cgdBadge">Puxados (dia): <b>${esc(us.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Puxados (mês): <b>${esc(us.pulledMonth||0)}</b></div>
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <input class="cgdInput" id="muSearch" placeholder="Filtrar na lista (rápido)..." style="min-width:280px" />
+        <input class="cgdInput" id="muSearch" placeholder="Filtrar na lista (rápido)..." style="min-width:260px" />
         <select class="cgdSelect" id="muStage">
           <option value="ALL">Todas as etapas</option>
           ${Object.values(CONFIG.LEAD_STATUS).map(st=>`<option value="${esc(st)}">${esc(stageName(st))}</option>`).join("")}
@@ -2194,8 +2191,8 @@ body.cgdDark .cgdBadge{
 
         <select class="cgdSelect" id="muMoveTo">
           <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.JUNK_SYS)}">Mover p/ DESCARTADO (sistema)</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTED_SYS)}">Mover p/ CONVERTIDO (sistema)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Mover p/ PERDIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
           <option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Mover p/ ATENDIDO</option>
           <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Mover p/ EM ATENDIMENTO</option>
         </select>
@@ -2206,8 +2203,10 @@ body.cgdDark .cgdBadge{
         <thead>
           <tr>
             <th style="width:70px">Sel.</th>
-            <th>Lead / Informações</th>
-            <th style="width:520px">Ações</th>
+            <th>Lead</th>
+            <th style="width:360px">Informações</th>
+            <th style="width:300px">FOLLOW-UP</th>
+            <th style="width:300px">Mover</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -2215,7 +2214,6 @@ body.cgdDark .cgdBadge{
     `;
 
     openModal(`ABRIR • ${u.name}`, body);
-    try{ document.querySelector(".cgdModal")?.classList.add("cgdModalWide"); }catch(_){}
 
     const tbody = $("#muTbody");
     const search = $("#muSearch");
@@ -2224,7 +2222,7 @@ body.cgdDark .cgdBadge{
     function listFiltered(){
       const q = (search.value||"").trim().toLowerCase();
       const st = (stageSel.value||"ALL");
-      return (list||[]).filter(it=>{
+      return (us.list||[]).filter(it=>{
         const title = leadDisplayName(it).toLowerCase();
         const rawT = String(it.TITLE||"").toLowerCase();
         if(q && !(title.includes(q) || rawT.includes(q))) return false;
@@ -2233,54 +2231,55 @@ body.cgdDark .cgdBadge{
       });
     }
 
-    function infoLines(it){
-      const pairs = leadBadgesRich(it);
-      return pairs.map(([k,v])=>{
-        if(k==="OPERADORA"){
-          const st = operStyle(v);
-          return `<span class="cgdBadge oper" style="background:${esc(st.bg)}; color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>`;
-        }
-        return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
-      }).join(" ");
+    function infoHtml(it){
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade= pickUF(it, CONFIG.UF_IDADE);
+      const tel  = bestPhone(it);
+      const bairro=pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte= pickUF(it, CONFIG.UF_FONTE);
+      const dt   = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      return `
+        <div style="font-weight:900;opacity:.9">OPERADORA: <b>${esc(oper||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">IDADE: <b>${esc(idade||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">TELEFONE: <b>${esc(tel||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">BAIRRO: <b>${esc(bairro||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">FONTE: <b>${esc(fonte||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">DATA/HORA: <b>${esc(dt||"—")}</b></div>
+      `;
     }
 
     function renderRows(){
-      const lst = listFiltered();
-      tbody.innerHTML = lst.length ? lst.map(it=>{
+      const list = listFiltered();
+      tbody.innerHTML = list.length ? list.map(it=>{
         const id = String(it.ID);
         const name = leadDisplayName(it);
         const st = String(it.STATUS_ID||"—");
-        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? (CONFIG.HOT_EMOJI+" ") : "";
+        const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
+        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? CONFIG.HOT_EMOJI+" " : "";
         return `<tr>
           <td><input type="checkbox" data-sel="${esc(id)}" /></td>
           <td>
-            <div style="font-weight:950">${esc(hot + name)}</div>
-            <div style="opacity:.75;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))}</div>
-            <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${infoLines(it)}</div>
+            <b>${esc(hot + name)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))} • ${esc(dm||"—")}</div>
+          </td>
+          <td>${infoHtml(it)}</td>
+          <td>
+            <div class="cgdRow">
+              <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+              <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+              <button class="cgdBtn" data-save-fupdeal="${esc(id)}">Salvar + Criar CARD</button>
+            </div>
           </td>
           <td>
-            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start">
-              <div style="min-width: 240px">
-                <div style="font-weight:950; margin-bottom:6px">FOLLOW-UP</div>
-                <div class="cgdRow">
-                  <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
-                  <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
-                  <button class="cgdBtn" data-save-fupdeal="${esc(id)}">Salvar + Criar CARD</button>
-                </div>
-              </div>
-              <div style="flex:1; min-width: 240px">
-                <div style="font-weight:950; margin-bottom:6px">Mover</div>
-                <div class="cgdRow">
-                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
-                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</button>
-                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.JUNK_SYS)}">Descartado</button>
-                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTED_SYS)}">Convertido</button>
-                </div>
-              </div>
+            <div class="cgdRow">
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
             </div>
           </td>
         </tr>`;
-      }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+      }).join("") : `<tr><td colspan="5" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
     }
 
     renderRows();
@@ -2345,7 +2344,7 @@ body.cgdDark .cgdBadge{
 
       if(sd){
         const leadId = sd.getAttribute("data-save-fupdeal");
-        const lead = (list||[]).find(x=> String(x.ID)===String(leadId));
+        const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
         const iso = isoFromLocalInput(inp?.value || "");
         if(iso) await actionSetPrazo(leadId, iso);
@@ -2364,7 +2363,6 @@ body.cgdDark .cgdBadge{
 
   // =========================
   // Busca global no Bitrix por nome
-  // + RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
   // =========================
   function uniqById(list){
     const m = new Map();
@@ -2535,7 +2533,7 @@ body.cgdDark .cgdBadge{
   async function modalLeadDetails(leadId){
     openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
     try{
-      const it = await bx("crm.lead.get", { id: String(leadId) });
+      const it = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 24000 });
       const name = leadDisplayName(it);
       const st = stageName(it.STATUS_ID);
 
@@ -2580,33 +2578,26 @@ body.cgdDark .cgdBadge{
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
-      const newest = items && items[0] ? String(items[0].ID) : null;
-      const countNow = items ? items.length : 0;
+      const topIds = (items||[]).slice(0,5).map(x=>String(x.ID||"")).filter(Boolean);
 
-      // primeira carga
+      // ✅ aviãozinho só quando ENTRA lead novo (topId novo que não existia no top anterior)
       if(!state._newLeadFirstLoadDone){
         state._newLeadFirstLoadDone = true;
-        state.lastNewLeadId = newest;
-        state._lastNewCount = countNow;
+        state._newTopIds = topIds.slice();
         return;
       }
 
-      // ✅ avião SOMENTE quando entra lead novo (não quando alguém pega/descarta)
-      const prevCount = Number(state._lastNewCount ?? countNow);
-      const localPickRecent = (Date.now() - (state._lastLocalPickTs||0)) < 6000;
+      const prev = new Set(state._newTopIds || []);
+      const newest = topIds[0] || "";
+      const isNewEntry = newest && !prev.has(newest);
 
-      const grew = (countNow > prevCount);
-      const changedNewest = (newest && newest !== state.lastNewLeadId);
+      // Atualiza memória dos top ids
+      state._newTopIds = topIds.slice();
 
-      if((grew || (changedNewest && !localPickRecent && countNow >= prevCount))){
-        state.lastNewLeadId = newest;
+      if(isNewEntry){
         flyPlaneYellow();
         if(state.soundOn) tripleBeep();
-      }else{
-        state.lastNewLeadId = newest;
       }
-
-      state._lastNewCount = countNow;
     }catch(err){
       console.warn("new leads fetch failed", err);
     }
@@ -2623,15 +2614,55 @@ body.cgdDark .cgdBadge{
 
   async function refreshStats(){
     try{
-      await refreshCountsFast(); // ✅ usa batch + filtros corretos (UF_DATA_PEGAR + STATUS)
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
+
+      const [day, month] = await Promise.all([
+        fetchPegCountRangeAll(dayS, dayE),
+        fetchPegCountRangeAll(monS, monE)
+      ]);
+
+      state.stats = { day: day||0, month: month||0 };
+      renderStats(state.stats);
     }catch(err){
       console.warn("stats failed", err);
+    }
+  }
+
+  async function refreshUsersFast(){
+    try{
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
+
+      const users = CONFIG.USERS.slice();
+      for(let i=0;i<users.length;i+=4){
+        const part = users.slice(i,i+4);
+        const jobs = part.map(async u=>{
+          const [d, m, lt] = await Promise.all([
+            fetchPegCountRangeUser(u.id, dayS, dayE),
+            fetchPegCountRangeUser(u.id, monS, monE),
+            fetchUserLastTwoFast(u.id)
+          ]);
+          state.userStats[u.id] = {
+            ...(state.userStats[u.id]||{}),
+            pulledToday: d||0,
+            pulledMonth: m||0,
+            lastTwo: lt.lastTwo || []
+          };
+        });
+        await Promise.all(jobs);
+        renderWho();
+        await sleep(120);
+      }
+    }catch(err){
+      console.warn("user stats failed", err);
     }
   }
 
   async function refreshQueue(){
     try{
       if(Date.now() - state.queueLocalTouchTs < 1400) return;
+
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
       renderQueueSidebar();
@@ -2824,7 +2855,6 @@ body.cgdDark .cgdBadge{
     updateSoundUI();
     applyDark();
 
-    // aquece fotos em background
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
     await hardRefreshAll();
