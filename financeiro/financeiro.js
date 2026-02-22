@@ -30,7 +30,7 @@
       CENTRO_CUSTO: "UF_CRM_1771801157",        // lista
     },
 
-    // ✅ IDs reais das etapas (Pipeline 27)
+    // ✅ IDs reais das etapas (Pipeline 27) — USAREMOS SÓ ESSAS 6
     STAGES: {
       DESP_A_PAGAR: "C27:NEW",
       DESP_PAGA: "C27:PREPARATION",
@@ -235,7 +235,7 @@
     const rawStages = st?.result || [];
     if (!Array.isArray(rawStages)) throw new Error("Não consegui carregar as etapas da Pipeline 27.");
 
-    // ✅ whitelist por IDs (somente as 6 que você autorizou)
+    // ✅ whitelist por IDs (somente as 6)
     const allowedStageIds = new Set(Object.values(CFG.STAGES).map(String));
 
     S.stages = rawStages.map(x => ({
@@ -247,7 +247,7 @@
     S.stages.sort((a, b) => (a.SORT - b.SORT));
   }
 
-  // ========= STAGE CHOOSERS (por ID fixo) =========
+  // ========= STAGE CHOOSERS =========
   function initialStageForTipo(tipoEnumId) {
     const tipoTxt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
     if (tipoTxt.includes("DESP")) return CFG.STAGES.DESP_A_PAGAR;
@@ -342,7 +342,18 @@
         ],
         filter: {
           "CATEGORY_ID": String(CFG.DEAL_CATEGORY_ID),
-          // ✅ só traz registros financeiros (elimina __QUEUE__ e afins)
+
+          // ✅ Só as 6 etapas do Financeiro (mata QUEUE_JSON, WON, LOSE, etc)
+          "STAGE_ID": [
+            CFG.STAGES.DESP_A_PAGAR,
+            CFG.STAGES.DESP_PAGA,
+            CFG.STAGES.REC_A_RECEBER,
+            CFG.STAGES.REC_RECEBIDA,
+            CFG.STAGES.CANCELADO,
+            CFG.STAGES.CONCLUIDO
+          ],
+
+          // ✅ Tipo financeiro preenchido
           ["!" + CFG.F.TIPO_FIN]: ""
         },
         order: { "ID": "DESC" },
@@ -359,15 +370,19 @@
     return all;
   }
 
-  // ✅ Ocultar CONCLUÍDO por padrão + remover lixo de fila (backup)
+  // ✅ Ocultar CONCLUÍDO por padrão + remover lixo de fila (backup definitivo)
   function applyFilters() {
     const q = (S.filters.q || "").trim().toLowerCase();
+    const allowedDealStages = new Set(Object.values(CFG.STAGES).map(String));
 
     S.filtered = S.deals.filter(d => {
+      // backup: se escapar, mata aqui também
       const favRaw = String(d[CFG.F.FAVORECIDO] || "");
-      const favUp = favRaw.toUpperCase();
-      if (favRaw.startsWith("__QUEUE__")) return false;
-      if (favUp.includes("FILA ATENDIMENTO")) return false;
+      const favNorm = favRaw.trim().toUpperCase();
+      if (favNorm.startsWith("__QUEUE__")) return false;
+      if (favNorm.includes("FILA ATENDIMENTO")) return false;
+
+      if (!allowedDealStages.has(String(d.STAGE_ID || ""))) return false;
 
       if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
       if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
