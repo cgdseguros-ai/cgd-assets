@@ -1,8 +1,7 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - Histórico rápido: busca “últimos 2” por usuária
+   - Velocidade: Histórico carrega só “últimos 2” por usuária (rápido).
    - Fila sem realtime: sincroniza via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
    - Busca global por nome: mostra responsável + permite TRANSFERIR
-   - Contagem PEGAR: grava UF Data PEGAR (UF_CRM_1771741018) ao pegar lead
 */
 (function(){
   "use strict";
@@ -16,8 +15,10 @@
     // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
-    // ✅ Data PEGAR (tipo Data/Hora no LEAD) — grava quando clicar em PEGAR
-    UF_PICK_TS: "UF_CRM_1771741018",
+    // (OPCIONAL) Para resolver 100% “contagem de leads do dia/mês”:
+    // Crie um campo UF do tipo Data/Hora no LEAD (ex.: UF_CRM_XXXXXXXXXXXX)
+    // e coloque aqui. O painel vai setar esse campo quando “PEGAR”.
+    // UF_PICK_TS: "",
 
     UF_OPERADORA: "UF_CRM_1771282782",
     UF_DT_LEAD:   "UF_CRM_1771333014",
@@ -51,15 +52,10 @@
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
-    // Timers base
     REFRESH_NEW_LEADS_MS: 4500,
-    REFRESH_STATS_MS: 12000,
+    REFRESH_STATS_MS: 8000,
     REFRESH_QUEUE_MS: 2500,
-
-    // Histórico “rodiziado” (não refaz tudo sempre)
-    WHO_ROUND_MS: 8500,
-    WHO_CHUNK_SIZE: 4,
-    WHO_FULL_EVERY_MS: 90000,
+    REFRESH_WHO_MS: 8500,
 
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
@@ -116,7 +112,9 @@
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
       "UF_*"
-    ]
+    ],
+
+    HOT_EMOJI: "🔥"
   };
 
   // =========================
@@ -124,7 +122,7 @@
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
-  const esc = (s)=> String(s ?? "").replace(/[&<>"']/g, (m)=>({
+  const esc = (s)=> String(s??"").replace(/[&<>"']/g, m => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
@@ -144,6 +142,15 @@
     const y = d.getFullYear();
     const m = String(d.getMonth()+1).padStart(2,"0");
     return `${y}-${m}-01T00:00:00`;
+  }
+  function isoFromLocalInput(v){
+    if(!v) return "";
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if(!m) return "";
+    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
+    const dt = new Date(y, mo, d, hh, mi, 0, 0);
+    if(Number.isNaN(dt.getTime())) return "";
+    return dt.toISOString();
   }
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
@@ -169,7 +176,6 @@
   function toPairs(prefix, obj, out){
     out = out || [];
     if(obj === null || obj === undefined) return out;
-
     if(typeof obj === "object" && !Array.isArray(obj)){
       for(const k of Object.keys(obj)){
         const key = prefix ? `${prefix}[${k}]` : k;
@@ -229,7 +235,7 @@
 
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
-          await sleep(240 + attempt*460);
+          await sleep(220 + attempt*420);
           continue;
         }
         clearTimeout(t);
@@ -318,24 +324,25 @@
   }
 
   // =========================
-  // Paper plane animation
+  // Plane
   // =========================
   function flyPlane(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
-      d.innerHTML =
-        '<svg viewBox="0 0 64 64" width="50" height="50" aria-hidden="true">' +
-        '<path d="M4 30 L60 6 L38 58 L30 36 L4 30 Z" fill="rgba(255,255,255,.95)" stroke="rgba(0,0,0,.25)" stroke-width="2"/>' +
-        '<path d="M30 36 L60 6" stroke="rgba(0,0,0,.25)" stroke-width="2"/>' +
-        '</svg>';
+      d.innerHTML = `
+        <svg viewBox="0 0 64 64" width="50" height="50" aria-hidden="true">
+          <path d="M4 30 L60 6 L38 58 L30 36 L4 30 Z" fill="rgba(255,255,255,.95)" stroke="rgba(0,0,0,.25)" stroke-width="2"/>
+          <path d="M30 36 L60 6" stroke="rgba(0,0,0,.25)" stroke-width="2"/>
+        </svg>
+      `;
       document.body.appendChild(d);
       setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
     }catch(_){}
   }
 
   // =========================
-  // CSS
+  // CSS (contraste alto + títulos centralizados)
   // =========================
   function injectCSS(){
     const css = `
@@ -344,6 +351,8 @@
   --border: rgba(30,40,70,.12);
   --text: rgba(18,26,40,.92);
   --muted: rgba(18,26,40,.62);
+  --card: rgba(255,255,255,.82);
+  --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 90px);
@@ -382,8 +391,15 @@
   font-weight: 950;
 }
 .cgdMiniBtn:active{ transform: translateY(1px); }
-.cgdMiniBtn.primary{ background: rgba(0,0,0,.92); border-color: rgba(255,255,255,.18); }
-.cgdMiniBtn.danger{ background: rgba(160,10,30,.92); border-color: rgba(255,255,255,.18); }
+
+.cgdMiniBtn.primary{
+  background: rgba(0,0,0,.92);
+  border-color: rgba(255,255,255,.18);
+}
+.cgdMiniBtn.danger{
+  background: rgba(160,10,30,.92);
+  border-color: rgba(255,255,255,.18);
+}
 
 /* Top */
 .cgdTop{
@@ -430,15 +446,21 @@
 }
 
 /* Layout */
-.cgdLayout{ margin-top: 12px; display:flex; gap: 12px; align-items: stretch; }
+.cgdLayout{
+  margin-top: 12px;
+  display:flex;
+  gap: 12px;
+  align-items: stretch;
+}
 .cgdGrid{
   flex: 1 1 auto;
   display:grid;
+  /* NOVOS +20% (antes 0.65fr -> ~0.78fr), HISTÓRICO reduz */
   grid-template-columns: 0.78fr 2.22fr;
   gap: 12px;
 }
 
-/* Sidebar FILA */
+/* Sidebar FILA: +20% */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -499,6 +521,7 @@
   display:flex;
   flex-direction: column;
 }
+/* Cabeçalho: 1 linha, título centralizado e destacado */
 .cgdColHead{
   padding: 8px 10px;
   background: rgba(255,255,255,.78);
@@ -528,6 +551,7 @@
   overflow:auto;
   min-height: 0;
 }
+
 .cgdCard{
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -535,9 +559,25 @@
   box-shadow: 0 8px 20px rgba(20,30,60,.08);
   padding: 10px 10px 10px;
 }
-.cgdCardRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
-.cgdLeadName{ font-weight: 950; font-size: 14px; line-height: 1.2; word-break: break-word; flex: 1 1 auto; }
-.cgdBadges{ display:flex; gap:6px; flex-wrap: wrap; margin-top: 8px; }
+.cgdCardRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap:10px;
+}
+.cgdLeadName{
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.2;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.cgdBadges{
+  display:flex;
+  gap:6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 .cgdBadge{
   font-size: 10px;
   font-weight: 950;
@@ -546,10 +586,19 @@
   border-radius: 999px;
   background: rgba(255,255,255,.9);
 }
-.cgdBadge.oper{ border: 0; padding: 5px 10px; }
-.cgdActions{ margin-top: 10px; display:flex; gap:8px; justify-content: flex-end; flex-wrap: wrap; }
+.cgdBadge.oper{
+  border: 0;
+  padding: 5px 10px;
+}
+.cgdActions{
+  margin-top: 10px;
+  display:flex;
+  gap:8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
 
-/* 🚨 NOVO LEAD */
+/* 🚨 NOVO LEAD: preto sempre, só fica “alerta vermelho” quando há leads */
 .cgdAlertBox{
   border: 1px solid rgba(255,255,255,.14);
   border-radius: 16px;
@@ -565,7 +614,12 @@
   border-color: rgba(255,40,90,.55);
   box-shadow: 0 0 0 2px rgba(255,40,90,.18), 0 10px 30px rgba(255,40,90,.14);
 }
-.cgdAlertBox .txt{ font-weight: 950; font-size: 12px; line-height: 1.25; width: 100%; }
+.cgdAlertBox .txt{
+  font-weight: 950;
+  font-size: 12px;
+  line-height: 1.25;
+  width: 100%;
+}
 .cgdAlertBox .txt small{
   display:block;
   margin-top: 4px;
@@ -584,7 +638,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* Usuária: foto */
+/* Usuária: foto maior */
 .cgdUserLine{ display:flex; gap:10px; align-items:flex-start; }
 .cgdUserPic{
   width: 52px; height: 52px;
@@ -623,8 +677,6 @@
 }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
 .cgdCnpj{ font-size: 11px; line-height: 1.25; }
-
-body{ padding-bottom: 110px !important; }
 
 /* Modals */
 .cgdModalOverlay{
@@ -687,6 +739,8 @@ body{ padding-bottom: 110px !important; }
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
+body{ padding-bottom: 110px !important; }
+
 /* Paper plane */
 .cgdPlane{
   position: fixed;
@@ -704,6 +758,7 @@ body{ padding-bottom: 110px !important; }
   10%  { opacity: .95; }
   100% { transform: translateX(calc(100vw + 240px)) rotate(-6deg); opacity: 0; }
 }
+
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
@@ -728,7 +783,7 @@ body{ padding-bottom: 110px !important; }
           <button class="cgdBtn" data-close-modal>Fechar</button>
         </div>
         <div class="cgdModalBody">${bodyHTML||""}</div>
-        <div class="cgdModalFoot">${footHTML || `<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
+        <div class="cgdModalFoot">${footHTML||`<button class="cgdBtn" data-close-modal>Fechar</button>`}</div>
       </div>
     `;
     ov.addEventListener("click", (e)=>{
@@ -760,7 +815,7 @@ body{ padding-bottom: 110px !important; }
     _pulledDayByUser: {},
     _pulledMonthByUser: {},
 
-    userCards: {},
+    userCards: {}, // { uid: { lastTwo: [lead,lead], pulledToday, pulledMonth } }
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     queueBusyUI: false,
 
@@ -804,8 +859,13 @@ body{ padding-bottom: 110px !important; }
       state.userPhotoPending.delete(id);
     }
 
-    state.userPhoto.set(id, photo || "");
-    state.userPhotoTs.set(id, now);
+    if(photo){
+      state.userPhoto.set(id, photo);
+      state.userPhotoTs.set(id, now);
+    }else{
+      state.userPhoto.set(id, "");
+      state.userPhotoTs.set(id, now);
+    }
     return state.userPhoto.get(id) || "";
   }
 
@@ -834,6 +894,14 @@ body{ padding-bottom: 110px !important; }
       img.onerror = ()=>{ img.src = BLANK_IMG; };
       box.appendChild(img);
     });
+    setTimeout(()=>{
+      ids.forEach((id, idx)=>{
+        const img = box.children[idx];
+        if(!img) return;
+        const url = state.userPhoto.get(id) || "";
+        if(url) img.src = url;
+      });
+    }, 600);
   }
 
   // =========================
@@ -1063,14 +1131,13 @@ body{ padding-bottom: 110px !important; }
       body.appendChild(row);
     });
 
+    // desabilita cliques durante “commit” (evita duplicar estado)
     if(state.queueBusyUI){
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = true);
-      if($("#btnQueueWalk")) $("#btnQueueWalk").disabled = true;
-      if($("#btnQueueReset")) $("#btnQueueReset").disabled = true;
+      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = true);
     }else{
       $$("[data-q-up],[data-q-down]", body).forEach(b=> b.disabled = false);
-      if($("#btnQueueWalk")) $("#btnQueueWalk").disabled = false;
-      if($("#btnQueueReset")) $("#btnQueueReset").disabled = false;
+      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = false);
     }
   }
 
@@ -1108,6 +1175,7 @@ body{ padding-bottom: 110px !important; }
     return (items||[]).length;
   }
 
+  // Mapa de “puxados” (NEW -> IN_PROCESS) via stagehistory (mais correto)
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
@@ -1133,6 +1201,7 @@ body{ padding-bottom: 110px !important; }
         });
         return { total, byUser };
       }catch(_){
+        // fallback aproximado
         const arr = await bxListAll("crm.lead.list", {
           filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
           order: { DATE_MODIFY:"DESC" },
@@ -1226,6 +1295,7 @@ body{ padding-bottom: 110px !important; }
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO
       };
+      // Se você criar UF_PICK_TS, vai ficar 100% confiável p/ contagem
       if(CONFIG.UF_PICK_TS){
         fields[CONFIG.UF_PICK_TS] = new Date().toISOString();
       }
@@ -1242,6 +1312,7 @@ body{ padding-bottom: 110px !important; }
           order.splice(i,1);
           order.push(uid);
           const next = await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          // protege contra “voltar” com polling
           state.queue = { ...state.queue, ...q, order, updatedAt: next.updatedAt, dealId: q.dealId };
         }
       });
@@ -1254,6 +1325,7 @@ body{ padding-bottom: 110px !important; }
     enqueueOp("transferLead", async ()=>{
       const lead = await bx("crm.lead.get", { id: String(leadId) });
       const fields = { ASSIGNED_BY_ID: String(toUserId) };
+      // se estiver em NEW, manda pra EM_ATENDIMENTO ao transferir
       if(String(lead?.STATUS_ID||"") === CONFIG.LEAD_STATUS.NOVO_LEAD){
         fields.STATUS_ID = CONFIG.LEAD_STATUS.EM_ATENDIMENTO;
       }
@@ -1281,9 +1353,12 @@ body{ padding-bottom: 110px !important; }
 
     const has = (items||[]).length > 0;
 
+    // Alert: sempre preto, só “hot” quando tem lead
     if(alert){
       alert.classList.toggle("hot", !!has);
+      // se quiser ocultar quando vazio, troque pra: alert.style.display = has ? "flex" : "none";
       alert.style.display = "flex";
+      // sem leads: deixa “quieto”
       alert.style.opacity = has ? "1" : ".55";
     }
 
@@ -1333,7 +1408,8 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Histórico rápido
+  // Histórico MUITO mais rápido:
+  // - Só busca “últimos 2” por usuária
   // =========================
   async function fetchUserLastTwo(userId){
     const st = [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO, CONFIG.LEAD_STATUS.ATENDIDO];
@@ -1346,6 +1422,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function refreshUserCardsFast(){
+    // primeiro: garante stats já preenchidos, senão dia/mês ficam 0
     const jobs = CONFIG.USERS.map(async u=>{
       const lastTwo = await fetchUserLastTwo(u.id);
       state.userCards[u.id] = {
@@ -1419,6 +1496,7 @@ body{ padding-bottom: 110px !important; }
       list.appendChild(empty);
     }
 
+    // completa fotos em background
     setTimeout(async ()=>{
       const imgs = $$("img[data-user-pic]");
       const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
@@ -1432,11 +1510,12 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Queue refresh / commit
+  // Queue UI actions (bug fix intermitente)
   // =========================
   async function refreshQueue(){
     try{
       const q = await fetchQueue();
+      // ✅ Só aceita se o remoto for mais novo que o local
       if((q.updatedAt||0) >= (state.queue.updatedAt||0)){
         state.queue = { ...state.queue, ...q };
         renderQueueSidebar();
@@ -1452,13 +1531,17 @@ body{ padding-bottom: 110px !important; }
     if(state.queueBusyUI) return;
     state.queueBusyUI = true;
     renderQueueSidebar();
+    $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = true);
 
     try{
       const q = state.queue.dealId ? state.queue : await fetchQueue();
+
+      // UI imediata + updatedAt local “avança” pra não voltar no polling
       const localUpdatedAt = Date.now();
       state.queue = { ...state.queue, ...q, order: nextOrder.slice(), updatedAt: localUpdatedAt, dealId: q.dealId };
       renderQueueSidebar();
 
+      // commit real
       const next = await saveQueue(q.dealId, { order: nextOrder, hiddenUsers: q.hiddenUsers||[] });
       state.queue.updatedAt = next.updatedAt;
       setStatus(`Fila salva: ${nowBRTime()}`);
@@ -1467,11 +1550,12 @@ body{ padding-bottom: 110px !important; }
     }finally{
       state.queueBusyUI = false;
       renderQueueSidebar();
+      $("#btnQueueWalk") && ($("#btnQueueWalk").disabled = false);
     }
   }
 
   // =========================
-  // Refreshers
+  // Stats + refreshes
   // =========================
   async function refreshNewLeads(){
     try{
@@ -1512,18 +1596,20 @@ body{ padding-bottom: 110px !important; }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
+    // carrega “em paralelo” pra acelerar o first paint
     await Promise.allSettled([
       refreshNewLeads(),
       refreshPendingCount(),
       refreshQueue(),
       refreshStats()
     ]);
+    // depois dos stats, atualiza cards de usuária rápido
     await refreshUserCardsFast();
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
   // =========================
-  // Modals
+  // Modals (ocultar / fila / pegar / batch / user / busca)
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
@@ -1711,9 +1797,11 @@ body{ padding-bottom: 110px !important; }
   }
 
   async function modalBatchTransfer(){
-    alert("Transferir em lote: mantenho sua tela anterior — se você quiser eu reimplanto aqui otimizado também.");
+    // (mantive como estava no seu arquivo anterior; se quiser eu simplifico depois)
+    alert("Transferir em lote permanece como antes — se você quiser, eu também otimizo essa tela.");
   }
 
+  // Modal “Abrir usuário” (lista completa: só aqui, por isso o histórico ficou rápido)
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -1854,7 +1942,7 @@ body{ padding-bottom: 110px !important; }
           btn.disabled = true;
           const to = $("#trUser").value;
           await actionTransferLead(it.ID, to);
-          alert("Transferência enfileirada ✅");
+          alert("Transferência enfileirada ✅ (sincroniza quando normalizar a conexão)");
         }finally{
           btn.disabled = false;
         }
@@ -1908,7 +1996,7 @@ body{ padding-bottom: 110px !important; }
       }
       if(tr){
         const id = tr.getAttribute("data-tr-go");
-        const sel = $(".cgdModalBody").querySelector(`select[data-tr-sel="${CSS.escape(String(id))}"]`);
+        const sel = $(`select[data-tr-sel="${CSS.escape(String(id))}"]`, $(".cgdModalBody"));
         const to = sel?.value;
         if(!to) return;
         tr.disabled = true;
@@ -1923,7 +2011,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // UI wire
+  // UI
   // =========================
   function updateSoundUI(){
     const so = $("#btnSoundOn");
@@ -1935,6 +2023,7 @@ body{ padding-bottom: 110px !important; }
       state.soundOn = false;
       updateSoundUI();
     });
+
     $("#btnSoundOn")?.addEventListener("click", ()=>{
       state.soundOn = true;
       updateSoundUI();
@@ -1982,8 +2071,6 @@ body{ padding-bottom: 110px !important; }
     $("#btnGET")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.GET, "_blank", "noopener"));
     $("#btnVendas")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener"));
 
-    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
-
     // Busca
     $("#btnSearch")?.addEventListener("click", async ()=>{
       const term = ($("#searchBox").value||"").trim();
@@ -2009,6 +2096,7 @@ body{ padding-bottom: 110px !important; }
 
       if(g) modalPickLead(g.getAttribute("data-grab"));
       if(d){
+        // descarte simples (mantive)
         const id = d.getAttribute("data-discard");
         state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
         state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
@@ -2022,7 +2110,7 @@ body{ padding-bottom: 110px !important; }
   }
 
   // =========================
-  // Start
+  // Start (carrega rápido)
   // =========================
   async function start(){
     injectCSS();
@@ -2030,16 +2118,19 @@ body{ padding-bottom: 110px !important; }
     wire();
     updateSoundUI();
 
+    // carrega a tela rápido: primeiro pinta, depois aquece fotos
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
+    // primeira carga: paralelizada
     await hardRefreshAll();
     renderBossPics();
 
+    // timers
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
-    setInterval(refreshUserCardsFast, CONFIG.WHO_ROUND_MS);
+    setInterval(refreshUserCardsFast, CONFIG.REFRESH_WHO_MS);
 
     setInterval(flushOps, 2500);
   }
