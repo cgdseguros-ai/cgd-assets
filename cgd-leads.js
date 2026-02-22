@@ -1,18 +1,12 @@
-/* cgd-leads.js — PATCH COMPLETO (colar no GitHub)
-   Correções solicitadas:
-   1) ✅ Contagens (dia/mês + por USER) puxando pelo campo Data PEGAR: UF_CRM_1771741018
-      - Implementado com filtros robustos (>= e <=) e múltiplos formatos de data (Bitrix às vezes é chato com timezone)
-      - Leitura do "total" mais resiliente (data.total / data.result.total / fallback por paginação)
-   2) ✅ Avião amarelo:
-      - NÃO dispara mais em PEGAR (nem em mudanças locais)
-      - Só dispara quando ENTRA lead novo em NOVOS LEADS (ID novo apareceu no servidor)
-      - Tamanho ~10 cm (≈ 380px) e avião de papel amarelo "lado em 3D"
-   3) ✅ "ABRIR" erro intermitente:
-      - Retry automático (até 3 tentativas) antes de mostrar erro
-      - Timeout maior nas listagens grandes
-      - Redução de payload do modal ABRIR para diminuir falhas
-
-   Observação: continua SEM localStorage/sessionStorage.
+/* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
+   - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - UI refinada + ajustes de layout
+   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
+   - Contagens por "Data PEGAR" (UF_CRM_1771741018) + filtro de STATUS (IN_PROCESS, ATENDIDO, JUNK, CONVERTED)
+   - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+   - ✅ Novo: “pulso rápido” (IDs + total) a cada ~1.5s → entrada visual quase imediata
+   - ✅ Avião amarelo: somente quando entra lead novo em NOVOS LEADS (comparando ID crescente)
+   - ✅ PREVENT: badge OPERADORA com fundo azul escuro
 */
 (function(){
   "use strict";
@@ -23,18 +17,21 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
+    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
     // ✅ Data PEGAR (base oficial de contagem "dia" e "mês")
     UF_DATA_PEGAR: "UF_CRM_1771741018",
 
+    // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014",
-    UF_IDADE:     "UF_CRM_1771339221",
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
+    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -42,41 +39,48 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
+    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
     FOLLOWUP_DEALS: {
       CATEGORY_ID: 17,
       STAGE_BY_USER: {
-        "15":   "C17:UC_FQ8UPI",
-        "19":   "C17:UC_1HXNTB",
-        "17":   "C17:UC_RRQKAQ",
-        "23":   "C17:UC_4HQGI1",
-        "811":  "C17:UC_8Y4R4V",
-        "3081": "C17:EXECUTING",
-        "3083": "C17:UC_8O5UFO",
-        "3079": "C17:UC_P1P9RJ",
-        "3085": "C17:UC_U8AAGB",
-        "3389": "C17:UC_A6LSS8",
-        "815":  "C17:UC_ZT6WEB",
-        "3387": "C17:UC_RXISLQ"
+        "15":   "C17:UC_FQ8UPI",   // ALINE
+        "19":   "C17:UC_1HXNTB",   // ADRIANA
+        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
+        "23":   "C17:UC_4HQGI1",   // MARIANA
+        "811":  "C17:UC_8Y4R4V",   // JOSIANE
+        "3081": "C17:EXECUTING",   // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",   // GABRIEL
+        "3387": "C17:UC_RXISLQ"    // BEATRIZ
       }
     },
 
+    // Logo topo (troque aqui quando quiser)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
+    // Links
     LINKS: {
       GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
-    REFRESH_NEW_LEADS_MS: 4500,
+    // ✅ Refresh (otimizado)
+    FAST_NEW_PULSE_MS: 1500,      // só IDs + total (bem leve) → “entrada rápida”
+    FULL_NEW_LEADS_MS: 8500,      // lista completa com UF_* (mais pesado)
     REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
     REFRESH_WHO_MS: 12000,
 
+    // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
-    LIMIT_USER_LAST:  120,
-    LIMIT_LAST_TWO_FETCH: 12,
+    LIMIT_USER_LAST:  120, // usado só no modal ABRIR (lista completa)
+    LIMIT_LAST_TWO_FETCH: 12, // rápido
 
+    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -92,40 +96,41 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // Sócios (fotos na barra inferior)
     BOSSES: [27, 1, 15],
 
+    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
       ATENDIDO: "UC_JT9G60",
       QUALIFICADO: "UC_0NFA3H",
       PERDIDO: "UC_5IMTI4",
-      CONVERTIDO: "UC_B3RQAF",
+      CONVERTIDO: "CONVERTED", // ✅ sistema (Lead convertido)
+      DESCARTADO: "JUNK",      // ✅ sistema (Lead descartado)
     },
 
+    // ✅ Contagens por Data PEGAR devem considerar APENAS estes status:
+    // EM ATENDIMENTO, ATENDIDO, LEAD DESCARTADO, LEAD CONVERTIDO
+    COUNT_STATUS_FILTER: ["IN_PROCESS","UC_JT9G60","JUNK","CONVERTED"],
+
+    // Nomes (para exibir na busca)
     LEAD_STATUS_NAMES: {
       "NEW": "NOVO LEAD",
       "IN_PROCESS": "EM ATENDIMENTO",
       "UC_JT9G60": "ATENDIDO",
       "UC_0NFA3H": "QUALIFICADO",
       "UC_5IMTI4": "PERDIDO",
-      "UC_B3RQAF": "CONVERTIDO",
       "CONVERTED": "LEAD CONVERTIDO (sistema)",
-      "JUNK": "DESCARTADO (sistema)"
+      "JUNK": "LEAD DESCARTADO (sistema)"
     },
 
+    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
-      "UF_*"
-    ],
-
-    // Modal ABRIR: reduz payload pra evitar intermitência
-    LEAD_SELECT_MIN_USER_MODAL: [
-      "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
-      "STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY",
       "UF_*"
     ],
 
@@ -146,46 +151,15 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
-  function pad2(n){ return String(n).padStart(2,"0"); }
-
-  // =========================
-  // Datas p/ Bitrix (robusto)
-  // =========================
-  function toBXLocal(dt){
-    // Sem timezone explícito (alguns portais aceitam melhor)
-    const y = dt.getFullYear();
-    const m = pad2(dt.getMonth()+1);
-    const d = pad2(dt.getDate());
-    const hh= pad2(dt.getHours());
-    const mi= pad2(dt.getMinutes());
-    const ss= pad2(dt.getSeconds());
-    return `${y}-${m}-${d}T${hh}:${mi}:${ss}`;
-  }
-  function toBXWithTZ(dt){
-    // Com timezone -03:00
-    const y = dt.getFullYear();
-    const m = pad2(dt.getMonth()+1);
-    const d = pad2(dt.getDate());
-    const hh= pad2(dt.getHours());
-    const mi= pad2(dt.getMinutes());
-    const ss= pad2(dt.getSeconds());
-    return `${y}-${m}-${d}T${hh}:${mi}:${ss}-03:00`;
-  }
-  function toBXDateOnly(dt){
-    const y = dt.getFullYear();
-    const m = pad2(dt.getMonth()+1);
-    const d = pad2(dt.getDate());
-    return `${y}-${m}-${d}`;
-  }
-  function dayRangeLocal(){
+  function dayRange(){
     const d0 = new Date(); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0); d1.setHours(23,59,59,999);
-    return { start:d0, end:d1 };
+    const d1 = new Date(d0.getTime() + 24*60*60*1000);
+    return { startISO: d0.toISOString(), endISO: d1.toISOString() };
   }
-  function monthRangeLocal(){
+  function monthRange(){
     const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1); d1.setMilliseconds(-1);
-    return { start:d0, end:d1 };
+    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
+    return { startISO: d0.toISOString(), endISO: d1.toISOString() };
   }
 
   function isoFromLocalInput(v){
@@ -197,20 +171,18 @@
     if(Number.isNaN(dt.getTime())) return "";
     return dt.toISOString();
   }
-
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
     const t = Date.parse(String(iso));
     if(!Number.isFinite(t)) return String(iso);
     const d = new Date(t);
-    const dd = pad2(d.getDate());
-    const mm = pad2(d.getMonth()+1);
+    const dd = String(d.getDate()).padStart(2,"0");
+    const mm = String(d.getMonth()+1).padStart(2,"0");
     const yy = d.getFullYear();
-    const hh = pad2(d.getHours());
-    const mi = pad2(d.getMinutes());
+    const hh = String(d.getHours()).padStart(2,"0");
+    const mi = String(d.getMinutes()).padStart(2,"0");
     return `${dd}/${mm}/${yy} ${hh}:${mi}`;
   }
-
   function stageName(id){
     return CONFIG.LEAD_STATUS_NAMES[String(id||"")] || String(id||"—");
   }
@@ -247,7 +219,7 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 14000));
+    const timeoutMs = Math.max(8000, Number(options.timeoutMs || 16000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
@@ -277,7 +249,7 @@
           e._bxError = data.error;
           throw e;
         }
-        return data;
+        return data; // ✅ objeto completo
       }catch(err){
         lastErr = err;
         const http = err && err._httpStatus;
@@ -287,7 +259,7 @@
 
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
-          await sleep(260 + attempt*520);
+          await sleep(200 + attempt*350);
           continue;
         }
         clearTimeout(t);
@@ -304,12 +276,11 @@
     return data.result;
   }
 
-  // bxListAll com timeout configurável
-  async function bxListAll(method, params, max=500, options={}){
+  async function bxListAll(method, params, max=500){
     let start = 0;
     let out = [];
     while(true){
-      const r = await bx(method, { ...params, start }, options);
+      const r = await bx(method, { ...params, start });
       const items = Array.isArray(r) ? r : (r && Array.isArray(r.items) ? r.items : []);
       out = out.concat(items);
       if(out.length >= max) break;
@@ -326,14 +297,16 @@
     return out.slice(0, max);
   }
 
-  // Retry helper (pra ABRIR e qualquer fetch grande)
-  async function withRetry(fn, tries=3, backoffBase=280){
+  // =========================
+  // Retry helper (para reduzir “Sem conexão” intermitente)
+  // =========================
+  async function retry(fn, tries=3, baseDelay=260){
     let last;
     for(let i=0;i<tries;i++){
-      try{ return await fn(i); }
+      try{ return await fn(); }
       catch(e){
         last = e;
-        await sleep(backoffBase + i*backoffBase);
+        await sleep(baseDelay + i*380);
       }
     }
     throw last;
@@ -395,72 +368,43 @@
   }
 
   // =========================
-  // ✅ Paper plane (10 cm ~ 380px) — 3D side view
+  // Paper plane animation — AMARELO ~10cm (3D lateral)
   // =========================
   function flyPlaneYellow(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
       d.innerHTML = `
-        <svg viewBox="0 0 320 180" width="380" height="380" aria-hidden="true">
+        <svg viewBox="0 0 420 240" width="420" height="240" aria-hidden="true">
           <defs>
-            <linearGradient id="pgBody" x1="0" x2="1" y1="0" y2="1">
-              <stop offset="0" stop-color="#ffe34a"/>
-              <stop offset="0.55" stop-color="#ffd400"/>
-              <stop offset="1" stop-color="#f1b800"/>
+            <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#ffe55a"/>
+              <stop offset="1" stop-color="#ffb800"/>
             </linearGradient>
-            <linearGradient id="pgShade" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stop-color="rgba(0,0,0,.22)"/>
-              <stop offset="1" stop-color="rgba(0,0,0,0)"/>
+            <linearGradient id="g2" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#ffd400"/>
+              <stop offset="1" stop-color="#ff8f00"/>
             </linearGradient>
-            <filter id="pgShadow" x="-40%" y="-40%" width="180%" height="180%">
-              <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="rgba(0,0,0,.25)"/>
+            <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="rgba(0,0,0,.35)"/>
             </filter>
           </defs>
 
-          <!-- Sombra -->
-          <path filter="url(#pgShadow)"
-            d="M20 105 C85 120, 175 124, 300 126
-               C240 105, 205 85, 170 72
-               C140 62, 100 66, 54 82 Z"
-            fill="rgba(0,0,0,.08)"/>
-
-          <!-- Corpo (vista lateral, 3D) -->
-          <path
-            d="M18 98
-               L300 34
-               L214 150
-               L160 118
-               L72 112
-               Z"
-            fill="url(#pgBody)" stroke="rgba(0,0,0,.38)" stroke-width="4" stroke-linejoin="round"/>
-
-          <!-- Asa dobrada (highlight) -->
-          <path
-            d="M160 118
-               L214 150
-               L242 98
-               Z"
-            fill="rgba(255,255,255,.22)" stroke="rgba(0,0,0,.22)" stroke-width="3" stroke-linejoin="round"/>
-
-          <!-- Linha de dobra -->
-          <path d="M160 118 L300 34" stroke="rgba(0,0,0,.35)" stroke-width="4" stroke-linecap="round"/>
-
-          <!-- Sombreamento lateral -->
-          <path
-            d="M18 98
-               L72 112
-               L160 118
-               L120 94
-               Z"
-            fill="url(#pgShade)" opacity=".55"/>
-
-          <!-- Bico -->
-          <path
-            d="M292 36
-               L300 34
-               L294 44 Z"
-            fill="rgba(255,255,255,.25)" stroke="rgba(0,0,0,.22)" stroke-width="2"/>
+          <!-- “avião de papel” visto de lado (3D simples) -->
+          <g filter="url(#sh)">
+            <!-- asa principal -->
+            <path d="M30 140 L370 60 L280 182 L190 150 Z"
+                  fill="url(#g1)" stroke="rgba(0,0,0,.35)" stroke-width="5" />
+            <!-- dobra (sombra) -->
+            <path d="M190 150 L370 60"
+                  stroke="rgba(0,0,0,.28)" stroke-width="6" />
+            <!-- asa inferior -->
+            <path d="M30 140 L190 150 L260 210 L95 205 Z"
+                  fill="url(#g2)" stroke="rgba(0,0,0,.28)" stroke-width="5" />
+            <!-- bico -->
+            <path d="M370 60 L405 48 L382 80 Z"
+                  fill="#ffcc00" stroke="rgba(0,0,0,.32)" stroke-width="5" />
+          </g>
         </svg>
       `;
       document.body.appendChild(d);
@@ -492,6 +436,7 @@
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
 
+/* Top bar */
 .cgdTop{
   position: sticky;
   top: 0;
@@ -528,6 +473,7 @@
   font-weight: 950;
 }
 
+/* Botões com contraste forte (padrão) */
 .cgdBtn{
   cursor:pointer;
   border: 2px solid rgba(255,255,255,.22);
@@ -541,6 +487,7 @@
 .cgdBtn:active{ transform: translateY(1px); }
 .cgdBtn[disabled]{ opacity:.6; cursor:not-allowed; transform:none; }
 
+/* Mini botões */
 .cgdMiniBtn{
   cursor:pointer;
   border: 2px solid rgba(10,10,12,.85);
@@ -560,6 +507,7 @@
   border-color: rgba(10,10,12,.75);
 }
 
+/* Layout */
 .cgdLayout{
   margin-top: 12px;
   display:flex;
@@ -574,6 +522,7 @@
   gap: 12px;
 }
 
+/* Sidebar FILA — +20% largura */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -625,6 +574,7 @@
 .cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
 .cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
 
+/* Colunas */
 .cgdCol{
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -636,6 +586,7 @@
   flex-direction: column;
 }
 
+/* Cabeçalho das colunas — título central e ações abaixo */
 .cgdColHead{
   padding: 8px 10px 10px;
   background: rgba(255,255,255,.78);
@@ -714,6 +665,7 @@
   flex-wrap: wrap;
 }
 
+/* 🚨 NOVO LEAD: preto/branco; com leads -> vermelho/preto */
 .cgdAlertBox{
   border: 2px solid rgba(10,10,12,.85);
   border-radius: 16px;
@@ -754,6 +706,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
+/* Usuária: foto maior + layout */
 .cgdUserLine{
   display:flex;
   gap:10px;
@@ -768,12 +721,12 @@
   flex: 0 0 auto;
 }
 
-/* Bottom bar */
+/* Bottom bar (mantida) */
 .cgdBottom{
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(32,34,38,.98);
+  background: rgba(10,10,12,.95);
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -794,22 +747,8 @@
   border: 1px solid rgba(255,255,255,.18);
   background: rgba(255,255,255,.08);
 }
-.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .92; margin-bottom: 2px; }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
-.cgdCnpjRow{
-  display:flex;
-  gap: 18px;
-  align-items:flex-start;
-  justify-content:flex-end;
-  flex-wrap: wrap;
-}
-.cgdCnpjBlock{
-  font-size: 11px;
-  line-height: 1.25;
-  font-weight: 900;
-  opacity: .92;
-  white-space: nowrap;
-}
+.cgdCnpj{ font-size: 11px; line-height: 1.25; }
 
 /* Modals */
 .cgdModalOverlay{
@@ -887,22 +826,22 @@
 
 body{ padding-bottom: 110px !important; }
 
-/* ✅ Plane (10 cm ~ 380px) */
+/* Paper plane — ~10cm */
 .cgdPlane{
   position: fixed;
-  top: 88px;
+  top: 86px;
   left: -520px;
-  width: 380px;
-  height: 380px;
+  width: 420px;
+  height: 240px;
   z-index: 9999;
   pointer-events:none;
   opacity: .98;
-  animation: planeFly 1.85s linear forwards;
+  animation: planeFly 1.9s linear forwards;
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(7deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(6deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 1150px)) rotate(-6deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 820px)) rotate(-4deg); opacity: 0; }
 }
 
 /* DARK MODE */
@@ -977,13 +916,9 @@ body.cgdDark .cgdBadge{
     soundOn: true,
     dark: false,
 
-    // ✅ avião só quando entrar lead novo no servidor
-    lastNewLeadIds: new Set(),
-    _newLeadFirstLoadDone: false,
-
-    // ✅ trava adicional: se a última mudança foi “local” (ex.: PEGAR),
-    // não consideramos isso como "incoming".
-    lastLocalMutationAt: 0,
+    // ✅ novo: controle robusto do avião
+    maxNewLeadIdSeen: 0,          // maior ID já visto em NOVO LEAD
+    _newLeadFirstPulseDone: false,// primeira leitura do “pulso” não toca
 
     newLeadsAll: [],
     newLeadsRender: [],
@@ -997,13 +932,14 @@ body.cgdDark .cgdBadge{
 
     lastServedUserName: "—",
 
+    // cache fotos usuários (RAM)
     userPhoto: new Map(),
     userPhotoTs: new Map(),
     userPhotoPending: new Set(),
   };
 
   // =========================
-  // Fotos
+  // Fotos: robusto + rápido
   // =========================
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -1032,7 +968,7 @@ body.cgdDark .cgdBadge{
           photo = await fetchUserPhotoOnce(id);
           if(photo) break;
         }catch(_){}
-        await sleep(200 + i*300);
+        await sleep(180 + i*240);
       }
     } finally{
       state.userPhotoPending.delete(id);
@@ -1181,22 +1117,16 @@ body.cgdDark .cgdBadge{
         <div class="cgdBottom">
           <div class="bLeft">
             <div class="cgdBossPics" id="bossPics"></div>
-            <div>
-              <div class="cgdAddrLabel">Endereço</div>
-              <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
-            </div>
+            <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
           </div>
           <div class="bCenter">System created by GRUPO CGD</div>
           <div class="bRight">
-            <div class="cgdCnpjRow">
-              <div class="cgdCnpjBlock">
-                <div><b>CGD CORRETORA</b></div>
-                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              </div>
-              <div class="cgdCnpjBlock">
-                <div><b>CGD BARRA</b></div>
-                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
-              </div>
+            <div class="cgdCnpj">
+              <div><b>CGD CORRETORA</b></div>
+              <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              <div style="height:6px"></div>
+              <div><b>CGD BARRA</b></div>
+              <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
             </div>
           </div>
         </div>
@@ -1216,7 +1146,7 @@ body.cgdDark .cgdBadge{
       },
       order: { ID:"DESC" },
       select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
-    }, 5, { timeoutMs: 16000 });
+    }, 5);
 
     if(items && items[0]) return items[0];
 
@@ -1227,9 +1157,8 @@ body.cgdDark .cgdBadge{
         TITLE: `${CONFIG.QUEUE.TITLE_KEY} FILA ATENDIMENTO`,
         [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v:1, order:[], hiddenUsers:[], updatedAt: Date.now() })
       }
-    }, { timeoutMs: 16000 });
-
-    return bx("crm.deal.get", { id: String(id) }, { timeoutMs: 16000 });
+    });
+    return bx("crm.deal.get", { id: String(id) });
   }
 
   function parseQueue(json){
@@ -1262,7 +1191,7 @@ body.cgdDark .cgdBadge{
           return { dealId: String(deal.ID), ...parseQueue(raw) };
         }catch(err){
           lastErr = err;
-          await sleep(220 + attempt*420);
+          await sleep(200 + attempt*350);
         }
       }
       throw lastErr || new Error("Falha ao carregar fila");
@@ -1284,11 +1213,11 @@ body.cgdDark .cgdBadge{
           await bx("crm.deal.update", {
             id: String(dealId),
             fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
-          }, { timeoutMs: 16000 });
+          });
           return;
         }catch(err){
           lastErr = err;
-          await sleep(240 + attempt*480);
+          await sleep(220 + attempt*420);
         }
       }
       throw lastErr || new Error("Falha ao salvar fila");
@@ -1369,112 +1298,68 @@ body.cgdDark .cgdBadge{
   // =========================
   async function fetchNewLeadsAll(){
     const items = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      filter: { "STATUS_ID": "NEW" },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_BATCH_MAX, { timeoutMs: 22000 });
+    }, CONFIG.LIMIT_BATCH_MAX);
     return items || [];
   }
 
-  async function fetchNewLeadsCount(){
+  // ✅ NOVO: pulso rápido (IDs + total) — muito leve
+  async function fetchNewLeadPulse(){
     const data = await bxRaw("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      filter: { "STATUS_ID": "NEW" },
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 18000 });
+    }, { timeoutMs: 12000 });
 
-    const total =
-      Number(data && data.total) ||
-      Number(data && data.result && data.result.total);
+    const total = Number(data && data.total);
+    const items = Array.isArray(data?.result) ? data.result : [];
+    const newestId = items && items[0] ? Number(items[0].ID) : 0;
 
-    if(Number.isFinite(total) && total >= 0) return total;
-
-    // fallback por paginação curta
-    let count = 0;
-    let start = 0;
-    for(let i=0;i<10;i++){
-      const d = await bxRaw("crm.lead.list", {
-        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
-        order: { ID: "DESC" },
-        select: ["ID"],
-        start
-      }, { timeoutMs: 18000 });
-      const items = Array.isArray(d?.result) ? d.result : [];
-      count += items.length;
-      const next = d?.next ?? d?.result?.next;
-      if(next === undefined || next === null || items.length < 50) break;
-      start = Number(next) || (start + 50);
-    }
-    return count;
+    return {
+      total: Number.isFinite(total) ? total : items.length,
+      newestId: Number.isFinite(newestId) ? newestId : 0
+    };
   }
 
-  // ✅ total robusto para filtros (Data PEGAR)
-  async function leadCountByFilter(filterObj){
-    // 1) tenta total do Bitrix
+  // ✅ Contagens por Data PEGAR (dia e mês) + filtro de STATUS
+  async function fetchPegCountRangeAll(startISO, endISO){
     const data = await bxRaw("crm.lead.list", {
-      filter: filterObj,
+      filter: {
+        "STATUS_ID": CONFIG.COUNT_STATUS_FILTER,
+        [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+        ["<" + CONFIG.UF_DATA_PEGAR]: endISO
+      },
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 20000 });
+    }, { timeoutMs: 16000 });
 
-    const totalA = Number(data?.total);
-    const totalB = Number(data?.result?.total);
-
-    if(Number.isFinite(totalA) && totalA >= 0) return totalA;
-    if(Number.isFinite(totalB) && totalB >= 0) return totalB;
-
-    // 2) fallback: conta por paginação (limite alto, mas raramente usado)
-    let count = 0;
-    let start = 0;
-    for(let i=0;i<120;i++){ // até 6000 itens
-      const d = await bxRaw("crm.lead.list", {
-        filter: filterObj,
-        order: { ID: "DESC" },
-        select: ["ID"],
-        start
-      }, { timeoutMs: 20000 });
-      const items = Array.isArray(d?.result) ? d.result : [];
-      count += items.length;
-      const next = d?.next ?? d?.result?.next;
-      if(next === undefined || next === null || items.length < 50) break;
-      start = Number(next) || (start + 50);
-    }
-    return count;
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
   }
 
-  // ✅ contagem por Data PEGAR com formatos alternativos (evita “não conta nada”)
-  async function countByPegRangeAll(dtStart, dtEnd){
-    const fns = [
-      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtStart), ["<=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtEnd) }),
-      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtStart),  ["<=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtEnd) }),
-      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtStart),["<=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtEnd) })
-    ];
-    let lastErr = null;
-    for(const fn of fns){
-      try{
-        const n = await fn();
-        // se deu 0 pode ser real — mas pra evitar falso zero por formato, tentamos os 3 formatos
-        // e escolhemos o maior resultado.
-        return n;
-      }catch(e){ lastErr = e; }
-    }
-    throw lastErr;
-  }
+  async function fetchPegCountRangeUser(userId, startISO, endISO){
+    const data = await bxRaw("crm.lead.list", {
+      filter: {
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": CONFIG.COUNT_STATUS_FILTER,
+        [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+        ["<" + CONFIG.UF_DATA_PEGAR]: endISO
+      },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 16000 });
 
-  async function countByPegRangeUser(userId, dtStart, dtEnd){
-    const base = { "ASSIGNED_BY_ID": String(userId) };
-    const fns = [
-      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtStart), ["<=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtEnd) }),
-      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtStart),  ["<=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtEnd) }),
-      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtStart),["<=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtEnd) })
-    ];
-    let lastErr = null;
-    for(const fn of fns){
-      try{ return await fn(); }catch(e){ lastErr = e; }
-    }
-    throw lastErr;
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
   }
 
   function leadDisplayName(it){
@@ -1503,7 +1388,7 @@ body.cgdDark .cgdBadge{
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("PREVENT")) return { bg:"#0b2a5b", fg:"#fff" }; // ✅ azul escuro
+    if(op.includes("PREVENT")) return { bg:"#0b2a6b", fg:"#fff" }; // ✅ PREVENT azul escuro
     if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
     if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
     if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
@@ -1536,32 +1421,24 @@ body.cgdDark .cgdBadge{
   }
 
   async function leadUpdate(id, fields){
-    return bx("crm.lead.update", { id: String(id), fields }, { timeoutMs: 20000 });
+    return bx("crm.lead.update", { id: String(id), fields });
   }
   async function leadDelete(id){
-    return bx("crm.lead.delete", { id: String(id) }, { timeoutMs: 20000 });
+    return bx("crm.lead.delete", { id: String(id) });
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
-    // ✅ marca mutação local (para garantir 100% que avião não dispare por PEGAR)
-    state.lastLocalMutationAt = Date.now();
-
     // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
-    renderPendingCount(state.pendingCount - 1);
 
-    // ✅ também atualiza snapshot local pra não haver “detecção falsa”
-    try{
-      state.lastNewLeadIds.delete(String(leadId));
-    }catch(_){}
-
+    // (pendentes será atualizado pelo “pulso rápido” em ~1.5s)
     enqueueOp("pickLead", async ()=>{
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
-        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        [CONFIG.UF_DATA_PEGAR]: toBXWithTZ(new Date()) // grava com timezone
+        STATUS_ID: "IN_PROCESS",
+        [CONFIG.UF_DATA_PEGAR]: new Date().toISOString()
       });
     });
 
@@ -1585,17 +1462,12 @@ body.cgdDark .cgdBadge{
   }
 
   async function actionDiscardLead(leadId){
-    state.lastLocalMutationAt = Date.now();
-
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
-    renderPendingCount(state.pendingCount - 1);
-
-    try{ state.lastNewLeadIds.delete(String(leadId)); }catch(_){}
 
     enqueueOp("discardLead", async ()=>{
-      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+      await leadUpdate(leadId, { STATUS_ID: "JUNK" }); // ✅ descartado (sistema)
     });
     flushOps();
   }
@@ -1603,8 +1475,8 @@ body.cgdDark .cgdBadge{
   async function actionMoveLead(leadId, statusId){
     enqueueOp("moveLead", async ()=>{
       const fields = { STATUS_ID: statusId };
-      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-        const lead = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 20000 });
+      if(statusId === "UC_0NFA3H"){
+        const lead = await bx("crm.lead.get", { id: String(leadId) });
         const t = String(lead?.TITLE||"").trim();
         if(!t.startsWith(CONFIG.HOT_EMOJI)){
           fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
@@ -1642,7 +1514,7 @@ body.cgdDark .cgdBadge{
           COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
           [CONFIG.UF_PRAZO]: iso || undefined
         }
-      }, { timeoutMs: 22000 });
+      });
     });
     flushOps();
   }
@@ -1791,48 +1663,48 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Fetch Usuárias (rápido)
+  // Fetch Usuárias (RÁPIDO pro Histórico)
   // =========================
   async function fetchUserLastTwoFast(userId){
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
       order: { DATE_MODIFY: "DESC" },
       select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"]
-    }, CONFIG.LIMIT_LAST_TWO_FETCH, { timeoutMs: 20000 });
+    }, CONFIG.LIMIT_LAST_TWO_FETCH);
 
     const lastTwo = (last||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
-      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+      return st==="IN_PROCESS" || st==="UC_JT9G60" || st==="UC_0NFA3H";
     }).slice(0,2);
 
     return { lastTwo };
   }
 
-  // ✅ ABRIR (full) com retry e timeout maior
+  // Lista completa (somente quando abrir modal ABRIR)
   async function fetchUserStatsFull(userId){
-    const { start: dayS, end: dayE } = dayRangeLocal();
-    const { start: monS, end: monE } = monthRangeLocal();
+    const { startISO: dayS, endISO: dayE } = dayRange();
+    const { startISO: monS, endISO: monE } = monthRange();
 
     const [pulledToday, pulledMonth, list] = await Promise.all([
-      countByPegRangeUser(userId, dayS, dayE),
-      countByPegRangeUser(userId, monS, monE),
+      fetchPegCountRangeUser(userId, dayS, dayE),
+      fetchPegCountRangeUser(userId, monS, monE),
       bxListAll("crm.lead.list", {
         filter: { "ASSIGNED_BY_ID": String(userId) },
         order: { DATE_MODIFY: "DESC" },
-        select: CONFIG.LEAD_SELECT_MIN_USER_MODAL
-      }, CONFIG.LIMIT_USER_LAST, { timeoutMs: 26000 })
+        select: CONFIG.LEAD_SELECT
+      }, CONFIG.LIMIT_USER_LAST)
     ]);
 
     const lastTwo = (list||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
-      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+      return st==="IN_PROCESS" || st==="UC_JT9G60" || st==="UC_0NFA3H";
     }).slice(0,2);
 
     return { pulledToday, pulledMonth, lastTwo, list: list || [] };
   }
 
   // =========================
-  // Modals (ocultar, fila, pegar, batch, abrir user, busca...)
+  // Modals (mantidos — sem mudanças funcionais além do retry no ABRIR)
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
@@ -2048,9 +1920,6 @@ body.cgdDark .cgdBadge{
     });
   }
 
-  // =========================
-  // Batch (mantido)
-  // =========================
   async function modalBatchTransfer(){
     openModal("TRANSFERIR EM LOTE", `
       <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
@@ -2125,8 +1994,8 @@ body.cgdDark .cgdBadge{
       if(!Number.isFinite(t)) return false;
       const d = new Date(t);
       const y = d.getFullYear();
-      const m = pad2(d.getMonth()+1);
-      const da= pad2(d.getDate());
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const da= String(d.getDate()).padStart(2,"0");
       return `${y}-${m}-${da}` === yyyy_mm_dd;
     }
 
@@ -2173,10 +2042,8 @@ body.cgdDark .cgdBadge{
       try{
         btn.disabled = true;
 
-        state.lastLocalMutationAt = Date.now();
         ids.forEach(id=>{
           state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
-          try{ state.lastNewLeadIds.delete(String(id)); }catch(_){}
         });
         state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
         renderNewLeads(state.newLeadsRender);
@@ -2194,27 +2061,20 @@ body.cgdDark .cgdBadge{
     });
   }
 
-  // =========================
-  // ✅ ABRIR — com retry e mensagem “tentando novamente”
-  // =========================
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
     openModal(`ABRIR • ${u.name}`, `
       <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
-      <div style="opacity:.75;font-weight:900" id="muHint">Isso pode levar alguns segundos dependendo da conexão.</div>
+      <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
     `);
 
     let us;
     try{
-      us = await withRetry(async (i)=>{
-        const hint = $("#muHint");
-        if(hint && i>0) hint.textContent = `Conexão instável… tentando novamente (${i+1}/3)`;
-        return await fetchUserStatsFull(u.id);
-      }, 3, 420);
-    }catch(err){
-      console.error(err);
+      // ✅ retry forte para reduzir erro intermitente
+      us = await retry(()=>fetchUserStatsFull(u.id), 3, 320);
+    }catch(_){
       closeModal();
       return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
@@ -2248,11 +2108,11 @@ body.cgdDark .cgdBadge{
         <button class="cgdBtn" id="muBulkPrazo">FOLLOW-UP em lote</button>
 
         <select class="cgdSelect" id="muMoveTo">
-          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Mover p/ PERDIDO</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Mover p/ ATENDIDO</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Mover p/ EM ATENDIMENTO</option>
+          <option value="UC_0NFA3H">Mover p/ QUALIFICADO (🔥)</option>
+          <option value="JUNK">Mover p/ DESCARTADO</option>
+          <option value="CONVERTED">Mover p/ CONVERTIDO</option>
+          <option value="UC_JT9G60">Mover p/ ATENDIDO</option>
+          <option value="IN_PROCESS">Mover p/ EM ATENDIMENTO</option>
         </select>
         <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
       </div>
@@ -2311,10 +2171,10 @@ body.cgdDark .cgdBadge{
           </td>
           <td>
             <div class="cgdRow">
-              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
-              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</button>
-              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
-              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="UC_0NFA3H">Qualificado</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="UC_JT9G60">Atendido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="JUNK">Descartado</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="CONVERTED">Convertido</button>
             </div>
           </td>
         </tr>`;
@@ -2425,19 +2285,19 @@ body.cgdDark .cgdBadge{
       filter: { ...baseFilter, "%TITLE": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
+    }, 60).catch(()=>[]);
 
     const b = await bxListAll("crm.lead.list", {
       filter: { ...baseFilter, "%NAME": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
+    }, 60).catch(()=>[]);
 
     const c = await bxListAll("crm.lead.list", {
       filter: { ...baseFilter, "%LAST_NAME": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
+    }, 60).catch(()=>[]);
 
     const merged = uniqById([...(a||[]), ...(b||[]), ...(c||[])]);
     return merged.slice(0, 60);
@@ -2467,45 +2327,6 @@ body.cgdDark .cgdBadge{
         btn.disabled = false;
       }
     });
-  }
-
-  async function modalLeadDetails(leadId){
-    openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
-    try{
-      const it = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 22000 });
-      const name = leadDisplayName(it);
-      const st = stageName(it.STATUS_ID);
-
-      const respId = String(it.ASSIGNED_BY_ID||"");
-      const respNm = userNameById(respId);
-
-      const oper = pickUF(it, CONFIG.UF_OPERADORA);
-      const idade = pickUF(it, CONFIG.UF_IDADE);
-      const tel = bestPhone(it);
-      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
-      const fonte = pickUF(it, CONFIG.UF_FONTE);
-      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
-
-      openModal(`LEAD • ${name}`, `
-        <div class="cgdRow" style="margin-bottom:10px">
-          <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
-          <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
-          <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
-        </div>
-        <div style="font-weight:900;opacity:.9;line-height:1.4">
-          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
-          <div>IDADE: <b>${esc(idade||"—")}</b></div>
-          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
-          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
-          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
-          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
-        </div>
-      `);
-    }catch(err){
-      console.error(err);
-      closeModal();
-      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
-    }
   }
 
   function modalSearchResults(term, results){
@@ -2608,102 +2429,125 @@ body.cgdDark .cgdBadge{
     });
   }
 
+  async function modalLeadDetails(leadId){
+    openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
+    try{
+      const it = await bx("crm.lead.get", { id: String(leadId) });
+      const name = leadDisplayName(it);
+      const st = stageName(it.STATUS_ID);
+
+      const respId = String(it.ASSIGNED_BY_ID||"");
+      const respNm = userNameById(respId);
+
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+
+      openModal(`LEAD • ${name}`, `
+        <div class="cgdRow" style="margin-bottom:10px">
+          <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
+          <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
+          <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
+        </div>
+        <div style="font-weight:900;opacity:.9;line-height:1.4">
+          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
+          <div>IDADE: <b>${esc(idade||"—")}</b></div>
+          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
+          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
+          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
+          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
+        </div>
+      `);
+    }catch(_){
+      closeModal();
+      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+  }
+
   // =========================
   // Refresh orchestration
   // =========================
-  function renderStatsSafe(day, month){
-    state.stats = { day: Number(day||0), month: Number(month||0) };
-    renderStats(state.stats);
-  }
-
-  async function refreshNewLeads(){
+  async function refreshNewLeadsFull(){
     try{
       const items = await fetchNewLeadsAll();
-      const list = items || [];
-
-      const currentIds = new Set(list.map(x=>String(x.ID)));
-
-      state.newLeadsAll = list;
+      state.newLeadsAll = items || [];
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
+    }catch(err){
+      console.warn("new leads full fetch failed", err);
+    }
+  }
 
-      // primeira carga: só registra
-      if(!state._newLeadFirstLoadDone){
-        state._newLeadFirstLoadDone = true;
-        state.lastNewLeadIds = currentIds;
+  // ✅ NOVO: pulso rápido (IDs + total) — decide avião + pendentes
+  let pulseBusy = false;
+  async function refreshNewPulse(){
+    if(pulseBusy) return;
+    pulseBusy = true;
+    try{
+      const p = await fetchNewLeadPulse();
+      renderPendingCount(p.total);
+
+      const newest = Number(p.newestId||0);
+      if(!state._newLeadFirstPulseDone){
+        state._newLeadFirstPulseDone = true;
+        state.maxNewLeadIdSeen = newest || 0;
         return;
       }
 
-      // ✅ só considera “incoming” se houver ID NOVO em relação ao snapshot anterior
-      // e se não estamos dentro da janela de mutação local (PEGAR/descartar/batch)
-      let hasIncoming = false;
-      for(const id of currentIds){
-        if(!state.lastNewLeadIds.has(id)){
-          hasIncoming = true;
-          break;
-        }
-      }
-
-      state.lastNewLeadIds = currentIds;
-
-      const withinLocal = (Date.now() - state.lastLocalMutationAt) < 3500;
-
-      if(hasIncoming && !withinLocal){
+      // ✅ só toca se entrou ID maior (lead realmente novo)
+      if(newest && newest > (state.maxNewLeadIdSeen||0)){
+        state.maxNewLeadIdSeen = newest;
         flyPlaneYellow();
         if(state.soundOn) tripleBeep();
+
+        // opcional: força atualizar lista completa logo depois do “novo”
+        refreshNewLeadsFull();
       }
     }catch(err){
-      console.warn("new leads fetch failed", err);
+      // silencia para não poluir
+    }finally{
+      pulseBusy = false;
     }
   }
 
-  async function refreshPendingCount(){
-    try{
-      const n = await fetchNewLeadsCount();
-      renderPendingCount(n);
-    }catch(err){
-      console.warn("pending count failed", err);
-    }
-  }
-
-  // ✅ Contagens pela Data PEGAR
   async function refreshStats(){
     try{
-      const { start: dayS, end: dayE } = dayRangeLocal();
-      const { start: monS, end: monE } = monthRangeLocal();
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
 
-      // tenta em paralelo
       const [day, month] = await Promise.all([
-        countByPegRangeAll(dayS, dayE),
-        countByPegRangeAll(monS, monE)
+        fetchPegCountRangeAll(dayS, dayE),
+        fetchPegCountRangeAll(monS, monE)
       ]);
 
-      renderStatsSafe(day, month);
+      state.stats = { day: day||0, month: month||0 };
+      renderStats(state.stats);
     }catch(err){
       console.warn("stats failed", err);
-      // mantém UI sem travar
-      renderStatsSafe(state.stats.day, state.stats.month);
     }
   }
 
   async function refreshUsersFast(){
     try{
-      const { start: dayS, end: dayE } = dayRangeLocal();
-      const { start: monS, end: monE } = monthRangeLocal();
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
 
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=4){
         const part = users.slice(i,i+4);
         const jobs = part.map(async u=>{
           const [d, m, lt] = await Promise.all([
-            countByPegRangeUser(u.id, dayS, dayE),
-            countByPegRangeUser(u.id, monS, monE),
+            fetchPegCountRangeUser(u.id, dayS, dayE),
+            fetchPegCountRangeUser(u.id, monS, monE),
             fetchUserLastTwoFast(u.id)
           ]);
           state.userStats[u.id] = {
             ...(state.userStats[u.id]||{}),
-            pulledToday: Number(d||0),
-            pulledMonth: Number(m||0),
+            pulledToday: d||0,
+            pulledMonth: m||0,
             lastTwo: lt.lastTwo || []
           };
         });
@@ -2731,8 +2575,8 @@ body.cgdDark .cgdBadge{
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
     await Promise.allSettled([
-      refreshNewLeads(),
-      refreshPendingCount(),
+      refreshNewPulse(),
+      refreshNewLeadsFull(),
       refreshStats(),
       refreshQueue()
     ]);
@@ -2741,7 +2585,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // UI controls
+  // Events / UI
   // =========================
   function updateSoundUI(){
     $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
@@ -2755,9 +2599,6 @@ body.cgdDark .cgdBadge{
     if(b) b.textContent = `Modo: ${state.dark ? "Escuro" : "Claro"}`;
   }
 
-  // =========================
-  // Events / UI
-  // =========================
   function wire(){
     $("#btnSound")?.addEventListener("click", ()=>{
       state.soundOn = !state.soundOn;
@@ -2781,7 +2622,7 @@ body.cgdDark .cgdBadge{
     });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
-    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
+    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeadsFull);
     $("#btnRefreshWho")?.addEventListener("click", refreshUsersFast);
 
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
@@ -2902,7 +2743,9 @@ body.cgdDark .cgdBadge{
   // Start
   // =========================
   async function start(){
-    if(!CONFIG.WEBHOOK) return;
+    if(!CONFIG.WEBHOOK){
+      return;
+    }
 
     injectCSS();
     mount();
@@ -2915,12 +2758,17 @@ body.cgdDark .cgdBadge{
     await hardRefreshAll();
     renderBossPics();
 
-    setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
-    setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
+    // ✅ pulso rápido (entrada “quase imediata”)
+    setInterval(refreshNewPulse, CONFIG.FAST_NEW_PULSE_MS);
+
+    // ✅ lista completa em ritmo mais leve
+    setInterval(refreshNewLeadsFull, CONFIG.FULL_NEW_LEADS_MS);
+
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsersFast, CONFIG.REFRESH_WHO_MS);
 
+    // offline flush
     setInterval(flushOps, 2500);
   }
 
