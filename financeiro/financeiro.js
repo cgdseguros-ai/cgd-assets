@@ -1,4 +1,5 @@
 /* Financeiro CGD — Deals / Pipeline (CATEGORY) 27
+   + Módulo Cartões/Faturas (1 compra + parcelas calculadas)
    Cloudflare Worker:
    - Assets: /asset/financeiro.js e /asset/financeiro.css
    - API Proxy: /api/<metodo_bitrix>
@@ -39,6 +40,17 @@
       CANCELADO: "C27:EXECUTING",
       CONCLUIDO: "C27:UC_LP2NSK",
     },
+
+    // ✅ Cartões
+    CARDS: [
+      { name: "CT ITAÚ PJ", venc: 2, melhor: 21 },
+      { name: "CT PORTO PF", venc: 10, melhor: 4 },
+      { name: "CT C6 PJ", venc: 15, melhor: 9 },
+      { name: "CT XP PF", venc: 15, melhor: 11 },
+      { name: "CT ITAÚ PF", venc: 21, melhor: 13 },
+      { name: "CT CORA CGD BARRA", venc: 23, melhor: 17 },
+      { name: "CT PORTO PJ", venc: 30, melhor: 25 },
+    ],
 
     // UX
     PAGE_SIZE: 50,
@@ -105,12 +117,36 @@
     return s;
   }
 
-  function nowISODate() {
-    const dt = new Date();
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, "0");
-    const d = String(dt.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
+  function isoToParts(iso) {
+    const s = toISODate(iso);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return { y: Number(m[1]), mo: Number(m[2]), d: Number(m[3]) };
+  }
+
+  function pad2(n) { return String(n).padStart(2, "0"); }
+
+  function ymKey(y, mo) { return `${y}-${pad2(mo)}`; }
+  function ymLabel(y, mo) { return `${pad2(mo)}/${y}`; }
+
+  function addMonths(y, mo, add) {
+    // mo: 1..12
+    let yy = y;
+    let mm = mo + add;
+    while (mm > 12) { mm -= 12; yy += 1; }
+    while (mm < 1) { mm += 12; yy -= 1; }
+    return { y: yy, mo: mm };
+  }
+
+  function clampDay(y, mo, day) {
+    // ajusta dia para último dia do mês se necessário
+    const last = new Date(y, mo, 0).getDate(); // mo é 1..12, então new Date(y, mo, 0) dá último dia do mês
+    return Math.min(day, last);
+  }
+
+  function makeISODate(y, mo, day) {
+    const dd = clampDay(y, mo, day);
+    return `${y}-${pad2(mo)}-${pad2(dd)}`;
   }
 
   async function api(method, payload) {
@@ -216,6 +252,24 @@
     return it ? String(it.ID) : "";
   }
 
+  function findCompetenciaEnumId(y, mo) {
+    const list = S.enums?.[CFG.F.COMPETENCIA]?.items || [];
+    const label = ymLabel(y, mo); // "MM/YYYY"
+    const yStr = String(y);
+    const moStr = pad2(mo);
+
+    // tenta achar "MM/YYYY" dentro do texto
+    let it = list.find(x => String(x.VALUE || "").includes(label));
+    if (it) return String(it.ID);
+
+    // tenta achar padrão "YYYY-MM" ou algo parecido
+    it = list.find(x => {
+      const v = String(x.VALUE || "").toUpperCase();
+      return v.includes(yStr) && (v.includes(moStr) || v.includes(String(mo)));
+    });
+    return it ? String(it.ID) : "";
+  }
+
   // ========= META =========
   async function loadMeta() {
     // fields/enums
@@ -228,16 +282,14 @@
       }
     }
 
-    // stages pipeline 27: ENTITY_ID correto
+    // stages pipeline 27
     const st = await api("crm.status.list", {
       filter: { ENTITY_ID: `DEAL_STAGE_${CFG.DEAL_CATEGORY_ID}` }
     });
     const rawStages = st?.result || [];
     if (!Array.isArray(rawStages)) throw new Error("Não consegui carregar as etapas da Pipeline 27.");
 
-    // ✅ whitelist por IDs (somente as 6)
     const allowedStageIds = new Set(Object.values(CFG.STAGES).map(String));
-
     S.stages = rawStages.map(x => ({
       STATUS_ID: x.STATUS_ID || x.ID || x.id,
       NAME: x.NAME || x.name,
@@ -317,6 +369,55 @@
     });
   }
 
+  // ========= TAGS (OBS) =========
+  function tagGet(obs, key) {
+    const s = String(obs || "");
+    const re = new RegExp("\\[" + key + "=([^\\]]*)\\]", "i");
+    const m = s.match(re);
+    return m ? m[1] : "";
+  }
+  function tagHas(obs, key) {
+    const s = String(obs || "");
+    const re = new RegExp("\\[" + key + "\\]", "i");
+    return re.test(s);
+  }
+  function tagSet(obs, key, val) {
+    let s = String(obs || "");
+    const re = new RegExp("\\[" + key + "=([^\\]]*)\\]", "ig");
+    if (re.test(s)) s = s.replace(re, "");
+    s = s.trim();
+    if (s) s += " ";
+    s += `[${key}=${String(val)}]`;
+    return s.trim();
+  }
+
+  // ========= CARTÕES: regra de fatura =========
+  function calcInvoiceYM(card, purchaseISO) {
+    const p = isoToParts(purchaseISO);
+    if (!p) return null;
+
+    // Regra:
+    // dia <= melhor_dia => fatura do mês "corrente" (vencimento mais próximo)
+    // dia >  melhor_dia => próxima fatura (mês seguinte)
+    const shift = (p.d > Number(card.melhor)) ? 1 : 0;
+    const ym = addMonths(p.y, p.mo, shift);
+    return ym; // {y, mo}
+  }
+
+  function invoiceTitle(cardName, y, mo) {
+    return `FATURA • ${cardName} • ${ymLabel(y, mo)}`;
+  }
+
+  function purchaseTitle(cardName, desc) {
+    const d = (desc || "").trim();
+    return `COMPRA • ${cardName}${d ? " • " + d : ""}`;
+  }
+
+  function tipoDespesaId() {
+    // tenta achar enum "DESPESA"
+    return enumIdByValue(CFG.F.TIPO_FIN, "DESPESA") || enumIdByValue(CFG.F.TIPO_FIN, "DESP") || "";
+  }
+
   // ========= DEALS =========
   async function listDealsAll() {
     const all = [];
@@ -343,7 +444,7 @@
         filter: {
           "CATEGORY_ID": String(CFG.DEAL_CATEGORY_ID),
 
-          // ✅ Só as 6 etapas do Financeiro (mata QUEUE_JSON, WON, LOSE, etc)
+          // Só as 6 etapas do Financeiro
           "STAGE_ID": [
             CFG.STAGES.DESP_A_PAGAR,
             CFG.STAGES.DESP_PAGA,
@@ -353,7 +454,7 @@
             CFG.STAGES.CONCLUIDO
           ],
 
-          // ✅ Tipo financeiro preenchido
+          // Tipo financeiro preenchido
           ["!" + CFG.F.TIPO_FIN]: ""
         },
         order: { "ID": "DESC" },
@@ -365,18 +466,150 @@
       const next = res?.next;
       if (next == null) break;
       start = next;
-      if (all.length > 10000) break;
+      if (all.length > 15000) break;
     }
     return all;
   }
 
-  // ✅ Ocultar CONCLUÍDO por padrão + remover lixo de fila (backup definitivo)
+  async function updateDeal(id, values) {
+    await api("crm.deal.update", { id: String(id), fields: values });
+  }
+
+  async function createDeal(values) {
+    const res = await api("crm.deal.add", { fields: values });
+    return res?.result;
+  }
+
+  // ========= FATURAS: encontrar/criar e recalcular =========
+  function findInvoiceDeal(cardName, y, mo) {
+    const title = invoiceTitle(cardName, y, mo);
+    return S.deals.find(d => String(d.TITLE || "") === title) || null;
+  }
+
+  async function ensureInvoiceDeal(cardName, y, mo, vencDay) {
+    let inv = findInvoiceDeal(cardName, y, mo);
+    if (inv) return inv;
+
+    const tipoId = tipoDespesaId();
+    const dueISO = makeISODate(y, mo, vencDay);
+    const compId = findCompetenciaEnumId(y, mo);
+
+    let obs = "";
+    obs = tagSet(obs, "INVOICE", "1");
+    obs = tagSet(obs, "CARD", cardName);
+    obs = tagSet(obs, "INV", ymKey(y, mo));
+
+    const fields = {
+      TITLE: invoiceTitle(cardName, y, mo),
+      CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
+      STAGE_ID: CFG.STAGES.DESP_A_PAGAR,
+      [CFG.F.TIPO_FIN]: tipoId || "",
+      [CFG.F.FAVORECIDO]: cardName,
+      [CFG.F.DATA_PREV]: dueISO,
+      [CFG.F.COMPETENCIA]: compId || "",
+      [CFG.F.VALOR_PREV]: 0,
+      [CFG.F.OBS]: obs,
+    };
+
+    const newId = await createDeal(fields);
+
+    // cria um "stub" local pra não precisar refresh imediato
+    inv = {
+      ID: String(newId),
+      TITLE: fields.TITLE,
+      STAGE_ID: fields.STAGE_ID,
+      CATEGORY_ID: fields.CATEGORY_ID,
+      [CFG.F.TIPO_FIN]: fields[CFG.F.TIPO_FIN],
+      [CFG.F.FAVORECIDO]: fields[CFG.F.FAVORECIDO],
+      [CFG.F.DATA_PREV]: fields[CFG.F.DATA_PREV],
+      [CFG.F.COMPETENCIA]: fields[CFG.F.COMPETENCIA],
+      [CFG.F.VALOR_PREV]: fields[CFG.F.VALOR_PREV],
+      [CFG.F.OBS]: fields[CFG.F.OBS],
+    };
+    S.deals.unshift(inv);
+
+    return inv;
+  }
+
+  function listCardPurchases() {
+    // compras são deals com [PURCHASE=1]
+    return S.deals.filter(d => tagHas(d[CFG.F.OBS], "PURCHASE"));
+  }
+
+  function computeInvoiceTotalsFromPurchases() {
+    // retorna Map invKey -> {cardName, y, mo, total, vencDay}
+    const totals = new Map();
+
+    for (const d of listCardPurchases()) {
+      const obs = d[CFG.F.OBS] || "";
+      const cardName = tagGet(obs, "CARD");
+      const pdate = tagGet(obs, "PDATE");
+      const total = Number(tagGet(obs, "TOTAL") || 0) || 0;
+      const n = Number(tagGet(obs, "N") || 1) || 1;
+
+      if (!cardName || !pdate || !total || n < 1) continue;
+
+      const card = CFG.CARDS.find(c => c.name === cardName);
+      if (!card) continue;
+
+      const baseYM = calcInvoiceYM(card, pdate);
+      if (!baseYM) continue;
+
+      const per = total / n;
+
+      for (let i = 0; i < n; i++) {
+        const ym = addMonths(baseYM.y, baseYM.mo, i);
+        const key = `${cardName}::${ymKey(ym.y, ym.mo)}`;
+
+        const cur = totals.get(key) || {
+          cardName,
+          y: ym.y,
+          mo: ym.mo,
+          total: 0,
+          vencDay: card.venc
+        };
+        cur.total += per;
+        totals.set(key, cur);
+      }
+    }
+
+    return totals;
+  }
+
+  async function syncInvoiceTotals() {
+    // 1) computa
+    const totals = computeInvoiceTotalsFromPurchases();
+
+    // 2) garante faturas existentes (cria se faltar)
+    for (const it of totals.values()) {
+      await ensureInvoiceDeal(it.cardName, it.y, it.mo, it.vencDay);
+    }
+
+    // 3) atualiza valor previsto das faturas
+    // (somente se diferente o suficiente)
+    const eps = 0.009;
+
+    for (const it of totals.values()) {
+      const inv = findInvoiceDeal(it.cardName, it.y, it.mo);
+      if (!inv) continue;
+
+      const current = Number(inv[CFG.F.VALOR_PREV] || 0) || 0;
+      const next = Number(it.total.toFixed(2));
+
+      if (Math.abs(current - next) > eps) {
+        inv[CFG.F.VALOR_PREV] = next;
+        await updateDeal(inv.ID, { [CFG.F.VALOR_PREV]: next });
+      }
+    }
+  }
+
+  // ========= FILTROS =========
   function applyFilters() {
     const q = (S.filters.q || "").trim().toLowerCase();
     const allowedDealStages = new Set(Object.values(CFG.STAGES).map(String));
 
     S.filtered = S.deals.filter(d => {
-      // backup: se escapar, mata aqui também
+      // backup: lixo de fila
       const favRaw = String(d[CFG.F.FAVORECIDO] || "");
       const favNorm = favRaw.trim().toUpperCase();
       if (favNorm.startsWith("__QUEUE__")) return false;
@@ -392,6 +625,7 @@
       if (S.filters.stageId) {
         if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
       } else {
+        // oculta CONCLUÍDO por padrão
         if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
       }
 
@@ -413,29 +647,7 @@
     renderTotals();
   }
 
-  async function createDealFromForm(values) {
-    const tipoId = values[CFG.F.TIPO_FIN] || "";
-    const stage = initialStageForTipo(tipoId);
-
-    const fav = values[CFG.F.FAVORECIDO] || "";
-    const tipoTxt = enumName(CFG.F.TIPO_FIN, tipoId) || "FIN";
-    const title = `${CFG.DEFAULT_TITLE_PREFIX} • ${tipoTxt}${fav ? " • " + fav : ""}`;
-
-    const fields = {
-      TITLE: title,
-      CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
-      STAGE_ID: stage || undefined,
-      ...values,
-    };
-
-    const res = await api("crm.deal.add", { fields });
-    return res?.result;
-  }
-
-  async function updateDeal(id, values) {
-    await api("crm.deal.update", { id: String(id), fields: values });
-  }
-
+  // ========= AÇÕES =========
   async function markRealizado(deal) {
     const m = modal(`
       <div class="fin-modal-head">
@@ -450,7 +662,7 @@
           </div>
           <div class="fin-field">
             <label>Data realizada</label>
-            <input id="mr-date" placeholder="YYYY-MM-DD" value="${esc(toISODate(deal[CFG.F.DATA_REAL] || nowISODate()))}" />
+            <input id="mr-date" placeholder="YYYY-MM-DD" value="${esc(toISODate(deal[CFG.F.DATA_REAL] || makeISODate(new Date().getFullYear(), new Date().getMonth()+1, new Date().getDate())))}" />
           </div>
         </div>
 
@@ -532,6 +744,7 @@
     });
   }
 
+  // ========= MODAL: NOVO LANÇAMENTO (avulso) =========
   function openEditModal(deal) {
     const isEdit = !!deal;
     const v = (k) => (deal ? (deal[k] ?? "") : "");
@@ -641,16 +854,20 @@
         payload[CFG.F.STATUS_FIN] = m.q("#f-status").value || "";
         payload[CFG.F.OBS] = (m.q("#f-obs").value || "").trim();
 
-        if (!isEdit) {
-          const st = initialStageForTipo(tipo);
-          if (st) payload.STAGE_ID = st;
-        }
-
         if (isEdit) {
           await updateDeal(deal.ID, payload);
           toast("Atualizado ✅");
         } else {
-          const id = await createDealFromForm(payload);
+          // cria avulso com título padrão
+          const fav = payload[CFG.F.FAVORECIDO] || "";
+          const tipoTxt = enumName(CFG.F.TIPO_FIN, tipo) || "FIN";
+          const fields = {
+            TITLE: `${CFG.DEFAULT_TITLE_PREFIX} • ${tipoTxt}${fav ? " • " + fav : ""}`,
+            CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
+            STAGE_ID: initialStageForTipo(tipo) || undefined,
+            ...payload
+          };
+          const id = await createDeal(fields);
           toast("Criado ✅ (ID " + id + ")");
         }
 
@@ -664,6 +881,148 @@
     });
   }
 
+  // ========= MODAL: COMPRA NO CARTÃO =========
+  function openCardPurchaseModal() {
+    const cardOpts = CFG.CARDS.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (venc ${pad2(c.venc)} • melhor dia ${pad2(c.melhor)})</option>`).join("");
+
+    const html = `
+      <div class="fin-modal-head">
+        <div class="fin-modal-title">Compra no cartão</div>
+        <button class="fin-x" data-close="1">×</button>
+      </div>
+
+      <div class="fin-modal-body">
+        <div class="fin-grid">
+          <div class="fin-field">
+            <label>Cartão</label>
+            <select id="cp-card">${cardOpts}</select>
+          </div>
+
+          <div class="fin-field">
+            <label>Data da compra</label>
+            <input id="cp-date" placeholder="YYYY-MM-DD" value="${esc(makeISODate(new Date().getFullYear(), new Date().getMonth()+1, new Date().getDate()))}" />
+          </div>
+
+          <div class="fin-field">
+            <label>Valor total</label>
+            <input id="cp-total" placeholder="Ex.: 1200,00" />
+          </div>
+
+          <div class="fin-field">
+            <label>Parcelas</label>
+            <input id="cp-n" type="number" min="1" max="36" value="1" />
+          </div>
+
+          <div class="fin-field">
+            <label>Descrição (loja/compra)</label>
+            <input id="cp-desc" placeholder="Ex.: Google Ads, Suprimentos..." />
+          </div>
+
+          <div class="fin-field">
+            <label>Centro de custo</label>
+            <select id="cp-cc">${buildOptions(S.enums?.[CFG.F.CENTRO_CUSTO]?.items || [], { includeBlank: true, blankText: "—" })}</select>
+          </div>
+
+          <div class="fin-field">
+            <label>Categoria</label>
+            <select id="cp-cat">${buildOptions(S.enums?.[CFG.F.CATEGORIA]?.items || [], { includeBlank: true, blankText: "—" })}</select>
+          </div>
+        </div>
+
+        <div class="fin-field" style="margin-top:10px">
+          <label>Observações</label>
+          <textarea id="cp-obs" rows="3" placeholder="Opcional..."></textarea>
+        </div>
+
+        <div class="fin-hint">
+          Regra: se o dia da compra for maior que o “melhor dia”, entra na próxima fatura.
+          A compra ficará em <b>CONCLUÍDO</b> (oculta por padrão) e as faturas recebem o total previsto por mês.
+        </div>
+
+        <div class="fin-row fin-row--right" style="margin-top:12px">
+          <button class="fin-btn" data-close="1">Cancelar</button>
+          <button class="fin-btn fin-btn--primary" id="cp-save" data-busylock="1">Criar compra</button>
+        </div>
+      </div>
+    `;
+
+    const m = modal(html);
+
+    m.q("#cp-save").addEventListener("click", async () => {
+      try {
+        setLoading(true);
+
+        const cardName = m.q("#cp-card").value;
+        const card = CFG.CARDS.find(c => c.name === cardName);
+        if (!card) throw new Error("Cartão inválido.");
+
+        const pdate = toISODate(m.q("#cp-date").value);
+        if (!isoToParts(pdate)) throw new Error("Data da compra inválida.");
+
+        const total = parseMoneyBR(m.q("#cp-total").value);
+        if (!(total > 0)) throw new Error("Informe um valor total válido.");
+
+        const n = Math.max(1, Math.min(36, Number(m.q("#cp-n").value || 1) || 1));
+
+        const desc = (m.q("#cp-desc").value || "").trim();
+        const cc = m.q("#cp-cc").value || "";
+        const cat = m.q("#cp-cat").value || "";
+        const obsUser = (m.q("#cp-obs").value || "").trim();
+
+        const tipoId = tipoDespesaId();
+        if (!tipoId) throw new Error("Não achei o enum 'DESPESA' no campo Tipo Financeiro.");
+
+        // compra vai ficar CONCLUÍDO e registrada via tags
+        let obs = obsUser ? obsUser : "";
+        obs = tagSet(obs, "PURCHASE", "1");
+        obs = tagSet(obs, "CARD", cardName);
+        obs = tagSet(obs, "PDATE", pdate);
+        obs = tagSet(obs, "TOTAL", total.toFixed(2));
+        obs = tagSet(obs, "N", String(n));
+
+        const fields = {
+          TITLE: purchaseTitle(cardName, desc),
+          CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
+          STAGE_ID: CFG.STAGES.CONCLUIDO, // oculta por padrão
+          [CFG.F.TIPO_FIN]: tipoId,
+          [CFG.F.FAVORECIDO]: desc ? desc : cardName,
+          [CFG.F.VALOR_PREV]: total,
+          [CFG.F.CENTRO_CUSTO]: cc,
+          [CFG.F.CATEGORIA]: cat,
+          [CFG.F.OBS]: obs,
+        };
+
+        const newId = await createDeal(fields);
+        toast(`Compra criada ✅ (ID ${newId})`);
+
+        // atualiza lista local para já recalcular faturas sem depender do refresh
+        S.deals.unshift({
+          ID: String(newId),
+          TITLE: fields.TITLE,
+          STAGE_ID: fields.STAGE_ID,
+          CATEGORY_ID: fields.CATEGORY_ID,
+          [CFG.F.TIPO_FIN]: fields[CFG.F.TIPO_FIN],
+          [CFG.F.FAVORECIDO]: fields[CFG.F.FAVORECIDO],
+          [CFG.F.VALOR_PREV]: fields[CFG.F.VALOR_PREV],
+          [CFG.F.CENTRO_CUSTO]: fields[CFG.F.CENTRO_CUSTO],
+          [CFG.F.CATEGORIA]: fields[CFG.F.CATEGORIA],
+          [CFG.F.OBS]: fields[CFG.F.OBS],
+        });
+
+        // Recalcula faturas: garante criação e atualiza totais
+        await syncInvoiceTotals();
+
+        m.close();
+        await refresh();
+      } catch (e) {
+        toast(e?.message || String(e), "err");
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
+  // ========= CSV =========
   function exportCSV() {
     const rows = S.filtered.map(d => ({
       ID: d.ID,
@@ -700,6 +1059,7 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1200);
   }
 
+  // ========= RENDER =========
   function render() {
     root.innerHTML = `
       <div class="fin-app" id="fin-app">
@@ -715,6 +1075,7 @@
 
           <div class="fin-actions">
             <button class="fin-btn fin-btn--primary" id="btn-new" data-busylock="1">NOVO</button>
+            <button class="fin-btn" id="btn-card" data-busylock="1">CARTÃO</button>
             <button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>
             <button class="fin-btn" id="btn-csv" data-busylock="1">EXPORTAR CSV</button>
           </div>
@@ -796,6 +1157,7 @@
     `;
 
     el("#btn-new").addEventListener("click", () => openEditModal(null));
+    el("#btn-card").addEventListener("click", () => openCardPurchaseModal());
     el("#btn-refresh").addEventListener("click", refresh);
     el("#btn-csv").addEventListener("click", exportCSV);
 
@@ -899,8 +1261,12 @@
   async function refresh() {
     try {
       setLoading(true);
+
       const all = await listDealsAll();
       S.deals = all || [];
+
+      // recalcula faturas a partir das compras (garante coerência)
+      await syncInvoiceTotals();
 
       const dt = new Date();
       const hh = String(dt.getHours()).padStart(2, "0");
