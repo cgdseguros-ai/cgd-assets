@@ -1,5 +1,5 @@
 /* Financeiro CGD — Deals / Pipeline (CATEGORY) 27
-   Carrega via Cloudflare Worker:
+   Cloudflare Worker:
    - Assets: /asset/financeiro.js e /asset/financeiro.css
    - API Proxy: /api/<metodo_bitrix>
 */
@@ -30,14 +30,14 @@
       CENTRO_CUSTO: "UF_CRM_1771801157",        // lista
     },
 
-    // Nomes EXATOS das etapas (você me passou)
-    STAGE_NAMES: {
-      DESP_A_PAGAR: "DESPESA - A PAGAR",
-      DESP_PAGA: "DESPESA - PAGA",
-      REC_A_RECEBER: "RECEITA - A RECEBER",
-      REC_RECEBIDA: "RECEITA RECEBIDA",
-      CANCELADO: "CANCELADO",
-      CONCLUIDO: "CONCLUÍDO",
+    // ✅ IDs reais das etapas (Pipeline 27)
+    STAGES: {
+      DESP_A_PAGAR: "C27:NEW",
+      DESP_PAGA: "C27:PREPARATION",
+      REC_A_RECEBER: "C27:UC_EQAFD7",
+      REC_RECEBIDA: "C27:PREPAYMENT_INVOIC",
+      CANCELADO: "C27:EXECUTING",
+      CONCLUIDO: "C27:UC_LP2NSK",
     },
 
     // UX
@@ -49,13 +49,12 @@
   // ========= STATE =========
   const S = {
     enums: null,         // crm.deal.fields (items de listas)
-    stages: null,        // stages da categoria 27 (status_id/name)
-    stageByName: {},     // name -> status_id
-    enumByFieldName: {}, // field -> (name->id)
-    deals: [],
-    filtered: [],
+    stages: null,        // stages filtradas (somente 6)
     loading: false,
     lastSyncAt: null,
+
+    deals: [],
+    filtered: [],
 
     filters: {
       q: "",
@@ -81,7 +80,6 @@
   function moneyBR(v) {
     const n = Number(v);
     if (!isFinite(n)) return "";
-    // formata BR sem depender de Intl em ambientes estranhos
     const fixed = n.toFixed(2);
     const [a, b] = fixed.split(".");
     const withDots = a.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -99,13 +97,12 @@
   }
 
   function toISODate(d) {
-    // aceita yyyy-mm-dd ou dd/mm/yyyy
     if (!d) return "";
     const s = String(d).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-    return s; // deixa passar (Bitrix às vezes aceita)
+    return s;
   }
 
   function nowISODate() {
@@ -211,26 +208,11 @@
     return it?.NAME || String(stageId);
   }
 
-  function mapEnumByName(fieldId) {
-    const m = {};
-    const list = S.enums?.[fieldId]?.items || [];
-    for (const it of list) m[String(it.VALUE || it.NAME || "").trim().toUpperCase()] = String(it.ID);
-    return m;
-  }
-
-  function enumIdByValue(fieldId, valueText) {
-    if (!valueText) return "";
-    const m = S.enumByFieldName[fieldId] || {};
-    return m[String(valueText).trim().toUpperCase()] || "";
-  }
-
-  // ========= LOAD META (fields + stages) =========
+  // ========= META =========
   async function loadMeta() {
-    // 1) fields / enums
+    // fields/enums
     const fieldsRes = await api("crm.deal.fields", {});
-    // fieldsRes.result = {FIELD: { type, items? ... } }
     const fields = fieldsRes?.result || {};
-    // Normaliza: S.enums[fieldId] = {items:[{ID,VALUE}]}
     S.enums = {};
     for (const [k, v] of Object.entries(fields)) {
       if (v && Array.isArray(v.items)) {
@@ -238,140 +220,48 @@
       }
     }
 
-    // 2) stages da categoria 27
-    // Tentativa A: crm.dealcategory.stage.list
-    let stages = null;
-    try {
-      const st = await api("crm.dealcategory.stage.list", { id: CFG.DEAL_CATEGORY_ID });
-      stages = st?.result || null;
-    } catch (e) {
-      // Tentativa B: crm.status.list filtrando por ENTITY_ID=DEAL_STAGE e CATEGORY_ID=27
-      try {
-        const st2 = await api("crm.status.list", {
-          filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID) }
-        });
-        stages = st2?.result || null;
-      } catch (e2) {
-        stages = null;
-      }
-    }
+    // stages pipeline 27: ENTITY_ID correto
+    const st = await api("crm.status.list", {
+      filter: { ENTITY_ID: `DEAL_STAGE_${CFG.DEAL_CATEGORY_ID}` }
+    });
+    const rawStages = st?.result || [];
+    if (!Array.isArray(rawStages)) throw new Error("Não consegui carregar as etapas da Pipeline 27.");
 
-    if (!Array.isArray(stages)) {
-      throw new Error("Não consegui carregar as etapas da Pipeline 27 (stages).");
-    }
+    // ✅ whitelist por IDs (somente as 6 que você autorizou)
+    const allowedStageIds = new Set(Object.values(CFG.STAGES).map(String));
 
-    // Normaliza estágios para {STATUS_ID, NAME}
-    // Normaliza estágios para {STATUS_ID, NAME} e FILTRA só os da categoria 27
-const catPrefix = `C${CFG.DEAL_CATEGORY_ID}:`; // ex.: C27:
-
-// Normaliza estágios para {STATUS_ID, NAME} e FILTRA só os da categoria 27
-const catPrefix = `C${CFG.DEAL_CATEGORY_ID}:`; // ex.: C27:
-
-S.stages = stages.map(x => ({
-  STATUS_ID: x.STATUS_ID || x.statusId || x.ID || x.Id || x.id,
-  NAME: x.NAME || x.name,
-  SORT: Number(x.SORT || x.sort || 0),
-})).filter(st => {
-  const id = String(st.STATUS_ID || "");
-  const nm = String(st.NAME || "").trim().toUpperCase();
-
-  if (!id) return false;
-
-  // remove lixo conhecido
-  if (id.toUpperCase().includes("QUEUE_JSON") || nm === "QUEUE_JSON") return false;
-
-  // Pipeline 27 normalmente vem com prefixo C27:
-  // Mantém somente os que pertencem à categoria 27
-  if (CFG.DEAL_CATEGORY_ID !== 0) {
-    return id.startsWith(catPrefix);
-  }
-
-  // (categoria 0): mantém tudo
-  return true;
-});
-
-S.stages.sort((a, b) => (a.SORT - b.SORT));
-
-// mapa name -> status_id
-S.stageByName = {};
-for (const st of S.stages) {
-  S.stageByName[String(st.NAME || "").trim().toUpperCase()] = String(st.STATUS_ID);
-}
-  const id = String(st.STATUS_ID || "");
-  const nm = String(st.NAME || "").trim().toUpperCase();
-
-  if (!id) return false;
-
-  // remove lixo conhecido
-  if (id.toUpperCase().includes("QUEUE_JSON") || nm === "QUEUE_JSON") return false;
-
-  // Pipeline 27 normalmente vem com prefixo C27:
-  // Mantém somente os que pertencem à categoria 27
-  if (CFG.DEAL_CATEGORY_ID !== 0) {
-    return id.startsWith(catPrefix);
-  }
-
-  // (categoria 0): mantém tudo
-  return true;
-});
-
-S.stages.sort((a, b) => (a.SORT - b.SORT));
-
-// mapa name -> status_id
-S.stageByName = {};
-for (const st of S.stages) {
-  S.stageByName[String(st.NAME || "").trim().toUpperCase()] = String(st.STATUS_ID);
-}
+    S.stages = rawStages.map(x => ({
+      STATUS_ID: x.STATUS_ID || x.ID || x.id,
+      NAME: x.NAME || x.name,
+      SORT: Number(x.SORT || x.sort || 0),
+    })).filter(stg => allowedStageIds.has(String(stg.STATUS_ID)));
 
     S.stages.sort((a, b) => (a.SORT - b.SORT));
-
-    S.stageByName = {};
-    for (const st of S.stages) {
-      S.stageByName[String(st.NAME || "").trim().toUpperCase()] = String(st.STATUS_ID);
-    }
-
-    // mapas enum por nome para campos principais
-    S.enumByFieldName[CFG.F.TIPO_FIN] = mapEnumByName(CFG.F.TIPO_FIN);
-    S.enumByFieldName[CFG.F.STATUS_FIN] = mapEnumByName(CFG.F.STATUS_FIN);
-    S.enumByFieldName[CFG.F.CENTRO_CUSTO] = mapEnumByName(CFG.F.CENTRO_CUSTO);
-    S.enumByFieldName[CFG.F.CATEGORIA] = mapEnumByName(CFG.F.CATEGORIA);
-    S.enumByFieldName[CFG.F.FORMA_PGTO] = mapEnumByName(CFG.F.FORMA_PGTO);
-    S.enumByFieldName[CFG.F.CONTA] = mapEnumByName(CFG.F.CONTA);
-    S.enumByFieldName[CFG.F.COMPETENCIA] = mapEnumByName(CFG.F.COMPETENCIA);
   }
 
-  function stageIdByName(name) {
-    if (!name) return "";
-    return S.stageByName[String(name).trim().toUpperCase()] || "";
-  }
-
+  // ========= STAGE CHOOSERS (por ID fixo) =========
   function initialStageForTipo(tipoEnumId) {
-    const tipoTxt = enumName(CFG.F.TIPO_FIN, tipoEnumId).toUpperCase();
-    if (tipoTxt.includes("DESP")) return stageIdByName(CFG.STAGE_NAMES.DESP_A_PAGAR);
-    if (tipoTxt.includes("REC")) return stageIdByName(CFG.STAGE_NAMES.REC_A_RECEBER);
+    const tipoTxt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
+    if (tipoTxt.includes("DESP")) return CFG.STAGES.DESP_A_PAGAR;
+    if (tipoTxt.includes("REC")) return CFG.STAGES.REC_A_RECEBER;
     return "";
   }
 
   function paidStageForTipo(tipoEnumId) {
-    const tipoTxt = enumName(CFG.F.TIPO_FIN, tipoEnumId).toUpperCase();
-    if (tipoTxt.includes("DESP")) return stageIdByName(CFG.STAGE_NAMES.DESP_PAGA);
-    if (tipoTxt.includes("REC")) return stageIdByName(CFG.STAGE_NAMES.REC_RECEBIDA);
+    const tipoTxt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
+    if (tipoTxt.includes("DESP")) return CFG.STAGES.DESP_PAGA;
+    if (tipoTxt.includes("REC")) return CFG.STAGES.REC_RECEBIDA;
     return "";
   }
 
   // ========= AUTH (opcional) =========
   async function ensureAuthIfNeeded() {
-    // Se o worker estiver exigindo cookie, /api vai responder 401 sem auth.
-    // A gente testa um método leve: crm.deal.fields.
     try {
       await api("crm.deal.fields", {});
       return;
     } catch (e) {
-      // se não for 401, só joga o erro
       const msg = String(e?.message || e);
-      if (!msg.includes("401") && !msg.toLowerCase().includes("autentica")) {
-        throw e;
-      }
+      if (!msg.includes("401") && !msg.toLowerCase().includes("autentica")) throw e;
     }
 
     const m = modal(`
@@ -407,7 +297,7 @@ for (const st of S.stages) {
         if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         m.close();
         toast("Autenticado ✅");
-      } catch (e) {
+      } catch (_e) {
         toast("Senha inválida ou auth não configurada.", "err");
       } finally {
         btn.disabled = false;
@@ -419,7 +309,7 @@ for (const st of S.stages) {
     });
   }
 
-  // ========= LOAD DEALS =========
+  // ========= DEALS =========
   async function listDealsAll() {
     const all = [];
     let start = 0;
@@ -454,23 +344,30 @@ for (const st of S.stages) {
       const next = res?.next;
       if (next == null) break;
       start = next;
-      // segurança: evita loop infinito
       if (all.length > 10000) break;
     }
-
     return all;
   }
 
+  // ✅ Ocultar CONCLUÍDO por padrão:
+  // - Se o filtro de etapa estiver vazio (— Todos —), NÃO mostra CONCLUÍDO
+  // - Se o usuário selecionar uma etapa específica (incluindo CONCLUÍDO), respeita.
   function applyFilters() {
     const q = (S.filters.q || "").trim().toLowerCase();
 
     S.filtered = S.deals.filter(d => {
-      // filtros por enums
       if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
       if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
       if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
       if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
-      if (S.filters.stageId && String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
+
+      // etapa selecionada: filtro normal
+      if (S.filters.stageId) {
+        if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
+      } else {
+        // sem etapa selecionada: oculta CONCLUÍDO por padrão
+        if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
+      }
 
       if (q) {
         const hay = [
@@ -490,7 +387,6 @@ for (const st of S.stages) {
     renderTotals();
   }
 
-  // ========= ACTIONS =========
   async function createDealFromForm(values) {
     const tipoId = values[CFG.F.TIPO_FIN] || "";
     const stage = initialStageForTipo(tipoId);
@@ -532,7 +428,7 @@ for (const st of S.stages) {
           </div>
         </div>
 
-        <div class="fin-hint">Isso também move a etapa para “PAGA/RECEBIDA” conforme o tipo.</div>
+        <div class="fin-hint">Isso move a etapa para “PAGA/RECEBIDA” conforme o tipo.</div>
 
         <div class="fin-row fin-row--right">
           <button class="fin-btn" data-close="1">Cancelar</button>
@@ -557,7 +453,6 @@ for (const st of S.stages) {
         };
 
         // tenta setar status financeiro por nome (se existir enum compatível)
-        // para despesa: PAGO; receita: RECEBIDO
         const tipoTxt = (enumName(CFG.F.TIPO_FIN, tipo) || "").toUpperCase();
         if (tipoTxt.includes("DESP")) {
           const idPago = enumIdByValue(CFG.F.STATUS_FIN, "PAGO") || enumIdByValue(CFG.F.STATUS_FIN, "PAGA");
@@ -589,7 +484,7 @@ for (const st of S.stages) {
         <button class="fin-x" data-close="1">×</button>
       </div>
       <div class="fin-modal-body">
-        <div class="fin-hint">Isso move o negócio para a etapa <b>${esc(CFG.STAGE_NAMES.CANCELADO)}</b>.</div>
+        <div class="fin-hint">Isso move o negócio para a etapa <b>CANCELADO</b>.</div>
         <div class="fin-row fin-row--right">
           <button class="fin-btn" data-close="1">Voltar</button>
           <button class="fin-btn fin-btn--danger" id="c-ok" data-busylock="1">Cancelar</button>
@@ -600,9 +495,7 @@ for (const st of S.stages) {
     m.q("#c-ok").addEventListener("click", async () => {
       try {
         setLoading(true);
-        const st = stageIdByName(CFG.STAGE_NAMES.CANCELADO);
-        if (!st) throw new Error("Stage CANCELADO não encontrado.");
-        await updateDeal(deal.ID, { STAGE_ID: st });
+        await updateDeal(deal.ID, { STAGE_ID: CFG.STAGES.CANCELADO });
         toast("Cancelado ✅");
         m.close();
         await refresh();
@@ -612,6 +505,14 @@ for (const st of S.stages) {
         setLoading(false);
       }
     });
+  }
+
+  function enumIdByValue(fieldId, valueText) {
+    if (!valueText) return "";
+    const list = S.enums?.[fieldId]?.items || [];
+    const target = String(valueText).trim().toUpperCase();
+    const it = list.find(x => String(x.VALUE || "").trim().toUpperCase() === target);
+    return it ? String(it.ID) : "";
   }
 
   function openEditModal(deal) {
@@ -795,6 +696,7 @@ for (const st of S.stages) {
             <div class="fin-sub">
               Pipeline 27 • Deals • <span id="fin-lastsync">—</span>
               <span id="fin-loading" class="fin-loading" style="display:none">Carregando…</span>
+              <span class="fin-loading" style="margin-left:8px">CONCLUÍDO fica oculto por padrão</span>
             </div>
           </div>
 
@@ -849,7 +751,7 @@ for (const st of S.stages) {
           <div class="fin-field">
             <label>Etapa</label>
             <select id="f-stage">
-              <option value="">— Todos —</option>
+              <option value="">— Todos (exceto CONCLUÍDO) —</option>
               ${S.stages.map(s => `<option value="${esc(s.STATUS_ID)}">${esc(s.NAME)}</option>`).join("")}
             </select>
           </div>
@@ -880,12 +782,10 @@ for (const st of S.stages) {
       </div>
     `;
 
-    // bind header buttons
     el("#btn-new").addEventListener("click", () => openEditModal(null));
     el("#btn-refresh").addEventListener("click", refresh);
     el("#btn-csv").addEventListener("click", exportCSV);
 
-    // bind filters
     const fq = el("#f-q");
     fq.addEventListener("input", () => {
       S.filters.q = fq.value || "";
@@ -950,7 +850,6 @@ for (const st of S.stages) {
       `;
     }).join("");
 
-    // bind row actions
     tb.querySelectorAll("button[data-act]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-id");
@@ -985,14 +884,12 @@ for (const st of S.stages) {
     if (ls && S.lastSyncAt) ls.textContent = `Atualizado em ${S.lastSyncAt}`;
   }
 
-  // ========= REFRESH =========
   async function refresh() {
     try {
       setLoading(true);
       const all = await listDealsAll();
       S.deals = all || [];
 
-      // sync timestamp
       const dt = new Date();
       const hh = String(dt.getHours()).padStart(2, "0");
       const mm = String(dt.getMinutes()).padStart(2, "0");
@@ -1011,7 +908,6 @@ for (const st of S.stages) {
     }
   }
 
-  // ========= BOOT =========
   async function boot() {
     root.innerHTML = `
       <div class="fin-app fin-app--boot">
