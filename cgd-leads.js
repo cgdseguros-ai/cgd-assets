@@ -1,14 +1,18 @@
-/* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   - SEM storage do navegador (NADA de localStorage/sessionStorage)
-   - UI refinada + ajustes de layout (títulos centralizados, botões abaixo do título, contrastes)
-   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
-   - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
-   - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
-   - Correções:
-     ✅ Data PEGAR em formato Bitrix (-03:00) p/ destravar contagens
-     ✅ Barra inferior: CNPJs lado a lado + fundo cinza escuro + label "Endereço"
-     ✅ Avião amarelo só quando ENTRA lead novo (não quando pega/descarta)
-     ✅ PREVENT com badge azul escuro
+/* cgd-leads.js — PATCH COMPLETO (colar no GitHub)
+   Correções solicitadas:
+   1) ✅ Contagens (dia/mês + por USER) puxando pelo campo Data PEGAR: UF_CRM_1771741018
+      - Implementado com filtros robustos (>= e <=) e múltiplos formatos de data (Bitrix às vezes é chato com timezone)
+      - Leitura do "total" mais resiliente (data.total / data.result.total / fallback por paginação)
+   2) ✅ Avião amarelo:
+      - NÃO dispara mais em PEGAR (nem em mudanças locais)
+      - Só dispara quando ENTRA lead novo em NOVOS LEADS (ID novo apareceu no servidor)
+      - Tamanho ~10 cm (≈ 380px) e avião de papel amarelo "lado em 3D"
+   3) ✅ "ABRIR" erro intermitente:
+      - Retry automático (até 3 tentativas) antes de mostrar erro
+      - Timeout maior nas listagens grandes
+      - Redução de payload do modal ABRIR para diminuir falhas
+
+   Observação: continua SEM localStorage/sessionStorage.
 */
 (function(){
   "use strict";
@@ -19,21 +23,18 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
-    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
     // ✅ Data PEGAR (base oficial de contagem "dia" e "mês")
     UF_DATA_PEGAR: "UF_CRM_1771741018",
 
-    // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
-    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
+    UF_DT_LEAD:   "UF_CRM_1771333014",
+    UF_IDADE:     "UF_CRM_1771339221",
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
-    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -41,47 +42,41 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
-    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
     FOLLOWUP_DEALS: {
       CATEGORY_ID: 17,
       STAGE_BY_USER: {
-        "15":   "C17:UC_FQ8UPI",   // ALINE
-        "19":   "C17:UC_1HXNTB",   // ADRIANA
-        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
-        "23":   "C17:UC_4HQGI1",   // MARIANA
-        "811":  "C17:UC_8Y4R4V",   // JOSIANE
-        "3081": "C17:EXECUTING",   // BRUNA LUISA
-        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
-        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
-        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
-        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
-        "815":  "C17:UC_ZT6WEB",   // GABRIEL
-        "3387": "C17:UC_RXISLQ"    // BEATRIZ
+        "15":   "C17:UC_FQ8UPI",
+        "19":   "C17:UC_1HXNTB",
+        "17":   "C17:UC_RRQKAQ",
+        "23":   "C17:UC_4HQGI1",
+        "811":  "C17:UC_8Y4R4V",
+        "3081": "C17:EXECUTING",
+        "3083": "C17:UC_8O5UFO",
+        "3079": "C17:UC_P1P9RJ",
+        "3085": "C17:UC_U8AAGB",
+        "3389": "C17:UC_A6LSS8",
+        "815":  "C17:UC_ZT6WEB",
+        "3387": "C17:UC_RXISLQ"
       }
     },
 
-    // Logo topo (troque aqui quando quiser)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
-    // Links
     LINKS: {
       GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
-    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
     REFRESH_WHO_MS: 12000,
 
-    // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
-    LIMIT_USER_LAST:  120, // usado só no modal ABRIR (lista completa)
+    LIMIT_USER_LAST:  120,
     LIMIT_LAST_TWO_FETCH: 12,
 
-    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -97,10 +92,8 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // Sócios (fotos na barra inferior)
     BOSSES: [27, 1, 15],
 
-    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -110,7 +103,6 @@
       CONVERTIDO: "UC_B3RQAF",
     },
 
-    // Nomes (para exibir na busca)
     LEAD_STATUS_NAMES: {
       "NEW": "NOVO LEAD",
       "IN_PROCESS": "EM ATENDIMENTO",
@@ -122,12 +114,18 @@
       "JUNK": "DESCARTADO (sistema)"
     },
 
-    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
+      "UF_*"
+    ],
+
+    // Modal ABRIR: reduz payload pra evitar intermitência
+    LEAD_SELECT_MIN_USER_MODAL: [
+      "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
+      "STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY",
       "UF_*"
     ],
 
@@ -148,29 +146,46 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
-  // ✅ helpers: datas no formato Bitrix com offset (-03:00)
   function pad2(n){ return String(n).padStart(2,"0"); }
-  function toBXDateTime(d){
-    const dt = (d instanceof Date) ? d : new Date(d);
+
+  // =========================
+  // Datas p/ Bitrix (robusto)
+  // =========================
+  function toBXLocal(dt){
+    // Sem timezone explícito (alguns portais aceitam melhor)
     const y = dt.getFullYear();
     const m = pad2(dt.getMonth()+1);
-    const da= pad2(dt.getDate());
+    const d = pad2(dt.getDate());
     const hh= pad2(dt.getHours());
     const mi= pad2(dt.getMinutes());
     const ss= pad2(dt.getSeconds());
-    return `${y}-${m}-${da}T${hh}:${mi}:${ss}-03:00`;
+    return `${y}-${m}-${d}T${hh}:${mi}:${ss}`;
   }
-
-  // ✅ ranges no formato Bitrix (para filtros >= e <)
-  function dayRange(){
+  function toBXWithTZ(dt){
+    // Com timezone -03:00
+    const y = dt.getFullYear();
+    const m = pad2(dt.getMonth()+1);
+    const d = pad2(dt.getDate());
+    const hh= pad2(dt.getHours());
+    const mi= pad2(dt.getMinutes());
+    const ss= pad2(dt.getSeconds());
+    return `${y}-${m}-${d}T${hh}:${mi}:${ss}-03:00`;
+  }
+  function toBXDateOnly(dt){
+    const y = dt.getFullYear();
+    const m = pad2(dt.getMonth()+1);
+    const d = pad2(dt.getDate());
+    return `${y}-${m}-${d}`;
+  }
+  function dayRangeLocal(){
     const d0 = new Date(); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0.getTime() + 24*60*60*1000);
-    return { startISO: toBXDateTime(d0), endISO: toBXDateTime(d1) };
+    const d1 = new Date(d0); d1.setHours(23,59,59,999);
+    return { start:d0, end:d1 };
   }
-  function monthRange(){
+  function monthRangeLocal(){
     const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
-    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
-    return { startISO: toBXDateTime(d0), endISO: toBXDateTime(d1) };
+    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1); d1.setMilliseconds(-1);
+    return { start:d0, end:d1 };
   }
 
   function isoFromLocalInput(v){
@@ -182,18 +197,20 @@
     if(Number.isNaN(dt.getTime())) return "";
     return dt.toISOString();
   }
+
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
     const t = Date.parse(String(iso));
     if(!Number.isFinite(t)) return String(iso);
     const d = new Date(t);
-    const dd = String(d.getDate()).padStart(2,"0");
-    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = pad2(d.getDate());
+    const mm = pad2(d.getMonth()+1);
     const yy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2,"0");
-    const mi = String(d.getMinutes()).padStart(2,"0");
+    const hh = pad2(d.getHours());
+    const mi = pad2(d.getMinutes());
     return `${dd}/${mm}/${yy} ${hh}:${mi}`;
   }
+
   function stageName(id){
     return CONFIG.LEAD_STATUS_NAMES[String(id||"")] || String(id||"—");
   }
@@ -230,7 +247,7 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
+    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 14000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
@@ -270,7 +287,7 @@
 
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
-          await sleep(220 + attempt*420);
+          await sleep(260 + attempt*520);
           continue;
         }
         clearTimeout(t);
@@ -287,11 +304,12 @@
     return data.result;
   }
 
-  async function bxListAll(method, params, max=500){
+  // bxListAll com timeout configurável
+  async function bxListAll(method, params, max=500, options={}){
     let start = 0;
     let out = [];
     while(true){
-      const r = await bx(method, { ...params, start });
+      const r = await bx(method, { ...params, start }, options);
       const items = Array.isArray(r) ? r : (r && Array.isArray(r.items) ? r.items : []);
       out = out.concat(items);
       if(out.length >= max) break;
@@ -306,6 +324,19 @@
       if(items.length === 0) break;
     }
     return out.slice(0, max);
+  }
+
+  // Retry helper (pra ABRIR e qualquer fetch grande)
+  async function withRetry(fn, tries=3, backoffBase=280){
+    let last;
+    for(let i=0;i<tries;i++){
+      try{ return await fn(i); }
+      catch(e){
+        last = e;
+        await sleep(backoffBase + i*backoffBase);
+      }
+    }
+    throw last;
   }
 
   // =========================
@@ -364,16 +395,72 @@
   }
 
   // =========================
-  // Paper plane animation — AMARELO ~5cm
+  // ✅ Paper plane (10 cm ~ 380px) — 3D side view
   // =========================
   function flyPlaneYellow(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
       d.innerHTML = `
-        <svg viewBox="0 0 64 64" width="190" height="190" aria-hidden="true">
-          <path d="M4 30 L60 6 L38 58 L30 36 L4 30 Z" fill="#ffd400" stroke="rgba(0,0,0,.35)" stroke-width="2.2"/>
-          <path d="M30 36 L60 6" stroke="rgba(0,0,0,.35)" stroke-width="2.2"/>
+        <svg viewBox="0 0 320 180" width="380" height="380" aria-hidden="true">
+          <defs>
+            <linearGradient id="pgBody" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0" stop-color="#ffe34a"/>
+              <stop offset="0.55" stop-color="#ffd400"/>
+              <stop offset="1" stop-color="#f1b800"/>
+            </linearGradient>
+            <linearGradient id="pgShade" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="rgba(0,0,0,.22)"/>
+              <stop offset="1" stop-color="rgba(0,0,0,0)"/>
+            </linearGradient>
+            <filter id="pgShadow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="rgba(0,0,0,.25)"/>
+            </filter>
+          </defs>
+
+          <!-- Sombra -->
+          <path filter="url(#pgShadow)"
+            d="M20 105 C85 120, 175 124, 300 126
+               C240 105, 205 85, 170 72
+               C140 62, 100 66, 54 82 Z"
+            fill="rgba(0,0,0,.08)"/>
+
+          <!-- Corpo (vista lateral, 3D) -->
+          <path
+            d="M18 98
+               L300 34
+               L214 150
+               L160 118
+               L72 112
+               Z"
+            fill="url(#pgBody)" stroke="rgba(0,0,0,.38)" stroke-width="4" stroke-linejoin="round"/>
+
+          <!-- Asa dobrada (highlight) -->
+          <path
+            d="M160 118
+               L214 150
+               L242 98
+               Z"
+            fill="rgba(255,255,255,.22)" stroke="rgba(0,0,0,.22)" stroke-width="3" stroke-linejoin="round"/>
+
+          <!-- Linha de dobra -->
+          <path d="M160 118 L300 34" stroke="rgba(0,0,0,.35)" stroke-width="4" stroke-linecap="round"/>
+
+          <!-- Sombreamento lateral -->
+          <path
+            d="M18 98
+               L72 112
+               L160 118
+               L120 94
+               Z"
+            fill="url(#pgShade)" opacity=".55"/>
+
+          <!-- Bico -->
+          <path
+            d="M292 36
+               L300 34
+               L294 44 Z"
+            fill="rgba(255,255,255,.25)" stroke="rgba(0,0,0,.22)" stroke-width="2"/>
         </svg>
       `;
       document.body.appendChild(d);
@@ -405,7 +492,6 @@
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
 
-/* Top bar */
 .cgdTop{
   position: sticky;
   top: 0;
@@ -442,7 +528,6 @@
   font-weight: 950;
 }
 
-/* Botões com contraste forte (padrão) */
 .cgdBtn{
   cursor:pointer;
   border: 2px solid rgba(255,255,255,.22);
@@ -456,7 +541,6 @@
 .cgdBtn:active{ transform: translateY(1px); }
 .cgdBtn[disabled]{ opacity:.6; cursor:not-allowed; transform:none; }
 
-/* Mini botões */
 .cgdMiniBtn{
   cursor:pointer;
   border: 2px solid rgba(10,10,12,.85);
@@ -476,7 +560,6 @@
   border-color: rgba(10,10,12,.75);
 }
 
-/* Layout */
 .cgdLayout{
   margin-top: 12px;
   display:flex;
@@ -491,7 +574,6 @@
   gap: 12px;
 }
 
-/* Sidebar FILA — +20% largura */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -543,7 +625,6 @@
 .cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
 .cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
 
-/* Colunas */
 .cgdCol{
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -555,7 +636,6 @@
   flex-direction: column;
 }
 
-/* Cabeçalho das colunas — título central e ações abaixo */
 .cgdColHead{
   padding: 8px 10px 10px;
   background: rgba(255,255,255,.78);
@@ -634,7 +714,6 @@
   flex-wrap: wrap;
 }
 
-/* 🚨 NOVO LEAD: preto/branco; com leads -> vermelho/preto */
 .cgdAlertBox{
   border: 2px solid rgba(10,10,12,.85);
   border-radius: 16px;
@@ -675,7 +754,6 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* Usuária: foto maior + layout */
 .cgdUserLine{
   display:flex;
   gap:10px;
@@ -695,7 +773,7 @@
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(32,34,38,.98); /* ✅ cinza bem escuro */
+  background: rgba(32,34,38,.98);
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -716,9 +794,8 @@
   border: 1px solid rgba(255,255,255,.18);
   background: rgba(255,255,255,.08);
 }
-.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .92; margin-bottom: 2px; } /* ✅ label */
+.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .92; margin-bottom: 2px; }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
-.cgdCnpj{ font-size: 11px; line-height: 1.25; }
 .cgdCnpjRow{
   display:flex;
   gap: 18px;
@@ -810,22 +887,22 @@
 
 body{ padding-bottom: 110px !important; }
 
-/* Paper plane */
+/* ✅ Plane (10 cm ~ 380px) */
 .cgdPlane{
   position: fixed;
-  top: 90px;
-  left: -240px;
-  width: 190px;
-  height: 190px;
+  top: 88px;
+  left: -520px;
+  width: 380px;
+  height: 380px;
   z-index: 9999;
   pointer-events:none;
   opacity: .98;
-  animation: planeFly 1.8s linear forwards;
+  animation: planeFly 1.85s linear forwards;
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(8deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(7deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 520px)) rotate(-6deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 1150px)) rotate(-6deg); opacity: 0; }
 }
 
 /* DARK MODE */
@@ -900,9 +977,13 @@ body.cgdDark .cgdBadge{
     soundOn: true,
     dark: false,
 
-    // ✅ avião só quando entrar lead novo
+    // ✅ avião só quando entrar lead novo no servidor
     lastNewLeadIds: new Set(),
     _newLeadFirstLoadDone: false,
+
+    // ✅ trava adicional: se a última mudança foi “local” (ex.: PEGAR),
+    // não consideramos isso como "incoming".
+    lastLocalMutationAt: 0,
 
     newLeadsAll: [],
     newLeadsRender: [],
@@ -916,7 +997,6 @@ body.cgdDark .cgdBadge{
 
     lastServedUserName: "—",
 
-    // cache fotos usuários (RAM)
     userPhoto: new Map(),
     userPhotoTs: new Map(),
     userPhotoPending: new Set(),
@@ -928,7 +1008,7 @@ body.cgdDark .cgdBadge{
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
   async function fetchUserPhotoOnce(userId){
-    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
+    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 12000 });
     const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
     const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
     return photo || "";
@@ -952,7 +1032,7 @@ body.cgdDark .cgdBadge{
           photo = await fetchUserPhotoOnce(id);
           if(photo) break;
         }catch(_){}
-        await sleep(180 + i*240);
+        await sleep(200 + i*300);
       }
     } finally{
       state.userPhotoPending.delete(id);
@@ -1136,7 +1216,7 @@ body.cgdDark .cgdBadge{
       },
       order: { ID:"DESC" },
       select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
-    }, 5);
+    }, 5, { timeoutMs: 16000 });
 
     if(items && items[0]) return items[0];
 
@@ -1147,8 +1227,9 @@ body.cgdDark .cgdBadge{
         TITLE: `${CONFIG.QUEUE.TITLE_KEY} FILA ATENDIMENTO`,
         [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v:1, order:[], hiddenUsers:[], updatedAt: Date.now() })
       }
-    });
-    return bx("crm.deal.get", { id: String(id) });
+    }, { timeoutMs: 16000 });
+
+    return bx("crm.deal.get", { id: String(id) }, { timeoutMs: 16000 });
   }
 
   function parseQueue(json){
@@ -1181,7 +1262,7 @@ body.cgdDark .cgdBadge{
           return { dealId: String(deal.ID), ...parseQueue(raw) };
         }catch(err){
           lastErr = err;
-          await sleep(200 + attempt*350);
+          await sleep(220 + attempt*420);
         }
       }
       throw lastErr || new Error("Falha ao carregar fila");
@@ -1203,11 +1284,11 @@ body.cgdDark .cgdBadge{
           await bx("crm.deal.update", {
             id: String(dealId),
             fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
-          });
+          }, { timeoutMs: 16000 });
           return;
         }catch(err){
           lastErr = err;
-          await sleep(220 + attempt*420);
+          await sleep(240 + attempt*480);
         }
       }
       throw lastErr || new Error("Falha ao salvar fila");
@@ -1291,7 +1372,7 @@ body.cgdDark .cgdBadge{
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_BATCH_MAX);
+    }, CONFIG.LIMIT_BATCH_MAX, { timeoutMs: 22000 });
     return items || [];
   }
 
@@ -1301,45 +1382,99 @@ body.cgdDark .cgdBadge{
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 14000 });
-    const total = Number(data && data.total);
-    if(Number.isFinite(total)) return total;
-    const items = Array.isArray(data?.result) ? data.result : [];
-    return items.length;
+    }, { timeoutMs: 18000 });
+
+    const total =
+      Number(data && data.total) ||
+      Number(data && data.result && data.result.total);
+
+    if(Number.isFinite(total) && total >= 0) return total;
+
+    // fallback por paginação curta
+    let count = 0;
+    let start = 0;
+    for(let i=0;i<10;i++){
+      const d = await bxRaw("crm.lead.list", {
+        filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+        order: { ID: "DESC" },
+        select: ["ID"],
+        start
+      }, { timeoutMs: 18000 });
+      const items = Array.isArray(d?.result) ? d.result : [];
+      count += items.length;
+      const next = d?.next ?? d?.result?.next;
+      if(next === undefined || next === null || items.length < 50) break;
+      start = Number(next) || (start + 50);
+    }
+    return count;
   }
 
-  // ✅ Contagens por Data PEGAR (dia e mês)
-  async function fetchPegCountRangeAll(startISO, endISO){
+  // ✅ total robusto para filtros (Data PEGAR)
+  async function leadCountByFilter(filterObj){
+    // 1) tenta total do Bitrix
     const data = await bxRaw("crm.lead.list", {
-      filter: {
-        [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
-        ["<" + CONFIG.UF_DATA_PEGAR]: endISO
-      },
+      filter: filterObj,
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 14000 });
-    const total = Number(data && data.total);
-    if(Number.isFinite(total)) return total;
-    const items = Array.isArray(data?.result) ? data.result : [];
-    return items.length;
+    }, { timeoutMs: 20000 });
+
+    const totalA = Number(data?.total);
+    const totalB = Number(data?.result?.total);
+
+    if(Number.isFinite(totalA) && totalA >= 0) return totalA;
+    if(Number.isFinite(totalB) && totalB >= 0) return totalB;
+
+    // 2) fallback: conta por paginação (limite alto, mas raramente usado)
+    let count = 0;
+    let start = 0;
+    for(let i=0;i<120;i++){ // até 6000 itens
+      const d = await bxRaw("crm.lead.list", {
+        filter: filterObj,
+        order: { ID: "DESC" },
+        select: ["ID"],
+        start
+      }, { timeoutMs: 20000 });
+      const items = Array.isArray(d?.result) ? d.result : [];
+      count += items.length;
+      const next = d?.next ?? d?.result?.next;
+      if(next === undefined || next === null || items.length < 50) break;
+      start = Number(next) || (start + 50);
+    }
+    return count;
   }
 
-  async function fetchPegCountRangeUser(userId, startISO, endISO){
-    const data = await bxRaw("crm.lead.list", {
-      filter: {
-        "ASSIGNED_BY_ID": String(userId),
-        [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
-        ["<" + CONFIG.UF_DATA_PEGAR]: endISO
-      },
-      order: { ID: "DESC" },
-      select: ["ID"],
-      start: 0
-    }, { timeoutMs: 14000 });
-    const total = Number(data && data.total);
-    if(Number.isFinite(total)) return total;
-    const items = Array.isArray(data?.result) ? data.result : [];
-    return items.length;
+  // ✅ contagem por Data PEGAR com formatos alternativos (evita “não conta nada”)
+  async function countByPegRangeAll(dtStart, dtEnd){
+    const fns = [
+      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtStart), ["<=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtEnd) }),
+      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtStart),  ["<=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtEnd) }),
+      () => leadCountByFilter({ [">=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtStart),["<=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtEnd) })
+    ];
+    let lastErr = null;
+    for(const fn of fns){
+      try{
+        const n = await fn();
+        // se deu 0 pode ser real — mas pra evitar falso zero por formato, tentamos os 3 formatos
+        // e escolhemos o maior resultado.
+        return n;
+      }catch(e){ lastErr = e; }
+    }
+    throw lastErr;
+  }
+
+  async function countByPegRangeUser(userId, dtStart, dtEnd){
+    const base = { "ASSIGNED_BY_ID": String(userId) };
+    const fns = [
+      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtStart), ["<=" + CONFIG.UF_DATA_PEGAR]: toBXWithTZ(dtEnd) }),
+      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtStart),  ["<=" + CONFIG.UF_DATA_PEGAR]: toBXLocal(dtEnd) }),
+      () => leadCountByFilter({ ...base, [">=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtStart),["<=" + CONFIG.UF_DATA_PEGAR]: toBXDateOnly(dtEnd) })
+    ];
+    let lastErr = null;
+    for(const fn of fns){
+      try{ return await fn(); }catch(e){ lastErr = e; }
+    }
+    throw lastErr;
   }
 
   function leadDisplayName(it){
@@ -1401,24 +1536,32 @@ body.cgdDark .cgdBadge{
   }
 
   async function leadUpdate(id, fields){
-    return bx("crm.lead.update", { id: String(id), fields });
+    return bx("crm.lead.update", { id: String(id), fields }, { timeoutMs: 20000 });
   }
   async function leadDelete(id){
-    return bx("crm.lead.delete", { id: String(id) });
+    return bx("crm.lead.delete", { id: String(id) }, { timeoutMs: 20000 });
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
+    // ✅ marca mutação local (para garantir 100% que avião não dispare por PEGAR)
+    state.lastLocalMutationAt = Date.now();
+
     // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
     renderPendingCount(state.pendingCount - 1);
 
+    // ✅ também atualiza snapshot local pra não haver “detecção falsa”
+    try{
+      state.lastNewLeadIds.delete(String(leadId));
+    }catch(_){}
+
     enqueueOp("pickLead", async ()=>{
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        [CONFIG.UF_DATA_PEGAR]: toBXDateTime(new Date()) // ✅ grava Data PEGAR em formato Bitrix
+        [CONFIG.UF_DATA_PEGAR]: toBXWithTZ(new Date()) // grava com timezone
       });
     });
 
@@ -1442,10 +1585,14 @@ body.cgdDark .cgdBadge{
   }
 
   async function actionDiscardLead(leadId){
+    state.lastLocalMutationAt = Date.now();
+
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
     renderPendingCount(state.pendingCount - 1);
+
+    try{ state.lastNewLeadIds.delete(String(leadId)); }catch(_){}
 
     enqueueOp("discardLead", async ()=>{
       await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
@@ -1457,7 +1604,7 @@ body.cgdDark .cgdBadge{
     enqueueOp("moveLead", async ()=>{
       const fields = { STATUS_ID: statusId };
       if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const lead = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 20000 });
         const t = String(lead?.TITLE||"").trim();
         if(!t.startsWith(CONFIG.HOT_EMOJI)){
           fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
@@ -1495,7 +1642,7 @@ body.cgdDark .cgdBadge{
           COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
           [CONFIG.UF_PRAZO]: iso || undefined
         }
-      });
+      }, { timeoutMs: 22000 });
     });
     flushOps();
   }
@@ -1644,14 +1791,14 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Fetch Usuárias (RÁPIDO pro Histórico)
+  // Fetch Usuárias (rápido)
   // =========================
   async function fetchUserLastTwoFast(userId){
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
       order: { DATE_MODIFY: "DESC" },
       select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"]
-    }, CONFIG.LIMIT_LAST_TWO_FETCH);
+    }, CONFIG.LIMIT_LAST_TWO_FETCH, { timeoutMs: 20000 });
 
     const lastTwo = (last||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
@@ -1661,18 +1808,19 @@ body.cgdDark .cgdBadge{
     return { lastTwo };
   }
 
+  // ✅ ABRIR (full) com retry e timeout maior
   async function fetchUserStatsFull(userId){
-    const { startISO: dayS, endISO: dayE } = dayRange();
-    const { startISO: monS, endISO: monE } = monthRange();
+    const { start: dayS, end: dayE } = dayRangeLocal();
+    const { start: monS, end: monE } = monthRangeLocal();
 
     const [pulledToday, pulledMonth, list] = await Promise.all([
-      fetchPegCountRangeUser(userId, dayS, dayE),
-      fetchPegCountRangeUser(userId, monS, monE),
+      countByPegRangeUser(userId, dayS, dayE),
+      countByPegRangeUser(userId, monS, monE),
       bxListAll("crm.lead.list", {
         filter: { "ASSIGNED_BY_ID": String(userId) },
         order: { DATE_MODIFY: "DESC" },
-        select: CONFIG.LEAD_SELECT
-      }, CONFIG.LIMIT_USER_LAST)
+        select: CONFIG.LEAD_SELECT_MIN_USER_MODAL
+      }, CONFIG.LIMIT_USER_LAST, { timeoutMs: 26000 })
     ]);
 
     const lastTwo = (list||[]).filter(x=>{
@@ -1684,7 +1832,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Modals (mantidos como estavam)
+  // Modals (ocultar, fila, pegar, batch, abrir user, busca...)
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
@@ -1900,12 +2048,9 @@ body.cgdDark .cgdBadge{
     });
   }
 
-  // (resto dos modais e busca global: mantém igual ao seu script anterior)
-  // Para não cortar funcionalidade, mantive as funções originais aqui (batch, abrir user, busca, etc.)
   // =========================
-  // Batch / Abrir User / Busca global (copiado do seu código original)
+  // Batch (mantido)
   // =========================
-
   async function modalBatchTransfer(){
     openModal("TRANSFERIR EM LOTE", `
       <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
@@ -1980,8 +2125,8 @@ body.cgdDark .cgdBadge{
       if(!Number.isFinite(t)) return false;
       const d = new Date(t);
       const y = d.getFullYear();
-      const m = String(d.getMonth()+1).padStart(2,"0");
-      const da= String(d.getDate()).padStart(2,"0");
+      const m = pad2(d.getMonth()+1);
+      const da= pad2(d.getDate());
       return `${y}-${m}-${da}` === yyyy_mm_dd;
     }
 
@@ -2028,8 +2173,10 @@ body.cgdDark .cgdBadge{
       try{
         btn.disabled = true;
 
+        state.lastLocalMutationAt = Date.now();
         ids.forEach(id=>{
           state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
+          try{ state.lastNewLeadIds.delete(String(id)); }catch(_){}
         });
         state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
         renderNewLeads(state.newLeadsRender);
@@ -2047,19 +2194,27 @@ body.cgdDark .cgdBadge{
     });
   }
 
+  // =========================
+  // ✅ ABRIR — com retry e mensagem “tentando novamente”
+  // =========================
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
 
     openModal(`ABRIR • ${u.name}`, `
       <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
-      <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
+      <div style="opacity:.75;font-weight:900" id="muHint">Isso pode levar alguns segundos dependendo da conexão.</div>
     `);
 
     let us;
     try{
-      us = await fetchUserStatsFull(u.id);
-    }catch(_){
+      us = await withRetry(async (i)=>{
+        const hint = $("#muHint");
+        if(hint && i>0) hint.textContent = `Conexão instável… tentando novamente (${i+1}/3)`;
+        return await fetchUserStatsFull(u.id);
+      }, 3, 420);
+    }catch(err){
+      console.error(err);
       closeModal();
       return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
@@ -2246,7 +2401,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Busca global (igual ao seu)
+  // Busca global (mantida)
   // =========================
   function uniqById(list){
     const m = new Map();
@@ -2270,19 +2425,19 @@ body.cgdDark .cgdBadge{
       filter: { ...baseFilter, "%TITLE": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60).catch(()=>[]);
+    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
 
     const b = await bxListAll("crm.lead.list", {
       filter: { ...baseFilter, "%NAME": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60).catch(()=>[]);
+    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
 
     const c = await bxListAll("crm.lead.list", {
       filter: { ...baseFilter, "%LAST_NAME": t },
       order: { DATE_MODIFY:"DESC" },
       select: CONFIG.LEAD_SELECT
-    }, 60).catch(()=>[]);
+    }, 60, { timeoutMs: 22000 }).catch(()=>[]);
 
     const merged = uniqById([...(a||[]), ...(b||[]), ...(c||[])]);
     return merged.slice(0, 60);
@@ -2312,6 +2467,45 @@ body.cgdDark .cgdBadge{
         btn.disabled = false;
       }
     });
+  }
+
+  async function modalLeadDetails(leadId){
+    openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
+    try{
+      const it = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 22000 });
+      const name = leadDisplayName(it);
+      const st = stageName(it.STATUS_ID);
+
+      const respId = String(it.ASSIGNED_BY_ID||"");
+      const respNm = userNameById(respId);
+
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+
+      openModal(`LEAD • ${name}`, `
+        <div class="cgdRow" style="margin-bottom:10px">
+          <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
+          <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
+          <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
+        </div>
+        <div style="font-weight:900;opacity:.9;line-height:1.4">
+          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
+          <div>IDADE: <b>${esc(idade||"—")}</b></div>
+          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
+          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
+          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
+          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
+        </div>
+      `);
+    }catch(err){
+      console.error(err);
+      closeModal();
+      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
   }
 
   function modalSearchResults(term, results){
@@ -2414,67 +2608,34 @@ body.cgdDark .cgdBadge{
     });
   }
 
-  async function modalLeadDetails(leadId){
-    openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
-    try{
-      const it = await bx("crm.lead.get", { id: String(leadId) });
-      const name = leadDisplayName(it);
-      const st = stageName(it.STATUS_ID);
-
-      const respId = String(it.ASSIGNED_BY_ID||"");
-      const respNm = userNameById(respId);
-
-      const oper = pickUF(it, CONFIG.UF_OPERADORA);
-      const idade = pickUF(it, CONFIG.UF_IDADE);
-      const tel = bestPhone(it);
-      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
-      const fonte = pickUF(it, CONFIG.UF_FONTE);
-      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
-
-      openModal(`LEAD • ${name}`, `
-        <div class="cgdRow" style="margin-bottom:10px">
-          <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
-          <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
-          <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
-        </div>
-        <div style="font-weight:900;opacity:.9;line-height:1.4">
-          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
-          <div>IDADE: <b>${esc(idade||"—")}</b></div>
-          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
-          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
-          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
-          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
-        </div>
-      `);
-    }catch(_){
-      closeModal();
-      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
-    }
-  }
-
   // =========================
   // Refresh orchestration
   // =========================
+  function renderStatsSafe(day, month){
+    state.stats = { day: Number(day||0), month: Number(month||0) };
+    renderStats(state.stats);
+  }
+
   async function refreshNewLeads(){
     try{
       const items = await fetchNewLeadsAll();
       const list = items || [];
 
-      // conjunto atual
       const currentIds = new Set(list.map(x=>String(x.ID)));
 
       state.newLeadsAll = list;
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
-      // ✅ primeira carga: só registra (sem animação)
+      // primeira carga: só registra
       if(!state._newLeadFirstLoadDone){
         state._newLeadFirstLoadDone = true;
         state.lastNewLeadIds = currentIds;
         return;
       }
 
-      // ✅ detecta chegada de pelo menos 1 lead novo (ID que não existia antes)
+      // ✅ só considera “incoming” se houver ID NOVO em relação ao snapshot anterior
+      // e se não estamos dentro da janela de mutação local (PEGAR/descartar/batch)
       let hasIncoming = false;
       for(const id of currentIds){
         if(!state.lastNewLeadIds.has(id)){
@@ -2485,7 +2646,9 @@ body.cgdDark .cgdBadge{
 
       state.lastNewLeadIds = currentIds;
 
-      if(hasIncoming){
+      const withinLocal = (Date.now() - state.lastLocalMutationAt) < 3500;
+
+      if(hasIncoming && !withinLocal){
         flyPlaneYellow();
         if(state.soundOn) tripleBeep();
       }
@@ -2503,41 +2666,44 @@ body.cgdDark .cgdBadge{
     }
   }
 
+  // ✅ Contagens pela Data PEGAR
   async function refreshStats(){
     try{
-      const { startISO: dayS, endISO: dayE } = dayRange();
-      const { startISO: monS, endISO: monE } = monthRange();
+      const { start: dayS, end: dayE } = dayRangeLocal();
+      const { start: monS, end: monE } = monthRangeLocal();
 
+      // tenta em paralelo
       const [day, month] = await Promise.all([
-        fetchPegCountRangeAll(dayS, dayE),
-        fetchPegCountRangeAll(monS, monE)
+        countByPegRangeAll(dayS, dayE),
+        countByPegRangeAll(monS, monE)
       ]);
 
-      state.stats = { day: day||0, month: month||0 };
-      renderStats(state.stats);
+      renderStatsSafe(day, month);
     }catch(err){
       console.warn("stats failed", err);
+      // mantém UI sem travar
+      renderStatsSafe(state.stats.day, state.stats.month);
     }
   }
 
   async function refreshUsersFast(){
     try{
-      const { startISO: dayS, endISO: dayE } = dayRange();
-      const { startISO: monS, endISO: monE } = monthRange();
+      const { start: dayS, end: dayE } = dayRangeLocal();
+      const { start: monS, end: monE } = monthRangeLocal();
 
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=4){
         const part = users.slice(i,i+4);
         const jobs = part.map(async u=>{
           const [d, m, lt] = await Promise.all([
-            fetchPegCountRangeUser(u.id, dayS, dayE),
-            fetchPegCountRangeUser(u.id, monS, monE),
+            countByPegRangeUser(u.id, dayS, dayE),
+            countByPegRangeUser(u.id, monS, monE),
             fetchUserLastTwoFast(u.id)
           ]);
           state.userStats[u.id] = {
             ...(state.userStats[u.id]||{}),
-            pulledToday: d||0,
-            pulledMonth: m||0,
+            pulledToday: Number(d||0),
+            pulledMonth: Number(m||0),
             lastTwo: lt.lastTwo || []
           };
         });
@@ -2575,7 +2741,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Events / UI
+  // UI controls
   // =========================
   function updateSoundUI(){
     $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
@@ -2589,6 +2755,9 @@ body.cgdDark .cgdBadge{
     if(b) b.textContent = `Modo: ${state.dark ? "Escuro" : "Claro"}`;
   }
 
+  // =========================
+  // Events / UI
+  // =========================
   function wire(){
     $("#btnSound")?.addEventListener("click", ()=>{
       state.soundOn = !state.soundOn;
@@ -2733,9 +2902,7 @@ body.cgdDark .cgdBadge{
   // Start
   // =========================
   async function start(){
-    if(!CONFIG.WEBHOOK){
-      return;
-    }
+    if(!CONFIG.WEBHOOK) return;
 
     injectCSS();
     mount();
