@@ -2876,5 +2876,4 @@ body.cgdDark .cgdBadge{
   }else{
     start();
   }
-
 })();
