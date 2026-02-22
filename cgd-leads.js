@@ -1,8 +1,6 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - SEM storage do navegador (NADA de localStorage/sessionStorage)
    - Fila multi-PC e ocultar usuárias via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
-   - Layout/estética MANTIDOS (não alterar estética)
-   - Leads (crm.lead.*) — NOVO LEAD, EM ATENDIMENTO, QUALIFICADO, PERDIDO, CONVERTIDO
 */
 (function(){
   "use strict";
@@ -11,19 +9,21 @@
   // CONFIG — AJUSTE AQUI
   // =========================
   const CONFIG = {
-    // ✅ AGORA VIA CLOUDFLARE WORKER (proxy) — SEM expor webhook Bitrix no front
-    // Seu Worker vai receber /bx/<metodo> e repassar para o Bitrix
-    WEBHOOK: "https://painelleads.cgdseguros.workers.dev/bx/",
+    WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
     // Campo UF usado no Follow-up (no LEAD)
-    UF_PRAZO: "UF_CRM_1768175087",
+    UF_PRAZO_LEAD: "UF_CRM_1768175087",
+
+    // Campo UF usado no Follow-up (no DEAL da Pipeline 17) — se existir
+    UF_PRAZO_DEAL: "UF_CRM_1768175087",
 
     // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead
     UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
+    UF_TELEFONE:  "UF_CRM_1771282207", // ✅ telefone UF
 
     // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
@@ -36,7 +36,6 @@
     // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
     FOLLOWUP_DEALS: {
       CATEGORY_ID: 17,
-      // STAGE_ID por usuária (coluna da usuária)
       STAGE_BY_USER: {
         "15":   "C17:UC_FQ8UPI",   // ALINE
         "19":   "C17:UC_1HXNTB",   // ADRIANA
@@ -53,27 +52,27 @@
       }
     },
 
-    // Logo (+30% em cima do que já estava)
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/c77325321d1ad38e8012b995a5f4e8dd/showFile/?&token=e6lxlp1bz9nz",
+    // ✅ Topo: logo nova
+    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
-    // Links GET (equipes)
-    GET_LINKS: {
-      "DELTA": "https://getcgdcorretora.bitrix24.site/equipedelta/",
-      "BETA":  "https://getcgdcorretora.bitrix24.site/equipebeta/",
-      "ALPHA": "https://getcgdcorretora.bitrix24.site/equipeALPHA/"
-    },
+    // ✅ GET Equipes (URL única)
+    GET_EQUIPES_URL: "https://getcgdcorretora.bitrix24.site/tfequipes/",
 
-    // Refresh (mantendo seus tempos)
+    // ✅ Sócios na barra inferior (fotos)
+    SOCIOS: [27, 1, 15],
+
+    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 7000,
-    // ✅ MAIS AGRESSIVO para refletir fila mais rápido nos PCs (sem realtime)
-    REFRESH_QUEUE_MS: 1200,
-    REFRESH_WHO_MS: 6000,
+
+    // ✅ fila mais rápida (sem realtime)
+    REFRESH_QUEUE_MS: 900,     // <- era 2500 (mais lento)
+    REFRESH_WHO_MS: 3000,      // <- era 6000 (mais lento)
 
     // Limites
-    LIMIT_NEW_RENDER: 30,          // renderiza 30 (visual), mas busca/conta mais no background
-    LIMIT_BATCH_MAX:  600,         // transferir lote (puxa até 600 pendentes)
-    LIMIT_USER_LAST:  120,         // histórico por usuária (2 últimos + lista p/ abrir)
+    LIMIT_NEW_RENDER: 30,
+    LIMIT_BATCH_MAX:  600,
+    LIMIT_USER_LAST:  140,
 
     // Usuárias do painel
     USERS: [
@@ -91,16 +90,17 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
-    // ✅ Status/Stages de LEADS (seus IDs reais)
+    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
+      // ⚠️ PREENCHA AQUI O STAGE “ATENDIDO”
+      ATENDIDO: "",
       QUALIFICADO: "UC_0NFA3H",
       PERDIDO: "UC_5IMTI4",
       CONVERTIDO: "UC_B3RQAF",
     },
 
-    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
@@ -113,7 +113,7 @@
   };
 
   // =========================
-  // Helpers DOM
+  // Helpers
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
@@ -122,9 +122,7 @@
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
 
-  function nowBRTime(){
-    try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
-  }
+  function nowBRTime(){ try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; } }
   function todayISOStart(){
     const d = new Date(); d.setHours(0,0,0,0);
     const y = d.getFullYear();
@@ -155,7 +153,24 @@
     const dd = String(d.getDate()).padStart(2,"0");
     const mm = String(d.getMonth()+1).padStart(2,"0");
     const yy = d.getFullYear();
-    return `${dd}/${mm}/${yy}`;
+    const hh = String(d.getHours()).padStart(2,"0");
+    const mi = String(d.getMinutes()).padStart(2,"0");
+    return `${dd}/${mm}/${yy} ${hh}:${mi}`;
+  }
+
+  function pickUF(it, key){
+    try{
+      return it && Object.prototype.hasOwnProperty.call(it, key) ? it[key] : (it ? it[key] : "");
+    }catch(_){ return ""; }
+  }
+
+  function leadDisplayName(it){
+    const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
+    if(nm) return nm;
+    const t = String(it.TITLE||"").trim();
+    if(t && !/^Lead\s*#\d+$/i.test(t)) return t;
+    if(t) return t;
+    return `Lead #${it.ID}`;
   }
 
   // =========================
@@ -182,7 +197,6 @@
     return out;
   }
 
-  // ✅ chamadas resilientes (timeout + retry leve)
   async function bx(method, params={}, options={}){
     const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
@@ -217,12 +231,10 @@
         return data.result;
       }catch(err){
         lastErr = err;
-
         const http = err && err._httpStatus;
         const transientHTTP = (http===429 || http===500 || http===502 || http===503 || http===504);
         const aborted = (err && (err.name==="AbortError"));
         const net = (err && String(err.message||err).toLowerCase().includes("failed to fetch"));
-
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
           await sleep(220 + attempt*420);
@@ -234,11 +246,9 @@
         clearTimeout(t);
       }
     }
-
     throw lastErr || new Error("Falha desconhecida");
   }
 
-  // Paginação robusta
   async function bxListAll(method, params, max=500){
     let start = 0;
     let out = [];
@@ -255,20 +265,16 @@
         if(items.length < 50) break;
         start = start + 50;
       }
-
       if(items.length === 0) break;
     }
     return out.slice(0, max);
   }
 
   // =========================
-  // “Offline”: fila de ações (só RAM)
+  // “Offline”: fila de ações (RAM)
   // =========================
-  const pendingOps = []; // { name, run: async()=>void }
-
-  function enqueueOp(name, run){
-    pendingOps.push({ name, run });
-  }
+  const pendingOps = [];
+  function enqueueOp(name, run){ pendingOps.push({ name, run }); }
 
   let flushBusy = false;
   async function flushOps(){
@@ -292,7 +298,7 @@
   }
 
   // =========================
-  // Audio — 3 bipes (mantido)
+  // Audio — 3 bipes
   // =========================
   function tripleBeep(){
     try{
@@ -300,7 +306,6 @@
       if(!AC) return;
       const ctx = new AC();
       const t0 = ctx.currentTime;
-
       const make = (t)=>{
         const o = ctx.createOscillator();
         const g = ctx.createGain();
@@ -313,17 +318,15 @@
         o.start(t);
         o.stop(t + 0.18);
       };
-
       make(t0 + 0.00);
       make(t0 + 0.26);
       make(t0 + 0.52);
-
       setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 1000);
     }catch(_){}
   }
 
   // =========================
-  // UI / CSS (ESTÉTICA MANTIDA)
+  // UI / CSS
   // =========================
   function injectCSS(){
     const css = `
@@ -337,7 +340,7 @@
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 60px);
-  padding: 10px 12px 90px;
+  padding: 10px 12px 110px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
   color: var(--text);
   background:
@@ -347,13 +350,14 @@
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
 
+/* ✅ TOPO escuro */
 .cgdTop{
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(255,255,255,.72);
+  background: rgba(18,18,20,.92);
   backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255,255,255,.10);
   border-radius: 999px;
   padding: 10px 12px;
   display:flex;
@@ -361,20 +365,22 @@
   justify-content: space-between;
   gap: 10px;
   box-shadow: var(--shadow);
+  color: #fff;
 }
+.cgdTop *{ color: #fff; }
 .cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 280px; }
 .cgdLogo{
   width: 53px; height: 53px;
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,.10);
+  border: 1px solid rgba(255,255,255,.15);
   object-fit: cover;
   background: #fff;
 }
 .cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
 .cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
 .cgdPill{
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.78);
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.10);
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
@@ -382,8 +388,8 @@
 }
 .cgdBtn{
   cursor:pointer;
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.12);
   border-radius: 999px;
   padding: 7px 12px;
   font-size: 12px;
@@ -494,30 +500,6 @@
 .cgdMiniBtn.primary{ background: rgba(120,210,255,.25); }
 .cgdMiniBtn.danger{ background: rgba(255,80,120,.16); border-color: rgba(255,80,120,.30); }
 
-.cgdAlertBox{
-  border: 1px solid rgba(255,80,140,.35);
-  border-radius: 16px;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(255,210,230,.75), rgba(220,240,255,.70));
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.cgdAlertBox .txt{
-  font-weight: 950;
-  font-size: 12px;
-  line-height: 1.25;
-  width: 100%;
-}
-.cgdAlertBox .txt small{
-  display:block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: rgba(18,26,40,.70);
-  font-weight: 900;
-}
-
 .cgdBottom{
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -530,7 +512,9 @@
   flex-direction: column;
   gap: 8px;
 }
-.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cgdQueueRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:space-between; }
+.cgdQueueLeft{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cgdQueueRight{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 .cgdQueueChip{
   border: 1px solid rgba(30,40,70,.14);
   background: rgba(255,255,255,.9);
@@ -545,7 +529,7 @@
   font-weight: 900;
 }
 
-/* ✅ QUEM PEGOU HOJE em 2 colunas (mantendo estética) */
+/* ✅ QUEM PEGOU HOJE em 2 colunas */
 #listWho.cgdWhoGrid{
   display:grid !important;
   grid-template-columns: 1fr 1fr;
@@ -555,7 +539,7 @@
   #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
 }
 
-/* ===== Modals modernos (mantidos) ===== */
+/* ===== Modals ===== */
 .cgdModalOverlay{
   position: fixed;
   inset: 0;
@@ -610,9 +594,7 @@
   font-size: 12px;
   background: rgba(255,255,255,.95);
 }
-.cgdRow{
-  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-}
+.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .cgdTable{
   width: 100%;
   border-collapse: collapse;
@@ -629,6 +611,16 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
+.cgdAvatar{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,.10);
+  object-fit: cover;
+  background: #fff;
+  flex: 0 0 auto;
+}
+
 .bitrix-footer{
   position: fixed !important;
   left: 0 !important;
@@ -637,7 +629,7 @@
   top: auto !important;
   z-index: 5 !important;
 }
-body{ padding-bottom: 90px !important; }
+body{ padding-bottom: 110px !important; }
 
 @media (max-width: 1100px){
   .cgdGrid{ grid-template-columns: 1fr; }
@@ -674,9 +666,7 @@ body{ padding-bottom: 90px !important; }
     document.body.appendChild(ov);
     document.addEventListener("keydown", escClose, {capture:true});
   }
-  function escClose(e){
-    if(e.key === "Escape"){ closeModal(); }
-  }
+  function escClose(e){ if(e.key === "Escape"){ closeModal(); } }
   function closeModal(){
     const ov = $(".cgdModalOverlay");
     if(ov) ov.remove();
@@ -684,7 +674,7 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // State (somente RAM)
+  // State (RAM)
   // =========================
   const state = {
     soundOn: true,
@@ -693,10 +683,38 @@ body{ padding-bottom: 90px !important; }
     newLeadsRender: [],
     pendingCount: 0,
     stats: { day:0, month:0 },
-    userStats: {},
+    userStats: {}, // id -> { dayTotal, monthTotal, monthConverted, convRate, lastTwo, list }
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
-    lastServedUserName: "—"
+    lastServedUserName: "—",
+    userPhotoUrl: {}, // id -> url
+    sociosPhotoUrl: {} // id -> url
   };
+
+  // =========================
+  // USERS: photo
+  // =========================
+  async function tryLoadUserPhoto(userId){
+    const id = String(userId);
+    if(state.userPhotoUrl[id]) return state.userPhotoUrl[id];
+    try{
+      const res = await bx("user.get", { filter: { ID: id } });
+      const u = Array.isArray(res) ? res[0] : null;
+      const url = u && (u.PERSONAL_PHOTO || u.PERSONAL_PHOTO_ORIGINAL || u.PERSONAL_PHOTO_SRC);
+      if(typeof url === "string" && url.startsWith("http")){
+        state.userPhotoUrl[id] = url;
+        return url;
+      }
+    }catch(_){}
+    state.userPhotoUrl[id] = ""; // cache miss
+    return "";
+  }
+
+  async function preloadSociosPhotos(){
+    for(const sid of CONFIG.SOCIOS){
+      await tryLoadUserPhoto(sid);
+      state.sociosPhotoUrl[String(sid)] = state.userPhotoUrl[String(sid)] || "";
+    }
+  }
 
   // =========================
   // Mount
@@ -771,19 +789,46 @@ body{ padding-bottom: 90px !important; }
         </div>
 
         <div class="cgdBottom">
-          <div class="cgdQueueRow" id="queueRow">
-            <button class="cgdBtn" id="btnQueue">Fila de atendimento</button>
-            <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
-          </div>
           <div class="cgdQueueRow">
-            <button class="cgdBtn" id="btnQueueReset">Resetar</button>
-            <button class="cgdBtn" id="btnNext">Próxima disponível</button>
-            <div class="cgdQueueChip">Última: <b id="lastServed">—</b></div>
-            <div class="cgdStatusLine" id="statusLine">Atualizado: —</div>
+            <div class="cgdQueueLeft" id="queueRow">
+              <button class="cgdBtn" id="btnQueue">Fila de atendimento</button>
+              <div class="cgdQueueChip" id="queueHint">Fila vazia. Clique em Fila e selecione quem entra.</div>
+            </div>
+            <div class="cgdQueueRight" id="sociosRow">
+              <div style="font-style:italic;font-weight:950;opacity:.75">System created by GRUPO CGD</div>
+              <div style="display:flex;gap:6px;align-items:center" id="sociosPics"></div>
+            </div>
+          </div>
+
+          <div class="cgdQueueRow">
+            <div class="cgdQueueLeft">
+              <button class="cgdBtn" id="btnQueueReset">Resetar</button>
+              <button class="cgdBtn" id="btnNext">Próxima disponível</button>
+              <div class="cgdQueueChip">Última: <b id="lastServed">—</b></div>
+            </div>
+            <div class="cgdQueueRight">
+              <div class="cgdStatusLine" id="statusLine">Atualizado: —</div>
+            </div>
           </div>
         </div>
       </div>
     `;
+  }
+
+  function renderSocios(){
+    const box = $("#sociosPics");
+    if(!box) return;
+    box.innerHTML = "";
+    for(const sid of CONFIG.SOCIOS){
+      const url = state.userPhotoUrl[String(sid)] || "";
+      const img = document.createElement("img");
+      img.className = "cgdAvatar";
+      img.alt = "Sócio " + sid;
+      img.src = url || "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="#eee"/><text x="50%" y="54%" text-anchor="middle" font-family="Arial" font-size="18" fill="#666">ID ${sid}</text></svg>`
+      );
+      box.appendChild(img);
+    }
   }
 
   // =========================
@@ -810,7 +855,6 @@ body{ padding-bottom: 90px !important; }
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
-
     const dayItems = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
       order: { DATE_MODIFY:"DESC" },
@@ -826,25 +870,15 @@ body{ padding-bottom: 90px !important; }
     return { day: (dayItems||[]).length, month: (monthItems||[]).length };
   }
 
-  function leadDisplayName(it){
-    const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
-    if(nm) return nm;
-    const t = String(it.TITLE||"").trim();
-    if(t && !/^Lead\s*#\d+$/i.test(t)) return t;
-    if(t) return t;
-    return `Lead #${it.ID}`;
-  }
-
-  function pickUF(it, key){
-    try{
-      return it && Object.prototype.hasOwnProperty.call(it, key) ? it[key] : (it ? it[key] : "");
-    }catch(_){ return ""; }
+  async function leadUpdate(id, fields){
+    return bx("crm.lead.update", { id: String(id), fields });
   }
 
   function leadBadgesRich(it){
     const b = [];
     const oper = pickUF(it, CONFIG.UF_OPERADORA);
     const idade = pickUF(it, CONFIG.UF_IDADE);
+    const teluf = pickUF(it, CONFIG.UF_TELEFONE);
     const bairro= pickUF(it, CONFIG.UF_BAIRRO);
     const fonte = pickUF(it, CONFIG.UF_FONTE);
     const dtuf  = pickUF(it, CONFIG.UF_DT_LEAD);
@@ -852,6 +886,7 @@ body{ padding-bottom: 90px !important; }
 
     if(oper)  b.push(["OPERADORA", oper]);
     if(idade) b.push(["IDADE", idade]);
+    if(teluf) b.push(["TELEFONE", teluf]);
     if(bairro)b.push(["BAIRRO", bairro]);
     if(fonte) b.push(["FONTE", fonte]);
     if(dt)    b.push(["DATA", dt]);
@@ -860,17 +895,49 @@ body{ padding-bottom: 90px !important; }
       if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
       if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
     }
-    return b.slice(0, 6);
+    return b.slice(0, 8);
   }
 
-  async function leadUpdate(id, fields){
-    return bx("crm.lead.update", { id: String(id), fields });
+  function optimisticAddToUser(userId, lead){
+    const uid = String(userId);
+    if(!lead) return;
+    const nowIso = new Date().toISOString();
+    const obj = { ...lead, STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ASSIGNED_BY_ID: uid, DATE_MODIFY: nowIso };
+    const us = state.userStats[uid] || { list:[], lastTwo:[] };
+    us.list = [obj].concat(us.list || []);
+    us.lastTwo = [obj].concat(us.lastTwo || []).slice(0,2);
+    state.userStats[uid] = us;
   }
 
-  async function actionPickLead(leadId, userId){
+  async function actionPickLead(leadId, userId, rotateQueueUserId){
+    const leadObj = (state.newLeadsAll||[]).find(x=> String(x.ID)===String(leadId));
+
+    // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
+
+    optimisticAddToUser(userId, leadObj);
+    renderWho();
+
+    // ✅ rotate fila: mover user pro final (se estiver na fila)
+    if(rotateQueueUserId){
+      const uid = String(rotateQueueUserId);
+      const q = state.queue.dealId ? state.queue : await fetchQueue().catch(()=>null);
+      if(q && q.dealId){
+        const order = (q.order||[]).map(String);
+        const idx = order.indexOf(uid);
+        if(idx >= 0){
+          order.splice(idx,1);
+          order.push(uid);
+          state.queue.order = order.slice();
+          renderQueue();
+          enqueueOp("saveQueueRotateAfterPick", async ()=>{
+            await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          });
+        }
+      }
+    }
 
     enqueueOp("pickLead", async ()=>{
       await leadUpdate(leadId, {
@@ -879,6 +946,9 @@ body{ padding-bottom: 90px !important; }
       });
     });
     flushOps();
+
+    // ✅ força refresh curto pra refletir mais rápido
+    setTimeout(()=>{ refreshUsers(); refreshPendingCount(); }, 700);
   }
 
   async function actionDiscardLead(leadId){
@@ -907,32 +977,40 @@ body{ padding-bottom: 90px !important; }
     flushOps();
   }
 
-  async function actionSetPrazo(leadId, iso){
-    enqueueOp("setPrazo", async ()=>{
-      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+  async function actionSetPrazoOnLead(leadId, iso){
+    enqueueOp("setPrazoLead", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO_LEAD]: iso });
     });
     flushOps();
   }
 
-  async function createFollowUpDeal(userId, lead){
+  async function transferLeadToUser(leadId, toUserId){
+    enqueueOp("transferLead", async ()=>{
+      await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) });
+    });
+    flushOps();
+  }
+
+  async function createFollowUpDeal(userId, lead, iso){
     const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
     const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
     enqueueOp("createDealFollowUp", async ()=>{
-      await bx("crm.deal.add", {
-        fields: {
-          CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
-          STAGE_ID: stage || "C17:NEW",
-          ASSIGNED_BY_ID: String(userId),
-          TITLE: title,
-          COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
-        }
-      });
+      const fields = {
+        CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+        STAGE_ID: stage || "C17:NEW",
+        ASSIGNED_BY_ID: String(userId),
+        TITLE: title,
+        COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`
+      };
+      // ✅ grava data/hora no DEAL também (se o campo existir na pipeline 17)
+      if(iso) fields[CONFIG.UF_PRAZO_DEAL] = iso;
+      await bx("crm.deal.add", { fields });
     });
     flushOps();
   }
 
   // =========================
-  // Queue JSON via Pipeline 27 (multi-PC)
+  // Queue JSON via Pipeline 27
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -1003,7 +1081,6 @@ body{ padding-bottom: 90px !important; }
         hiddenUsers: Array.isArray(payload.hiddenUsers) ? payload.hiddenUsers.map(String) : [],
         updatedAt: Date.now()
       };
-
       let lastErr = null;
       for(let attempt=0; attempt<3; attempt++){
         try{
@@ -1105,6 +1182,13 @@ body{ padding-bottom: 90px !important; }
     return inQueue.concat(outQueue);
   }
 
+  function pct(a,b){
+    const x = Number(a)||0;
+    const y = Number(b)||0;
+    if(y <= 0) return 0;
+    return Math.round((x/y)*1000)/10; // 1 casa
+  }
+
   function renderWho(){
     const list = $("#listWho");
     if(!list) return;
@@ -1112,21 +1196,37 @@ body{ padding-bottom: 90px !important; }
 
     const ordered = computeUserOrder();
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const us = state.userStats[u.id] || { dayTotal:0, monthTotal:0, monthConverted:0, convRate:0, lastTwo:[] };
       const l1 = us.lastTwo[0];
       const l2 = us.lastTwo[1];
 
       const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
       const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
+      const url = state.userPhotoUrl[String(u.id)] || "";
+      const avatar = url
+        ? `<img class="cgdAvatar" src="${esc(url)}" alt="${esc(u.name)}" />`
+        : `<img class="cgdAvatar" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="#eee"/><text x="50%" y="54%" text-anchor="middle" font-family="Arial" font-size="18" fill="#666">${esc(u.name.slice(0,2))}</text></svg>`
+          )}" alt="${esc(u.name)}" />`;
+
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdCardRow">
-          <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
+          <div style="display:flex;gap:10px;align-items:flex-start">
+            ${avatar}
+            <div>
+              <div style="font-weight:950">${esc(u.name)} <span style="opacity:.65;font-weight:900">(${esc(u.id)})</span></div>
+              <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+                <span class="cgdBadge">dia: ${esc(us.dayTotal||0)}</span>
+                <span class="cgdBadge">mês: ${esc(us.monthTotal||0)}</span>
+                <span class="cgdBadge">conv: ${esc(us.convRate||0)}%</span>
+              </div>
+            </div>
+          </div>
+
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
-            <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
-            <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
             <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
           </div>
         </div>
@@ -1150,9 +1250,9 @@ body{ padding-bottom: 90px !important; }
     const hint = $("#queueHint");
     if(!row || !hint) return;
 
-    const keepA = row.children[0];
+    const keepBtn = $("#btnQueue");
     row.innerHTML = "";
-    if(keepA) row.appendChild(keepA);
+    if(keepBtn) row.appendChild(keepBtn);
 
     const order = state.queue.order || [];
     if(order.length === 0){
@@ -1184,23 +1284,42 @@ body{ padding-bottom: 90px !important; }
   }
 
   // =========================
-  // Fetch Usuárias — usa DATE_MODIFY com STATUS IN_PROCESS
+  // Counts por usuária (Bitrix)
   // =========================
+  function statusSetForTotals(){
+    const s = CONFIG.LEAD_STATUS;
+    return [s.EM_ATENDIMENTO, s.ATENDIDO, s.QUALIFICADO, s.PERDIDO, s.CONVERTIDO].filter(Boolean);
+  }
+
+  async function countUserLeadsByStatuses(userId, isoStart, statuses, max=8000){
+    // conta via IDs (paginando)
+    const items = await bxListAll("crm.lead.list", {
+      filter: {
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": statuses,
+        ">DATE_MODIFY": isoStart
+      },
+      order: { ID: "DESC" },
+      select: ["ID"]
+    }, max);
+    return (items||[]).length;
+  }
+
   async function fetchUserStats(userId){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
+    const statuses = statusSetForTotals();
 
-    const pulledToday = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startToday },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID"]
-    }, 2000);
+    const dayTotal = statuses.length
+      ? await countUserLeadsByStatuses(userId, startToday, statuses, 4000)
+      : 0;
 
-    const pulledMonth = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": startMonth },
-      order: { DATE_MODIFY: "DESC" },
-      select: ["ID"]
-    }, 6000);
+    const monthTotal = statuses.length
+      ? await countUserLeadsByStatuses(userId, startMonth, statuses, 9000)
+      : 0;
+
+    const monthConverted = await countUserLeadsByStatuses(userId, startMonth, [CONFIG.LEAD_STATUS.CONVERTIDO].filter(Boolean), 9000);
+    const convRate = pct(monthConverted, monthTotal);
 
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
@@ -1210,39 +1329,24 @@ body{ padding-bottom: 90px !important; }
 
     const lastTwo = (last||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
-      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO;
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.CONVERTIDO;
     }).slice(0,2);
 
-    return {
-      pulledToday: (pulledToday||[]).length,
-      pulledMonth: (pulledMonth||[]).length,
-      lastTwo,
-      list: last || []
-    };
+    return { dayTotal, monthTotal, monthConverted, convRate, lastTwo, list: last || [] };
   }
 
   // =========================
   // Modals
   // =========================
   function modalGetEquipes(){
-    const body = `
-      <div style="font-weight:950; margin-bottom:10px">GET (Equipes)</div>
-      <div class="cgdRow" style="margin-bottom:12px">
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.DELTA)}" target="_blank" rel="noopener">Equipe DELTA</a>
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.BETA)}" target="_blank" rel="noopener">Equipe BETA</a>
-        <a class="cgdBtn" href="${esc(CONFIG.GET_LINKS.ALPHA)}" target="_blank" rel="noopener">Equipe ALPHA</a>
-      </div>
-      <div style="font-size:11px;font-weight:900;opacity:.75">Abre em nova guia.</div>
-    `;
-    openModal("GET (Equipes)", body);
+    try{ window.open(CONFIG.GET_EQUIPES_URL, "_blank", "noopener"); }catch(_){}
   }
 
   async function modalQueue(){
     openModal("FILA", `<div style="font-weight:900;opacity:.75">Carregando fila…</div>`);
     let q;
-    try{
-      q = await fetchQueue();
-    }catch(_){
+    try{ q = await fetchQueue(); }
+    catch(_){
       closeModal();
       return openModal("FILA", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
@@ -1250,6 +1354,12 @@ body{ padding-bottom: 90px !important; }
     state.queue = { ...state.queue, ...q };
     const current = q.order || [];
     const currentSet = new Set(current.map(String));
+
+    // ✅ ordenar: primeiro quem já está na fila (na ordem atual), depois o restante
+    const usersById = new Map(CONFIG.USERS.map(u=>[String(u.id), u]));
+    const first = current.map(id=> usersById.get(String(id))).filter(Boolean);
+    const rest = CONFIG.USERS.filter(u=> !currentSet.has(String(u.id)));
+    const orderedUsers = first.concat(rest);
 
     function rowFor(u){
       const checked = currentSet.has(String(u.id)) ? "checked" : "";
@@ -1280,7 +1390,7 @@ body{ padding-bottom: 90px !important; }
 
       <table class="cgdTable">
         <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
-        <tbody id="qTbody">${CONFIG.USERS.map(rowFor).join("")}</tbody>
+        <tbody id="qTbody">${orderedUsers.map(rowFor).join("")}</tbody>
       </table>
     `;
 
@@ -1320,13 +1430,13 @@ body{ padding-bottom: 90px !important; }
       const btn = $("#qApply");
       try{
         btn.disabled = true;
-
         const visualOrder = $$("tr[data-u]", tbody).map(tr=> String(tr.getAttribute("data-u")));
         const checked = new Set(getChecked());
         const next = visualOrder.filter(id=> checked.has(id));
 
         await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
 
+        // ✅ força refresh imediato (outros PCs pegam pelo polling rápido)
         const fresh = await fetchQueue();
         state.queue = { ...state.queue, ...fresh };
         renderQueue();
@@ -1343,15 +1453,13 @@ body{ padding-bottom: 90px !important; }
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
     let q;
-    try{
-      q = await fetchQueue();
-    }catch(_){
+    try{ q = await fetchQueue(); }
+    catch(_){
       closeModal();
       return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
 
     const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
-
     const body = `
       <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
 
@@ -1409,7 +1517,7 @@ body{ padding-bottom: 90px !important; }
       <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <button class="cgdBtn" id="pickFirst">Pegar para a 1ª da fila</button>
+        <button class="cgdBtn" id="pickFirst">PRIMEIRA DA FILA</button>
       </div>
 
       <div style="height:1px;background:rgba(30,40,70,.10);margin:10px 0"></div>
@@ -1420,7 +1528,7 @@ body{ padding-bottom: 90px !important; }
         <button class="cgdBtn" id="pickGo">Confirmar</button>
       </div>
       <div style="font-size:11px;font-weight:900;opacity:.75;margin-top:10px">
-        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>.
+        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>. A usuária vai para o <b>final da fila</b>.
       </div>
     `;
     openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
@@ -1435,7 +1543,7 @@ body{ padding-bottom: 90px !important; }
         if(order.length === 0) return;
 
         const firstId = order.shift();
-        order.push(firstId);
+        order.push(firstId); // vai pro fim
         state.queue.order = order.slice();
         renderQueue();
         setLastServed((CONFIG.USERS.find(x=>String(x.id)===String(firstId))||{}).name || ("USER "+firstId));
@@ -1446,13 +1554,7 @@ body{ padding-bottom: 90px !important; }
         });
         flushOps();
 
-        await actionPickLead(leadId, firstId);
-
-        // ✅ NOVO: força refresh local imediato (sem esperar setInterval)
-        refreshQueue();
-        refreshUsers();
-        refreshPendingCount();
-
+        await actionPickLead(leadId, firstId, String(firstId));
         closeModal();
       }catch(err){
         console.error(err);
@@ -1466,13 +1568,7 @@ body{ padding-bottom: 90px !important; }
       try{
         btn.disabled = true;
         const uid = $("#pickUser").value;
-        await actionPickLead(leadId, uid);
-
-        // ✅ NOVO: força refresh local imediato (sem esperar setInterval)
-        refreshQueue();
-        refreshUsers();
-        refreshPendingCount();
-
+        await actionPickLead(leadId, uid, String(uid));
         closeModal();
       }catch(err){
         console.error(err);
@@ -1534,7 +1630,7 @@ body{ padding-bottom: 90px !important; }
           <tr>
             <th style="width:80px">Sel.</th>
             <th>Lead</th>
-            <th style="width:260px">Info</th>
+            <th style="width:300px">Info</th>
           </tr>
         </thead>
         <tbody id="btTbody"></tbody>
@@ -1591,7 +1687,6 @@ body{ padding-bottom: 90px !important; }
     }
 
     draw(filtered());
-
     $("#btApply")?.addEventListener("click", ()=> draw(filtered()));
 
     $("#btDo")?.addEventListener("click", async ()=>{
@@ -1611,15 +1706,9 @@ body{ padding-bottom: 90px !important; }
         renderNewLeads(state.newLeadsRender);
 
         for(const id of ids){
-          await actionPickLead(id, toId);
+          await actionPickLead(id, toId, String(toId));
           await sleep(60);
         }
-
-        // ✅ NOVO: força refresh local imediato
-        refreshQueue();
-        refreshUsers();
-        refreshPendingCount();
-
         closeModal();
       }catch(err){
         console.error(err);
@@ -1639,9 +1728,8 @@ body{ padding-bottom: 90px !important; }
     `);
 
     let us;
-    try{
-      us = await fetchUserStats(u.id);
-    }catch(_){
+    try{ us = await fetchUserStats(u.id); }
+    catch(_){
       closeModal();
       return openModal(`GERENCIAR USUÁRIA • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
@@ -1649,22 +1737,30 @@ body{ padding-bottom: 90px !important; }
     state.userStats[u.id] = us;
     renderWho();
 
+    const transferOptions = CONFIG.USERS
+      .filter(x=> String(x.id)!==String(u.id))
+      .map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`)
+      .join("");
+
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">ABRIR • Buscar • Mover • Follow-up</div>
+        <div style="font-weight:950">ABRIR • Buscar • Mover • Follow-up • Transferir</div>
         <button class="cgdBtn" id="muRefresh">Atualizar</button>
       </div>
 
       <div class="cgdRow" style="margin-bottom:10px">
-        <div class="cgdBadge">EM ATENDIMENTO (dia): <b>${esc(us.pulledToday||0)}</b></div>
-        <div class="cgdBadge">EM ATENDIMENTO (mês): <b>${esc(us.pulledMonth||0)}</b></div>
+        <div class="cgdBadge">TOTAL (dia): <b>${esc(us.dayTotal||0)}</b></div>
+        <div class="cgdBadge">TOTAL (mês): <b>${esc(us.monthTotal||0)}</b></div>
+        <div class="cgdBadge">CONVERTIDOS (mês): <b>${esc(us.monthConverted||0)}</b></div>
+        <div class="cgdBadge">CONVERSÃO: <b>${esc(us.convRate||0)}%</b></div>
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
         <input class="cgdInput" id="muSearch" placeholder="Buscar por palavra-chave…" style="min-width:260px" />
         <select class="cgdSelect" id="muStage">
           <option value="ALL">Todos os stages</option>
-          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Em atendimento</option>
+          ${CONFIG.LEAD_STATUS.EM_ATENDIMENTO ? `<option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Em atendimento</option>` : ""}
+          ${CONFIG.LEAD_STATUS.ATENDIDO ? `<option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</option>` : ""}
           <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</option>
           <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</option>
           <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</option>
@@ -1684,6 +1780,12 @@ body{ padding-bottom: 90px !important; }
         </select>
         <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
 
+        <select class="cgdSelect" id="muTransferTo">
+          <option value="">Transferir selecionados para…</option>
+          ${transferOptions}
+        </select>
+        <button class="cgdBtn" id="muBulkTransfer">TRANSFERIR</button>
+
         <button class="cgdBtn" id="muCreate">Criar lead (indicação)</button>
       </div>
 
@@ -1691,9 +1793,9 @@ body{ padding-bottom: 90px !important; }
         <thead>
           <tr>
             <th style="width:70px">Sel.</th>
-            <th>Lead</th>
-            <th style="width:250px">FOLLOW-UP</th>
-            <th style="width:250px">Mover</th>
+            <th>Lead (dados)</th>
+            <th style="width:330px">FOLLOW-UP</th>
+            <th style="width:260px">Ações</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -1718,6 +1820,24 @@ body{ padding-bottom: 90px !important; }
       });
     }
 
+    function leadInfoInline(it){
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = pickUF(it, CONFIG.UF_TELEFONE);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = pickUF(it, CONFIG.UF_DT_LEAD);
+      const dt2 = dt ? fmtDateBRFromISO(dt) : "";
+      return [
+        oper ? `OPERADORA: ${oper}` : "",
+        idade ? `IDADE: ${idade}` : "",
+        tel ? `TEL: ${tel}` : "",
+        bairro ? `BAIRRO: ${bairro}` : "",
+        fonte ? `FONTE: ${fonte}` : "",
+        dt2 ? `DATA: ${dt2}` : ""
+      ].filter(Boolean).join(" • ");
+    }
+
     function renderRows(){
       const list = listFiltered();
       tbody.innerHTML = list.length ? list.map(it=>{
@@ -1725,12 +1845,13 @@ body{ padding-bottom: 90px !important; }
         const name = leadDisplayName(it);
         const st = String(it.STATUS_ID||"—");
         const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
-        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? CONFIG.HOT_EMOJI+" " : "";
+        const info = leadInfoInline(it);
         return `<tr>
           <td><input type="checkbox" data-sel="${esc(id)}" /></td>
           <td>
-            <b>${esc(hot + name)}</b>
+            <b>${esc(name)}</b>
             <div style="opacity:.7;font-weight:900;font-size:11px">ID: ${esc(id)} • ${esc(dm||"—")} • STAGE: ${esc(st)}</div>
+            <div style="margin-top:6px;opacity:.85;font-weight:900;font-size:11px">${esc(info||"—")}</div>
           </td>
           <td>
             <div class="cgdRow">
@@ -1744,6 +1865,7 @@ body{ padding-bottom: 90px !important; }
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
               <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
+              <button class="cgdBtn" data-transfer-one="${esc(id)}">Transferir</button>
             </div>
           </td>
         </tr>`;
@@ -1760,17 +1882,11 @@ body{ padding-bottom: 90px !important; }
     search?.addEventListener("input", renderRows);
     stageSel?.addEventListener("change", renderRows);
 
-    $("#muAll")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
-    });
-    $("#muNone")?.addEventListener("click", ()=>{
-      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false);
-    });
+    $("#muAll")?.addEventListener("click", ()=> $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true));
+    $("#muNone")?.addEventListener("click", ()=> $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false));
 
     function selectedIds(){
-      return $$('input[type=checkbox][data-sel]')
-        .filter(ch=> ch.checked)
-        .map(ch=> ch.getAttribute("data-sel"));
+      return $$('input[type=checkbox][data-sel]').filter(ch=> ch.checked).map(ch=> ch.getAttribute("data-sel"));
     }
 
     $("#muBulkPrazo")?.addEventListener("click", async ()=>{
@@ -1779,10 +1895,10 @@ body{ padding-bottom: 90px !important; }
       const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
       if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
       for(const id of ids){
-        await actionSetPrazo(id, iso);
+        await actionSetPrazoOnLead(id, iso);
         await sleep(60);
       }
-      alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+      alert("FOLLOW-UP em lote enfileirado ✅");
     });
 
     $("#muBulkMove")?.addEventListener("click", async ()=>{
@@ -1793,7 +1909,77 @@ body{ padding-bottom: 90px !important; }
         await actionMoveLead(id, to);
         await sleep(60);
       }
-      alert("Movimento em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+      alert("Movimento em lote enfileirado ✅");
+    });
+
+    $("#muBulkTransfer")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const toId = $("#muTransferTo")?.value;
+      if(!toId) return alert("Selecione a usuária destino.");
+      for(const id of ids){
+        await transferLeadToUser(id, toId);
+        await sleep(60);
+      }
+      alert("Transferência em lote enfileirada ✅");
+      setTimeout(()=> refreshUsers(), 700);
+    });
+
+    // Delegação
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const sp = e.target.closest("[data-save-prazo]");
+      const sd = e.target.closest("[data-save-fupdeal]");
+      const mv = e.target.closest("[data-move]");
+      const tr = e.target.closest("[data-transfer-one]");
+
+      if(sp){
+        const leadId = sp.getAttribute("data-save-prazo");
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(!iso) return alert("Preencha data/hora corretamente.");
+        await actionSetPrazoOnLead(leadId, iso);
+        alert("FOLLOW-UP salvo ✅");
+      }
+
+      if(sd){
+        const leadId = sd.getAttribute("data-save-fupdeal");
+        const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(iso) await actionSetPrazoOnLead(leadId, iso);
+        if(lead) await createFollowUpDeal(u.id, lead, iso);
+        alert("FOLLOW-UP + CARD enfileirados ✅");
+      }
+
+      if(mv){
+        const leadId = mv.getAttribute("data-move");
+        const to = mv.getAttribute("data-to");
+        await actionMoveLead(leadId, to);
+        alert("Movimento enfileirado ✅");
+      }
+
+      if(tr){
+        const leadId = tr.getAttribute("data-transfer-one");
+        const ops = CONFIG.USERS
+          .filter(x=> String(x.id)!==String(u.id))
+          .map(x=> `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`)
+          .join("");
+        openModal("TRANSFERIR LEAD", `
+          <div style="font-weight:950;margin-bottom:10px">Transferir Lead #${esc(leadId)} para:</div>
+          <div class="cgdRow">
+            <select class="cgdSelect" id="trTo">${ops}</select>
+            <button class="cgdBtn" id="trGo">Transferir</button>
+          </div>
+        `);
+        $("#trGo")?.addEventListener("click", async ()=>{
+          const toId = $("#trTo")?.value;
+          if(!toId) return;
+          await transferLeadToUser(leadId, toId);
+          closeModal();
+          alert("Transferência enfileirada ✅");
+          setTimeout(()=> refreshUsers(), 700);
+        });
+      }
     });
 
     $("#muCreate")?.addEventListener("click", ()=>{
@@ -1801,7 +1987,7 @@ body{ padding-bottom: 90px !important; }
         <div style="font-weight:950;margin-bottom:10px">Criar LEAD (indicação)</div>
         <div class="cgdRow" style="margin-bottom:10px">
           <input class="cgdInput" id="clName" placeholder="Nome do cliente" style="min-width:260px" />
-          <input class="cgdInput" id="clPhone" placeholder="Telefone" style="min-width:220px" />
+          <input class="cgdInput" id="clPhone" placeholder="Telefone (opcional)" style="min-width:220px" />
         </div>
         <div class="cgdRow" style="margin-bottom:10px">
           <input class="cgdInput" id="clOper" placeholder="Operadora" style="min-width:220px" />
@@ -1838,49 +2024,18 @@ body{ padding-bottom: 90px !important; }
                 [CONFIG.UF_OPERADORA]: oper,
                 [CONFIG.UF_BAIRRO]: bairro,
                 [CONFIG.UF_IDADE]: idade,
-                PHONE: phone ? [{ VALUE: phone, VALUE_TYPE: "WORK" }] : undefined
+                [CONFIG.UF_TELEFONE]: phone,
               }
             });
           });
           flushOps();
           closeModal();
-          alert("Lead criado ✅ (sincroniza quando normalizar a conexão)");
+          alert("Lead criado ✅");
+          setTimeout(()=> refreshUsers(), 700);
         } finally{
           btn.disabled = false;
         }
       });
-    });
-
-    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
-      const sp = e.target.closest("[data-save-prazo]");
-      const sd = e.target.closest("[data-save-fupdeal]");
-      const mv = e.target.closest("[data-move]");
-
-      if(sp){
-        const leadId = sp.getAttribute("data-save-prazo");
-        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
-        const iso = isoFromLocalInput(inp?.value || "");
-        if(!iso) return alert("Preencha data/hora corretamente.");
-        await actionSetPrazo(leadId, iso);
-        alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
-      }
-
-      if(sd){
-        const leadId = sd.getAttribute("data-save-fupdeal");
-        const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
-        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
-        const iso = isoFromLocalInput(inp?.value || "");
-        if(iso) await actionSetPrazo(leadId, iso);
-        if(lead) await createFollowUpDeal(u.id, lead);
-        alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
-      }
-
-      if(mv){
-        const leadId = mv.getAttribute("data-move");
-        const to = mv.getAttribute("data-to");
-        await actionMoveLead(leadId, to);
-        alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
-      }
     });
   }
 
@@ -1907,12 +2062,8 @@ body{ padding-bottom: 90px !important; }
   }
 
   async function refreshPendingCount(){
-    try{
-      const n = await fetchNewLeadsCount();
-      renderPendingCount(n);
-    }catch(err){
-      console.warn("pending count failed", err);
-    }
+    try{ renderPendingCount(await fetchNewLeadsCount()); }
+    catch(err){ console.warn("pending count failed", err); }
   }
 
   async function refreshStats(){
@@ -1928,6 +2079,7 @@ body{ padding-bottom: 90px !important; }
   async function refreshUsers(){
     try{
       const jobs = CONFIG.USERS.map(async u=>{
+        await tryLoadUserPhoto(u.id);
         const st = await fetchUserStats(u.id);
         state.userStats[u.id] = st;
       });
@@ -1971,21 +2123,9 @@ body{ padding-bottom: 90px !important; }
   }
 
   function wire(){
-    $("#btnSound")?.addEventListener("click", ()=>{
-      state.soundOn = !state.soundOn;
-      updateSoundUI();
-    });
-
-    $("#btnSilence")?.addEventListener("click", ()=>{
-      state.soundOn = false;
-      updateSoundUI();
-    });
-
-    $("#btnSoundOn")?.addEventListener("click", ()=>{
-      state.soundOn = true;
-      updateSoundUI();
-      if((state.newLeadsAll||[]).length > 0) tripleBeep();
-    });
+    $("#btnSound")?.addEventListener("click", ()=>{ state.soundOn = !state.soundOn; updateSoundUI(); });
+    $("#btnSilence")?.addEventListener("click", ()=>{ state.soundOn = false; updateSoundUI(); });
+    $("#btnSoundOn")?.addEventListener("click", ()=>{ state.soundOn = true; updateSoundUI(); if((state.newLeadsAll||[]).length > 0) tripleBeep(); });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
     $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
@@ -2011,7 +2151,6 @@ body{ padding-bottom: 90px !important; }
 
     $("#btnQueue")?.addEventListener("click", modalQueue);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
-
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
 
     $("#btnNext")?.addEventListener("click", async ()=>{
@@ -2038,9 +2177,8 @@ body{ padding-bottom: 90px !important; }
         enqueueOp("queueRotate", async ()=>{ await saveQueue(dealId, { order, hiddenUsers: hidden }); });
         flushOps();
 
-        // ✅ NOVO: força refresh local imediato
-        refreshQueue();
-        refreshUsers();
+        // ✅ força refresh imediato para refletir em quem está com polling mais lento
+        setTimeout(()=> refreshQueue(), 350);
       }catch(err){
         console.error(err);
       }
@@ -2054,10 +2192,7 @@ body{ padding-bottom: 90px !important; }
         renderQueue();
         enqueueOp("queueReset", async ()=>{ await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] }); });
         flushOps();
-
-        // ✅ NOVO: força refresh local imediato
-        refreshQueue();
-        refreshUsers();
+        setTimeout(()=> refreshQueue(), 350);
       }catch(err){
         console.error(err);
       }
@@ -2098,6 +2233,9 @@ body{ padding-bottom: 90px !important; }
     wire();
     updateSoundUI();
 
+    await preloadSociosPhotos();
+    renderSocios();
+
     await hardRefreshAll();
 
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
@@ -2105,7 +2243,6 @@ body{ padding-bottom: 90px !important; }
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsers, CONFIG.REFRESH_WHO_MS);
-
     setInterval(flushOps, 2500);
   }
 
@@ -2114,5 +2251,4 @@ body{ padding-bottom: 90px !important; }
   }else{
     start();
   }
-
 })();
