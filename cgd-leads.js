@@ -3,11 +3,15 @@
    1) Contagem DIA/MÊS voltou a funcionar:
       - Agora os ranges são calculados no fuso do Bitrix (+03:00), igual ao que aparece no seu diagnóstico (date_start +03:00).
       - Data PEGAR também é gravada em +03:00 (mesmo padrão).
-      - Considera SOMENTE as colunas: EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO (JUNK), CONVERTIDO.
+      - Considera SOMENTE as colunas: EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO (JUNK), LEAD CONVERTIDO (CONVERTED - sistema).
 
-   2) ABRIR:
-      - Agora lista os leads COM as informações do lead (Operadora, Idade, Telefone, Bairro, Origem, Data/Hora).
-      - Mantém botões de mover + follow-up.
+   2) PEGAR:
+      - Ao clicar em PEGAR, preenche automaticamente DATA PEGAR (UF_CRM_1771741018) com o "agora" no fuso do portal (+03:00).
+
+   3) Card da USER:
+      - Adiciona "sucesso 30d" (% e fração) baseado em DATA PEGAR:
+        sucesso = (CONVERTED do sistema nos últimos 30d) / (ATENDIDO nos últimos 30d)
+        ambos filtrados por ASSIGNED_BY_ID (da usuária) e por DATA PEGAR no período.
 */
 (function(){
   "use strict";
@@ -100,13 +104,13 @@
       LEAD_DESCARTADO_SISTEMA: "JUNK",
     },
 
-    // ✅ Contagem só nessas etapas:
+    // ✅ Contagem só nessas etapas (e CONVERTED do sistema)
     COUNT_STATUS_ALLOWED: [
       "IN_PROCESS",
       "UC_JT9G60",
       "UC_0NFA3H",
       "JUNK",
-      "UC_B3RQAF"
+      "CONVERTED"
     ],
 
     LEAD_STATUS_NAMES: {
@@ -115,7 +119,7 @@
       "UC_JT9G60": "ATENDIDO",
       "UC_0NFA3H": "QUALIFICADO",
       "UC_5IMTI4": "PERDIDO",
-      "UC_B3RQAF": "CONVERTIDO",
+      "UC_B3RQAF": "CONVERTIDO (funil)",
       "CONVERTED": "LEAD CONVERTIDO (sistema)",
       "JUNK": "LEAD DESCARTADO (sistema)"
     },
@@ -199,6 +203,26 @@
     dt.setUTCMonth(dt.getUTCMonth()+1);
     const end = isoPortal(dt.getUTCFullYear(), dt.getUTCMonth()+1, 1, 0,0,0);
     return { startISO: start, endISO: end };
+  }
+
+  // ✅ últimos 30 dias (com base no relógio do portal)
+  function isoFromPortalMs(msPortalClock){
+    const d = new Date(msPortalClock);
+    return isoPortal(
+      d.getUTCFullYear(),
+      d.getUTCMonth()+1,
+      d.getUTCDate(),
+      d.getUTCHours(),
+      d.getUTCMinutes(),
+      d.getUTCSeconds()
+    );
+  }
+
+  function last30DaysRangePortal(){
+    const offMin = CONFIG.PORTAL_TZ_OFFSET_MINUTES;
+    const endMs = Date.now() + offMin*60*1000;          // "agora" no relógio do portal
+    const startMs = endMs - (30*24*60*60*1000);         // -30d
+    return { startISO: isoFromPortalMs(startMs), endISO: isoFromPortalMs(endMs) };
   }
 
   function isoFromLocalInputToPortal(v){
@@ -1293,6 +1317,26 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     return items.length;
   }
 
+  // ✅ contar por USER + STATUS em um range (usado na taxa de sucesso 30d)
+  async function fetchPegCountRangeUserStatus(userId, statusId, startISO, endISO){
+    const data = await bxRaw("crm.lead.list", {
+      filter: {
+        [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+        ["<"  + CONFIG.UF_DATA_PEGAR]: endISO,
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": String(statusId)
+      },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 18000 });
+
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
+
   function leadDisplayName(it){
     const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
     if(nm) return nm;
@@ -1539,7 +1583,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const ordered = computeUserOrder();
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[], success30:{attended:0, converted:0, pct:0} };
       const l1 = us.lastTwo[0];
       const l2 = us.lastTwo[1];
 
@@ -1547,6 +1591,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
       const imgUrl = state.userPhoto.get(String(u.id)) || BLANK_IMG;
+
+      const suc = us.success30 || { attended:0, converted:0, pct:0 };
 
       const card = document.createElement("div");
       card.className = "cgdCard";
@@ -1559,6 +1605,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
                 <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
                 <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
+                <span class="cgdBadge">sucesso 30d: ${esc(suc.pct||0)}% (${esc(suc.converted||0)}/${esc(suc.attended||0)})</span>
                 <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
               </div>
             </div>
@@ -1614,9 +1661,16 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   async function fetchUserStatsFull(userId){
     const { startISO: dayS, endISO: dayE } = dayRangePortal();
     const { startISO: monS, endISO: monE } = monthRangePortal();
+    const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
 
     const pulledToday = await fetchPegCountRangeUser(userId, dayS, dayE);
     const pulledMonth = await fetchPegCountRangeUser(userId, monS, monE);
+
+    const [att30, conv30] = await Promise.all([
+      fetchPegCountRangeUserStatus(userId, CONFIG.LEAD_STATUS.ATENDIDO, r30S, r30E),
+      fetchPegCountRangeUserStatus(userId, CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA, r30S, r30E)
+    ]);
+    const pct = (att30 > 0) ? Math.round((conv30 / att30) * 100) : 0;
 
     const list = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
@@ -1629,7 +1683,13 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
     }).slice(0,2);
 
-    return { pulledToday: pulledToday||0, pulledMonth: pulledMonth||0, lastTwo, list: list || [] };
+    return {
+      pulledToday: pulledToday||0,
+      pulledMonth: pulledMonth||0,
+      lastTwo,
+      list: list || [],
+      success30: { attended: att30||0, converted: conv30||0, pct }
+    };
   }
 
   async function fetchUserStatsFullRetry(userId){
@@ -2019,6 +2079,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     state.userStats[u.id] = us;
     renderWho();
 
+    const suc = us.success30 || { attended:0, converted:0, pct:0 };
+
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
         <div style="font-weight:950">LEADS DA USUÁRIA • lista com informações</div>
@@ -2028,6 +2090,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       <div class="cgdRow" style="margin-bottom:10px">
         <div class="cgdBadge">Puxados (dia): <b>${esc(us.pulledToday||0)}</b></div>
         <div class="cgdBadge">Puxados (mês): <b>${esc(us.pulledMonth||0)}</b></div>
+        <div class="cgdBadge">Sucesso 30d: <b>${esc(suc.pct||0)}%</b> (${esc(suc.converted||0)}/${esc(suc.attended||0)})</div>
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
@@ -2491,21 +2554,30 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     try{
       const { startISO: dayS, endISO: dayE } = dayRangePortal();
       const { startISO: monS, endISO: monE } = monthRangePortal();
+      const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
 
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=4){
         const part = users.slice(i,i+4);
         const jobs = part.map(async u=>{
-          const [d, m, lt] = await Promise.all([
+          const [d, m, lt, att30, conv30] = await Promise.all([
             fetchPegCountRangeUser(u.id, dayS, dayE),
             fetchPegCountRangeUser(u.id, monS, monE),
-            fetchUserLastTwoFast(u.id)
+            fetchUserLastTwoFast(u.id),
+
+            // ✅ sucesso 30d baseado em DATA PEGAR:
+            fetchPegCountRangeUserStatus(u.id, CONFIG.LEAD_STATUS.ATENDIDO, r30S, r30E),
+            fetchPegCountRangeUserStatus(u.id, CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA, r30S, r30E),
           ]);
+
+          const pct = (att30 > 0) ? Math.round((conv30 / att30) * 100) : 0;
+
           state.userStats[u.id] = {
             ...(state.userStats[u.id]||{}),
             pulledToday: d||0,
             pulledMonth: m||0,
-            lastTwo: lt.lastTwo || []
+            lastTwo: lt.lastTwo || [],
+            success30: { attended: att30||0, converted: conv30||0, pct }
           };
         });
         await Promise.all(jobs);
