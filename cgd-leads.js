@@ -1,8 +1,9 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
    - SEM storage do navegador (NADA de localStorage/sessionStorage)
-   - Layout/estética mantidos e refinados (cabeçalhos mais baixos, colunas ajustadas, dark mode)
-   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
-   - Busca global por nome (independente da etapa) consultando Bitrix
+   - Layout/estética mantidos e refinados (títulos centralizados e destacados, botões com alto contraste, colunas ajustadas)
+   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON) + anti-“reverte” (bug intermitente)
+   - Busca global por nome (independente da etapa) consultando Bitrix + mostra USER + TRANSFERIR
+   - Carregamento mais rápido: histórico carrega em “fast mode” e só baixa lista completa ao abrir a usuária
 */
 (function(){
   "use strict";
@@ -112,13 +113,19 @@
       "JUNK": "DESCARTADO (sistema)"
     },
 
-    // Select do lead
+    // Select do lead (com ASSIGNED_BY_ID pra busca mostrar USER)
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
       "SOURCE_ID","PHONE","EMAIL",
       "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
       "UF_*"
+    ],
+
+    // Select “rápido” pro histórico (carrega MUITO mais rápido)
+    LEAD_SELECT_FAST: [
+      "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
+      "STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"
     ],
 
     HOT_EMOJI: "🔥"
@@ -172,6 +179,11 @@
   function stageName(id){
     return CONFIG.LEAD_STATUS_NAMES[String(id||"")] || String(id||"—");
   }
+  function userNameById(uid){
+    const id = String(uid||"");
+    const u = CONFIG.USERS.find(x=> String(x.id)===id);
+    return u ? u.name : (id ? ("USER " + id) : "—");
+  }
 
   // =========================
   // Webhook client
@@ -197,7 +209,7 @@
     return out;
   }
 
-  async function bx(method, params={}, options={}){
+  async function bxFull(method, params={}, options={}){
     const timeoutMs = Math.max(6000, Number(options.timeoutMs || 12000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
@@ -228,7 +240,7 @@
           e._bxError = data.error;
           throw e;
         }
-        return data.result;
+        return data; // FULL
       }catch(err){
         lastErr = err;
         const http = err && err._httpStatus;
@@ -248,6 +260,11 @@
       }
     }
     throw lastErr || new Error("Falha desconhecida");
+  }
+
+  async function bx(method, params={}, options={}){
+    const data = await bxFull(method, params, options);
+    return data.result;
   }
 
   async function bxListAll(method, params, max=500){
@@ -358,6 +375,23 @@
   --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
+  /* botões (alto contraste) */
+  --btnBg: rgba(10,10,12,.92);
+  --btnText: #fff;
+  --btnBorder: rgba(255,255,255,.20);
+
+  --miniBg: rgba(10,10,12,.92);
+  --miniText: #fff;
+  --miniBorder: rgba(255,255,255,.20);
+
+  --primaryBg: #127cff;
+  --primaryText: #fff;
+  --primaryBorder: rgba(0,0,0,.15);
+
+  --dangerBg: #ff2b55;
+  --dangerText: #fff;
+  --dangerBorder: rgba(0,0,0,.18);
+
   min-height: calc(100vh - 90px);
   padding: 10px 12px 110px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
@@ -403,17 +437,44 @@
   font-size: 12px;
   font-weight: 900;
 }
+
+/* BOTÕES (alto contraste, padronizados) */
 .cgdBtn{
   cursor:pointer;
-  border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.10);
-  color:#fff;
+  border: 2px solid var(--btnBorder);
+  background: var(--btnBg);
+  color: var(--btnText);
   border-radius: 999px;
-  padding: 7px 12px;
+  padding: 8px 12px;
   font-size: 12px;
   font-weight: 950;
+  letter-spacing: .2px;
 }
 .cgdBtn:active{ transform: translateY(1px); }
+.cgdBtn:disabled{ opacity:.55; cursor:not-allowed; transform:none; }
+
+.cgdMiniBtn{
+  cursor:pointer;
+  border: 2px solid var(--miniBorder);
+  background: var(--miniBg);
+  color: var(--miniText);
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: .2px;
+}
+.cgdMiniBtn:active{ transform: translateY(1px); }
+.cgdMiniBtn.primary{
+  background: var(--primaryBg);
+  color: var(--primaryText);
+  border-color: var(--primaryBorder);
+}
+.cgdMiniBtn.danger{
+  background: var(--dangerBg);
+  color: var(--dangerText);
+  border-color: var(--dangerBorder);
+}
 
 .cgdLayout{
   margin-top: 12px;
@@ -425,14 +486,14 @@
 .cgdGrid{
   flex: 1 1 auto;
   display:grid;
-  /* NOVOS LEADS ~40% menor */
-  grid-template-columns: 0.65fr 2.35fr;
+  /* NOVOS LEADS +20% e HISTÓRICO reduzido */
+  grid-template-columns: 0.78fr 2.22fr;
   gap: 12px;
 }
 
-/* Sidebar FILA */
+/* Sidebar FILA ( +20% largura ) */
 .cgdQueueSide{
-  width: 325px; /* +30% */
+  width: 390px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(255,255,255,.62);
@@ -479,25 +540,6 @@
 .cgdQueueRowItem .nm{ font-weight: 950; font-size: 12px; }
 .cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
 .cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
-.cgdMiniBtn{
-  cursor:pointer;
-  border: 1px solid rgba(30,40,70,.14);
-  background: rgba(255,255,255,.92);
-  border-radius: 12px;
-  padding: 7px 10px;
-  font-size: 12px;
-  font-weight: 950;
-}
-.cgdMiniBtn.primary{ background: rgba(120,210,255,.25); }
-.cgdMiniBtn.danger{ background: rgba(255,80,120,.16); border-color: rgba(255,80,120,.30); }
-
-/* FILA botões preto/branco (visíveis) */
-.cgdQueueSide .cgdBtn,
-.cgdQueueSide .cgdMiniBtn{
-  background: rgba(10,10,12,.92) !important;
-  color: #fff !important;
-  border-color: rgba(255,255,255,.16) !important;
-}
 
 .cgdCol{
   border: 1px solid var(--border);
@@ -510,28 +552,46 @@
   flex-direction: column;
 }
 
-/* Cabeçalho das colunas: mais baixo e 1 linha */
+/* Cabeçalho das colunas: título CENTRALIZADO e destacado */
 .cgdColHead{
-  padding: 6px 10px;
+  position: relative;
+  padding: 8px 10px;
   background: rgba(255,255,255,.78);
   border-bottom: 1px solid var(--border);
   display:flex;
   align-items:center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
 }
+.cgdColHead > div:first-child{ width:100%; }
 .cgdColHead .hTitle{
+  text-align:center;
+  width:100%;
   font-weight: 950;
-  font-size: 12px;
-  letter-spacing:.3px;
+  font-size: 13px;
+  letter-spacing:.6px;
   text-transform: uppercase;
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 6px 0;
+  border-radius: 999px;
+  border: 1px solid rgba(30,40,70,.12);
+  background: rgba(255,255,255,.92);
+}
+.cgdColHead .hActions{
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:flex-end;
 }
 .cgdColHead .hSub{ display:none; }
-.cgdColHead .hActions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
 .cgdList{
   padding: 10px;
@@ -588,15 +648,22 @@
   flex-wrap: wrap;
 }
 
+/* 🚨 NOVO LEAD — preto/branco (padrão) e vermelho/preto quando houver lead */
 .cgdAlertBox{
-  border: 1px solid rgba(255,80,140,.35);
+  border: 2px solid rgba(255,255,255,.18);
   border-radius: 16px;
   padding: 12px;
-  background: rgba(255,210,225,.85); /* sólido (sem gradiente) */
+  background: rgba(10,10,12,.95);
+  color: #fff;
   display:flex;
   align-items:center;
   justify-content: space-between;
   gap: 10px;
+}
+.cgdAlertBox.hot{
+  background: #ff2b55;
+  color: #111;
+  border-color: rgba(0,0,0,.18);
 }
 .cgdAlertBox .txt{
   font-weight: 950;
@@ -608,7 +675,8 @@
   display:block;
   margin-top: 4px;
   font-size: 11px;
-  color: rgba(18,26,40,.70);
+  color: inherit;
+  opacity: .85;
   font-weight: 900;
 }
 
@@ -629,7 +697,7 @@
   align-items:flex-start;
 }
 .cgdUserPic{
-  width: 52px; height: 52px; /* +~30% */
+  width: 52px; height: 52px;
   border-radius: 999px;
   object-fit: cover;
   border: 1px solid rgba(0,0,0,.10);
@@ -718,7 +786,7 @@
   background: rgba(255,255,255,.75);
 }
 .cgdInput, .cgdSelect{
-  border: 1px solid rgba(30,40,70,.18);
+  border: 2px solid rgba(30,40,70,.22);
   border-radius: 12px;
   padding: 10px 12px;
   font-weight: 900;
@@ -768,6 +836,8 @@ body{ padding-bottom: 110px !important; }
 body.cgdDark #cgdApp{
   background: linear-gradient(135deg, #2a2d33, #23262b 50%, #1f2227);
   color: rgba(255,255,255,.92);
+  --btnBorder: rgba(255,255,255,.22);
+  --miniBorder: rgba(255,255,255,.22);
 }
 body.cgdDark .cgdQueueSide,
 body.cgdDark .cgdCol{
@@ -780,6 +850,11 @@ body.cgdDark .cgdQueueHead{
   border-color: rgba(255,255,255,.10) !important;
   color:#fff;
 }
+body.cgdDark .cgdColHead .hTitle{
+  background: rgba(10,10,12,.92);
+  color: #fff;
+  border-color: rgba(255,255,255,.14);
+}
 body.cgdDark .cgdCard{
   background: rgba(248,248,245,.92) !important; /* off-white */
   color: rgba(18,26,40,.92) !important;
@@ -790,6 +865,9 @@ body.cgdDark .cgdBadge{
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
+  .cgdColHead .hActions{ position: static; transform: none; }
+  .cgdColHead{ justify-content: space-between; }
+  .cgdColHead .hTitle{ text-align:left; padding: 0; border: 0; background: transparent; }
 }
     `;
     const st = document.createElement("style");
@@ -854,15 +932,17 @@ body.cgdDark .cgdBadge{
     userPhoto: new Map(),         // id -> url (string)
     userPhotoTs: new Map(),       // id -> ms
     userPhotoPending: new Set(),  // id
+
+    // anti-“fila revertendo” por refresh
+    queueLocalWriteTs: 0
   };
 
   // =========================
-  // Fotos: robusto + rápido (evita “às vezes não carrega”)
+  // Fotos: robusto + rápido
   // =========================
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
   async function fetchUserPhotoOnce(userId){
-    // alguns portais retornam array
     const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
     const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
     const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
@@ -873,7 +953,6 @@ body.cgdDark .cgdBadge{
     const id = String(userId);
     const now = Date.now();
 
-    // cache válido por 30 min
     const ts = state.userPhotoTs.get(id) || 0;
     if(state.userPhoto.has(id) && (now - ts) < 30*60*1000) return state.userPhoto.get(id);
 
@@ -881,7 +960,6 @@ body.cgdDark .cgdBadge{
 
     state.userPhotoPending.add(id);
 
-    // retry leve
     let photo = "";
     try{
       for(let i=0;i<3;i++){
@@ -895,25 +973,16 @@ body.cgdDark .cgdBadge{
       state.userPhotoPending.delete(id);
     }
 
-    if(photo){
-      state.userPhoto.set(id, photo);
-      state.userPhotoTs.set(id, now);
-    }else{
-      // marca mesmo vazio, para não spammar
-      state.userPhoto.set(id, "");
-      state.userPhotoTs.set(id, now);
-    }
-
+    state.userPhoto.set(id, photo || "");
+    state.userPhotoTs.set(id, now);
     return state.userPhoto.get(id) || "";
   }
 
   async function warmUserPhotos(){
-    // aquece em paralelo, sem travar a UI
     const ids = CONFIG.USERS.map(u=>String(u.id));
     const bosses = CONFIG.BOSSES.map(x=>String(x));
     const all = Array.from(new Set(ids.concat(bosses)));
 
-    // chunk para não bater rate-limit
     for(let i=0;i<all.length;i+=6){
       const part = all.slice(i,i+6);
       await Promise.all(part.map(id=>ensureUserPhoto(id)));
@@ -936,7 +1005,6 @@ body.cgdDark .cgdBadge{
       box.appendChild(img);
     });
 
-    // tenta atualizar depois que o cache aqueceu
     setTimeout(()=>{
       ids.forEach((id, idx)=>{
         const img = box.children[idx];
@@ -967,9 +1035,9 @@ body.cgdDark .cgdBadge{
           </div>
 
           <div class="cgdTopRight">
-            <div class="cgdPill" id="pillPending">Pendentes: 0</div>
-            <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
-            <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
+            <div class="cgdPill" id="pillPending">Pendentes: —</div>
+            <div class="cgdPill" id="pillDay">Leads do dia: —</div>
+            <div class="cgdPill" id="pillMonth">Leads do mês: —</div>
 
             <select class="cgdSelect" id="searchScope">
               <option value="ALL">Busca geral</option>
@@ -1149,7 +1217,7 @@ body.cgdDark .cgdBadge{
             id: String(dealId),
             fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
           });
-          return;
+          return next.updatedAt;
         }catch(err){
           lastErr = err;
           await sleep(220 + attempt*420);
@@ -1160,7 +1228,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Render queue sidebar (sempre permite gerenciar mesmo vazia)
+  // Render queue sidebar
   // =========================
   function setStatus(txt){
     const el = $("#statusLine");
@@ -1221,9 +1289,17 @@ body.cgdDark .cgdBadge{
 
   async function persistQueueOrder(nextOrder){
     const q = state.queue.dealId ? state.queue : await fetchQueue();
-    state.queue = { ...state.queue, ...q, order: nextOrder.slice() };
+
+    // UI imediata + marca “write” para não reverter por refresh
+    state.queueLocalWriteTs = Date.now();
+    state.queue = { ...state.queue, ...q, order: nextOrder.slice(), updatedAt: state.queueLocalWriteTs };
     renderQueueSidebar();
-    enqueueOp("saveQueueOrder", async ()=>{ await saveQueue(q.dealId, { order: nextOrder, hiddenUsers: q.hiddenUsers||[] }); });
+
+    enqueueOp("saveQueueOrder", async ()=>{
+      const ts = await saveQueue(q.dealId, { order: nextOrder, hiddenUsers: q.hiddenUsers||[] });
+      // atualiza “updatedAt” local após persistência
+      state.queue.updatedAt = ts || state.queue.updatedAt;
+    });
     flushOps();
   }
 
@@ -1239,16 +1315,21 @@ body.cgdDark .cgdBadge{
     return items || [];
   }
 
+  // ✅ contagem correta via “total” do Bitrix
   async function fetchNewLeadsCount(){
-    const items = await bxListAll("crm.lead.list", {
+    const data = await bxFull("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
-      select: ["ID"]
-    }, 2000);
-    return (items||[]).length;
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 12000 });
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    // fallback (se portal não devolver total)
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
   }
 
-  // Leads do dia/mês = transições para EM_ATENDIMENTO (NEW -> IN_PROCESS) por responsável no momento da transição
   async function fetchStats(){
     const startToday = todayISOStart();
     const startMonth = monthISOStart();
@@ -1274,7 +1355,6 @@ body.cgdDark .cgdBadge{
         });
         return { total, byUser };
       }catch(_){
-        // fallback aproximado
         const arr = await bxListAll("crm.lead.list", {
           filter: { "STATUS_ID": CONFIG.LEAD_STATUS.EM_ATENDIMENTO, ">DATE_MODIFY": isoStart },
           order: { DATE_MODIFY:"DESC" },
@@ -1324,7 +1404,6 @@ body.cgdDark .cgdBadge{
 
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
-    // fundo + texto com contraste
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
     if(op.includes("PREVENT")) return { bg:"#111", fg:"#fff" };
     if(op.includes("MEDSENIOR") || op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
@@ -1363,7 +1442,6 @@ body.cgdDark .cgdBadge{
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
-    // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
@@ -1376,7 +1454,6 @@ body.cgdDark .cgdBadge{
       });
     });
 
-    // regra: ao pegar e selecionar usuária, manda pra final da fila (se estiver na fila)
     if(rotateQueue){
       enqueueOp("rotateQueueOnPick", async ()=>{
         const q = state.queue.dealId ? state.queue : await fetchQueue();
@@ -1386,8 +1463,9 @@ body.cgdDark .cgdBadge{
         if(i >= 0){
           order.splice(i,1);
           order.push(uid);
-          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
-          state.queue = { ...state.queue, ...q, order };
+          const ts = await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          state.queueLocalWriteTs = Date.now();
+          state.queue = { ...state.queue, ...q, order, updatedAt: ts || state.queueLocalWriteTs };
         }
       });
     }
@@ -1447,6 +1525,14 @@ body.cgdDark .cgdBadge{
     flushOps();
   }
 
+  // ✅ TRANSFERIR LEAD (mantém status; só troca responsável)
+  async function actionTransferLead(leadId, toUserId){
+    enqueueOp("transferLead", async ()=>{
+      await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) });
+    });
+    flushOps();
+  }
+
   // =========================
   // Render
   // =========================
@@ -1465,7 +1551,10 @@ body.cgdDark .cgdBadge{
     if(alert) list.appendChild(alert);
 
     const has = (items||[]).length > 0;
-    if(alert) alert.style.display = has ? "flex" : "none";
+    if(alert){
+      alert.style.display = has ? "flex" : "none";
+      alert.classList.toggle("hot", !!has);
+    }
 
     const btnSoundOn = $("#btnSoundOn");
     if(btnSoundOn) btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
@@ -1575,7 +1664,6 @@ body.cgdDark .cgdBadge{
       list.appendChild(empty);
     }
 
-    // tenta completar fotos que ainda não vieram
     setTimeout(async ()=>{
       const imgs = $$("img[data-user-pic]");
       const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
@@ -1589,13 +1677,31 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Fetch Usuárias
+  // Fetch Usuárias (FAST x FULL)
   // =========================
-  async function fetchUserStats(userId){
-    // contagens “puxados” vindas do fetchStats()
+  async function fetchUserStats(userId, fullList){
     const pulledToday = Number(state._pulledDayByUser?.[String(userId)] || 0);
     const pulledMonth = Number(state._pulledMonthByUser?.[String(userId)] || 0);
 
+    const statusOk = [
+      CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+      CONFIG.LEAD_STATUS.QUALIFICADO,
+      CONFIG.LEAD_STATUS.ATENDIDO
+    ];
+
+    if(!fullList){
+      // FAST: só últimos itens relevantes (para o card do histórico)
+      const lastFast = await bxListAll("crm.lead.list", {
+        filter: { "ASSIGNED_BY_ID": String(userId), "STATUS_ID": statusOk },
+        order: { DATE_MODIFY: "DESC" },
+        select: CONFIG.LEAD_SELECT_FAST
+      }, 8);
+
+      const lastTwo = (lastFast||[]).slice(0,2);
+      return { pulledToday, pulledMonth, lastTwo, list: null };
+    }
+
+    // FULL: lista completa (somente quando abrir o modal da usuária)
     const last = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
       order: { DATE_MODIFY: "DESC" },
@@ -1733,17 +1839,22 @@ body.cgdDark .cgdBadge{
       try{
         btn.disabled = true;
 
-        // ordem preserva: atuais primeiro, depois novos marcados
         const checked = getChecked();
         const keep = current.filter(id=> checked.includes(id));
         const add = checked.filter(id=> !keep.includes(id));
         const next = keep.concat(add);
 
-        await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
-        const fresh = await fetchQueue();
-        state.queue = { ...state.queue, ...fresh };
+        state.queueLocalWriteTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: next.slice(), updatedAt: state.queueLocalWriteTs };
         renderQueueSidebar();
-        setStatus(`Atualizado: ${nowBRTime()}`);
+        setStatus(`Atualizando fila… ${nowBRTime()}`);
+
+        enqueueOp("queueApply", async ()=>{
+          const ts = await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+          state.queue.updatedAt = ts || state.queue.updatedAt;
+        });
+        flushOps();
+
         closeModal();
       }catch(err){
         console.error(err);
@@ -1790,19 +1901,20 @@ body.cgdDark .cgdBadge{
         const firstId = order.shift();
         order.push(firstId);
 
-        // UI imediata
-        state.queue = { ...state.queue, ...q, order: order.slice() };
+        state.queueLocalWriteTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: order.slice(), updatedAt: state.queueLocalWriteTs };
         renderQueueSidebar();
 
-        const nm = (CONFIG.USERS.find(x=>String(x.id)===String(firstId))||{}).name || ("USER "+firstId);
+        const nm = userNameById(firstId);
         setLastServed(nm);
         setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
 
         enqueueOp("saveQueueRotate", async ()=>{
-          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          const ts = await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          state.queue.updatedAt = ts || state.queue.updatedAt;
         });
 
-        await actionPickLead(leadId, firstId, false); // já rotacionou
+        await actionPickLead(leadId, firstId, false);
         flushOps();
         closeModal();
       }catch(err){
@@ -1979,7 +2091,7 @@ body.cgdDark .cgdBadge{
 
     let us;
     try{
-      us = await fetchUserStats(u.id);
+      us = await fetchUserStats(u.id, true); // FULL (só aqui)
     }catch(_){
       closeModal();
       return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
@@ -2167,7 +2279,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Busca global no Bitrix por nome (independente da etapa)
+  // Busca global no Bitrix por nome + mostra USER + TRANSFERIR
   // =========================
   function uniqById(list){
     const m = new Map();
@@ -2182,7 +2294,6 @@ body.cgdDark .cgdBadge{
     const t = String(term||"").trim();
     if(!t) return [];
 
-    // filtros OR nem sempre funcionam igual em todo portal, então fazemos 3 consultas e juntamos
     const baseFilter = {};
     if(assignedIdOrAll && assignedIdOrAll !== "ALL"){
       baseFilter["ASSIGNED_BY_ID"] = String(assignedIdOrAll);
@@ -2206,12 +2317,13 @@ body.cgdDark .cgdBadge{
       select: CONFIG.LEAD_SELECT
     }, 60).catch(()=>[]);
 
-    // também tenta por “contains” em TITLE com hot emoji etc
     const merged = uniqById([...(a||[]), ...(b||[]), ...(c||[])]);
     return merged.slice(0, 60);
   }
 
   function modalSearchResults(term, results){
+    const userOptions = CONFIG.USERS.map(u=>`<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+
     const rows = (results||[]).map(it=>{
       const name = leadDisplayName(it);
       const st = stageName(it.STATUS_ID);
@@ -2221,11 +2333,16 @@ body.cgdDark .cgdBadge{
       const bairro = pickUF(it, CONFIG.UF_BAIRRO);
       const fonte = pickUF(it, CONFIG.UF_FONTE);
       const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      const assigned = userNameById(it.ASSIGNED_BY_ID);
+
       return `
         <tr>
-          <td><b>${esc(name)}</b>
+          <td>
+            <b>${esc(name)}</b>
             <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(st)}</div>
+            <div style="opacity:.7;font-weight:900;font-size:11px">USER: <b>${esc(assigned)}</b></div>
           </td>
+
           <td style="width:360px">
             <div style="font-weight:900;opacity:.9">OPERADORA: ${esc(oper||"—")}</div>
             <div style="font-weight:900;opacity:.9">IDADE: ${esc(idade||"—")}</div>
@@ -2234,8 +2351,18 @@ body.cgdDark .cgdBadge{
             <div style="font-weight:900;opacity:.9">FONTE: ${esc(fonte||"—")}</div>
             <div style="font-weight:900;opacity:.9">DATA/HORA: ${esc(dt||"—")}</div>
           </td>
-          <td style="width:140px;text-align:right">
-            <button class="cgdBtn" data-open-lead="${esc(it.ID)}">Abrir</button>
+
+          <td style="width:270px">
+            <div class="cgdRow" style="justify-content:flex-end">
+              <button class="cgdBtn" data-open-lead="${esc(it.ID)}">Abrir</button>
+            </div>
+            <div style="height:8px"></div>
+            <div class="cgdRow" style="justify-content:flex-end">
+              <select class="cgdSelect" data-transfer-to="${esc(it.ID)}" style="min-width:170px">
+                ${userOptions}
+              </select>
+              <button class="cgdBtn" data-transfer="${esc(it.ID)}">TRANSFERIR</button>
+            </div>
           </td>
         </tr>
       `;
@@ -2244,17 +2371,38 @@ body.cgdDark .cgdBadge{
     openModal(`BUSCA • ${term}`, `
       <div style="font-weight:950;margin-bottom:10px">Resultados: <b>${esc((results||[]).length)}</b></div>
       <table class="cgdTable">
-        <thead><tr><th>Lead</th><th>Dados</th><th></th></tr></thead>
+        <thead><tr><th>Lead</th><th>Dados</th><th style="text-align:right">Ações</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead encontrado.</td></tr>`}</tbody>
       </table>
     `);
 
-    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+    const body = $(".cgdModalBody");
+
+    body?.addEventListener("click", async (e)=>{
       const b = e.target.closest("[data-open-lead]");
       if(!b) return;
       const id = b.getAttribute("data-open-lead");
       await modalLeadDetails(id);
-    }, { once:true });
+    });
+
+    body?.addEventListener("click", async (e)=>{
+      const tbtn = e.target.closest("[data-transfer]");
+      if(!tbtn) return;
+      const leadId = tbtn.getAttribute("data-transfer");
+      const sel = $(`select[data-transfer-to="${CSS.escape(String(leadId))}"]`, body);
+      const toUserId = sel?.value;
+      if(!toUserId) return;
+      tbtn.disabled = true;
+      try{
+        await actionTransferLead(leadId, toUserId);
+        alert("Transferência enfileirada ✅ (sincroniza quando normalizar a conexão)");
+      }catch(err){
+        console.error(err);
+        alert("Falha ao enfileirar transferência.");
+      }finally{
+        tbtn.disabled = false;
+      }
+    });
   }
 
   async function modalLeadDetails(leadId){
@@ -2270,11 +2418,13 @@ body.cgdDark .cgdBadge{
       const bairro = pickUF(it, CONFIG.UF_BAIRRO);
       const fonte = pickUF(it, CONFIG.UF_FONTE);
       const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      const assigned = userNameById(it.ASSIGNED_BY_ID);
 
       openModal(`LEAD • ${name}`, `
         <div class="cgdRow" style="margin-bottom:10px">
           <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
           <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
+          <div class="cgdBadge">USER: <b>${esc(assigned)}</b></div>
         </div>
         <div style="font-weight:900;opacity:.9;line-height:1.4">
           <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
@@ -2333,10 +2483,11 @@ body.cgdDark .cgdBadge{
     }
   }
 
+  // ✅ FAST: histórico não baixa lista inteira (só 2 últimos)
   async function refreshUsers(){
     try{
       const jobs = CONFIG.USERS.map(async u=>{
-        const st = await fetchUserStats(u.id);
+        const st = await fetchUserStats(u.id, false);
         state.userStats[u.id] = st;
       });
       await Promise.all(jobs);
@@ -2349,11 +2500,25 @@ body.cgdDark .cgdBadge{
   async function refreshQueue(){
     try{
       const q = await fetchQueue();
+
+      // anti-bug “reverte”: não aplica fetch antigo por cima do local
+      const localTs = Number(state.queue.updatedAt || 0);
+      const fetchedTs = Number(q.updatedAt || 0);
+
+      // se acabou de mexer localmente (últimos 1200ms), evita sobrescrever
+      if(Date.now() - (state.queueLocalWriteTs||0) < 1200){
+        return;
+      }
+
+      // se o que veio é mais antigo, ignora
+      if(localTs && fetchedTs && fetchedTs < localTs){
+        return;
+      }
+
       state.queue = { ...state.queue, ...q };
       renderQueueSidebar();
     }catch(err){
       console.warn("queue failed", err);
-      // Mesmo com falha, mantém UI da fila com botão Gerenciar
       renderQueueSidebar();
     }
   }
@@ -2366,7 +2531,6 @@ body.cgdDark .cgdBadge{
       refreshStats(),
       refreshQueue()
     ]);
-    // depois stats, atualiza usuários (para usar mapas do dia/mês)
     await refreshUsers();
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
@@ -2435,12 +2599,12 @@ body.cgdDark .cgdBadge{
         const dir = up ? "up" : "down";
         const next = moveQueueLocal(id, dir);
 
-        // UI imediata
+        state.queueLocalWriteTs = Date.now();
         state.queue.order = next.slice();
+        state.queue.updatedAt = state.queueLocalWriteTs;
         renderQueueSidebar();
         setStatus(`Fila ajustada • ${nowBRTime()}`);
 
-        // persist background
         await persistQueueOrder(next);
       }catch(err){
         console.error(err);
@@ -2458,14 +2622,18 @@ body.cgdDark .cgdBadge{
         const nextId = order.shift();
         order.push(nextId);
 
-        state.queue = { ...state.queue, ...q, order: order.slice() };
+        state.queueLocalWriteTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: order.slice(), updatedAt: state.queueLocalWriteTs };
         renderQueueSidebar();
 
-        const nm = (CONFIG.USERS.find(x=>String(x.id)===String(nextId))||{}).name || ("USER "+nextId);
+        const nm = userNameById(nextId);
         setLastServed(nm);
         setStatus(`Andou fila: ${nm} • ${nowBRTime()}`);
 
-        enqueueOp("queueWalk", async ()=>{ await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] }); });
+        enqueueOp("queueWalk", async ()=>{
+          const ts = await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          state.queue.updatedAt = ts || state.queue.updatedAt;
+        });
         flushOps();
       }catch(err){
         console.error(err);
@@ -2475,9 +2643,13 @@ body.cgdDark .cgdBadge{
     $("#btnQueueReset")?.addEventListener("click", async ()=>{
       try{
         const q = state.queue.dealId ? state.queue : await fetchQueue();
-        state.queue = { ...state.queue, ...q, order: [] };
+        state.queueLocalWriteTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: [], updatedAt: state.queueLocalWriteTs };
         renderQueueSidebar();
-        enqueueOp("queueReset", async ()=>{ await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] }); });
+        enqueueOp("queueReset", async ()=>{
+          const ts = await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] });
+          state.queue.updatedAt = ts || state.queue.updatedAt;
+        });
         flushOps();
       }catch(err){
         console.error(err);
@@ -2526,7 +2698,7 @@ body.cgdDark .cgdBadge{
   }
 
   // =========================
-  // Start
+  // Start (carrega UI IMEDIATO; refresh roda em paralelo)
   // =========================
   async function start(){
     if(!CONFIG.WEBHOOK){
@@ -2541,10 +2713,11 @@ body.cgdDark .cgdBadge{
     updateSoundUI();
     applyDark();
 
-    // aquece fotos em background (resolve “demora/às vezes não carrega”)
+    // aquece fotos em background
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
-    await hardRefreshAll();
+    // ✅ NÃO trava carregamento: roda refresh em paralelo
+    hardRefreshAll().catch(()=>{});
     renderBossPics();
 
     // refreshes
