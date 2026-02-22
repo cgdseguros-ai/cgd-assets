@@ -1,9 +1,17 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   ✅ Correções desta versão (baseada no lead 6979):
-   - Contagens por "Data PEGAR" (UF_CRM_1771741018): filtro OR (ISO local + BR datetime)
-   - Botão "DIAG 6979" para confirmar formato salvo no Bitrix e validar contagens
-   - ABRIR com retry e timeout maior (reduz "Sem conexão no momento")
-   - HISTÓRICO rápido: últimos 2 primeiro; contagens depois
+   - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - UI refinada + ajustes de layout (títulos centralizados, botões abaixo do título, contrastes)
+   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
+   - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
+     ✅ Agora considera SOMENTE os STATUS:
+        EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO (JUNK), CONVERTIDO
+   - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+   - Correções:
+     ✅ aviãozinho só quando ENTRA lead novo em NOVO LEAD (não quando some por PEGAR)
+     ✅ avião 3D de lado, amarelo, ~10cm (maior)
+     ✅ PREVENT: badge OPERADORA com fundo azul escuro
+     ✅ Barra inferior: cinza bem escuro + “Endereço” acima + CNPJs lado a lado
+     ✅ ABRIR: retry mais robusto (reduz erro intermitente “Sem conexão…”)
 */
 (function(){
   "use strict";
@@ -14,16 +22,21 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
+    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
+
+    // ✅ Data PEGAR (base oficial de contagem "dia" e "mês")
     UF_DATA_PEGAR: "UF_CRM_1771741018",
 
+    // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014",
-    UF_IDADE:     "UF_CRM_1771339221",
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
+    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -31,45 +44,47 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
+    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
     FOLLOWUP_DEALS: {
       CATEGORY_ID: 17,
       STAGE_BY_USER: {
-        "15":   "C17:UC_FQ8UPI",
-        "19":   "C17:UC_1HXNTB",
-        "17":   "C17:UC_RRQKAQ",
-        "23":   "C17:UC_4HQGI1",
-        "811":  "C17:UC_8Y4R4V",
-        "3081": "C17:EXECUTING",
-        "3083": "C17:UC_8O5UFO",
-        "3079": "C17:UC_P1P9RJ",
-        "3085": "C17:UC_U8AAGB",
-        "3389": "C17:UC_A6LSS8",
-        "815":  "C17:UC_ZT6WEB",
-        "3387": "C17:UC_RXISLQ"
+        "15":   "C17:UC_FQ8UPI",   // ALINE
+        "19":   "C17:UC_1HXNTB",   // ADRIANA
+        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
+        "23":   "C17:UC_4HQGI1",   // MARIANA
+        "811":  "C17:UC_8Y4R4V",   // JOSIANE
+        "3081": "C17:EXECUTING",   // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",   // GABRIEL
+        "3387": "C17:UC_RXISLQ"    // BEATRIZ
       }
     },
 
+    // Logo topo (troque aqui quando quiser)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
+    // Links
     LINKS: {
       GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
-    FAST_NEW_PULSE_MS: 1500,
-    FULL_NEW_LEADS_MS: 9000,
-
-    REFRESH_USERS_LASTTWO_MS: 12000,
-    REFRESH_USERS_COUNTS_MS: 45000,
-
-    REFRESH_STATS_MS: 12000,
+    // Refresh
+    REFRESH_NEW_LEADS_MS: 4500,
+    REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
+    REFRESH_WHO_MS: 12000,
 
+    // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
     LIMIT_USER_LAST:  120,
     LIMIT_LAST_TWO_FETCH: 12,
 
+    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -85,31 +100,44 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // Sócios (fotos na barra inferior)
     BOSSES: [27, 1, 15],
 
+    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
       ATENDIDO: "UC_JT9G60",
       QUALIFICADO: "UC_0NFA3H",
       PERDIDO: "UC_5IMTI4",
-      CONVERTIDO: "CONVERTED",
-      DESCARTADO: "JUNK",
+      CONVERTIDO: "UC_B3RQAF",
+      // sistema
+      LEAD_CONVERTIDO_SISTEMA: "CONVERTED",
+      LEAD_DESCARTADO_SISTEMA: "JUNK",
     },
 
-    // ✅ Contagens por Data PEGAR consideram APENAS estes status:
-    COUNT_STATUS_FILTER: ["IN_PROCESS","UC_JT9G60","JUNK","CONVERTED"],
+    // ✅ Para contagem (somente estas colunas)
+    COUNT_STATUS_ALLOWED: [
+      "IN_PROCESS",   // EM ATENDIMENTO
+      "UC_JT9G60",    // ATENDIDO
+      "UC_0NFA3H",    // QUALIFICADO
+      "JUNK",         // LEAD DESCARTADO (sistema)
+      "UC_B3RQAF"     // CONVERTIDO
+    ],
 
+    // Nomes (para exibir na busca)
     LEAD_STATUS_NAMES: {
       "NEW": "NOVO LEAD",
       "IN_PROCESS": "EM ATENDIMENTO",
       "UC_JT9G60": "ATENDIDO",
       "UC_0NFA3H": "QUALIFICADO",
       "UC_5IMTI4": "PERDIDO",
+      "UC_B3RQAF": "CONVERTIDO",
       "CONVERTED": "LEAD CONVERTIDO (sistema)",
       "JUNK": "LEAD DESCARTADO (sistema)"
     },
 
+    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
@@ -118,14 +146,11 @@
       "UF_*"
     ],
 
-    HOT_EMOJI: "🔥",
-
-    // ✅ Lead de diagnóstico (você passou 6979)
-    DIAG_LEAD_ID: 6979,
+    HOT_EMOJI: "🔥"
   };
 
   // =========================
-  // Helpers
+  // Helpers DOM
   // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
@@ -138,43 +163,44 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
-  // Formato ISO local: YYYY-MM-DDTHH:mm:ss (sem Z)
-  function bxLocalDateTime(d){
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da= String(d.getDate()).padStart(2,"0");
-    const hh= String(d.getHours()).padStart(2,"0");
-    const mi= String(d.getMinutes()).padStart(2,"0");
-    const ss= String(d.getSeconds()).padStart(2,"0");
-    return `${y}-${m}-${da}T${hh}:${mi}:${ss}`;
+  // ===== Timezone-safe range formatting =====
+  function pad2(n){ return String(n).padStart(2,"0"); }
+  function isoWithOffset(dt){
+    if(!(dt instanceof Date) || Number.isNaN(dt.getTime())) return "";
+    const y = dt.getFullYear();
+    const mo = pad2(dt.getMonth()+1);
+    const d  = pad2(dt.getDate());
+    const hh = pad2(dt.getHours());
+    const mi = pad2(dt.getMinutes());
+    const ss = pad2(dt.getSeconds());
+    const off = -dt.getTimezoneOffset(); // minutes east of UTC
+    const sign = off >= 0 ? "+" : "-";
+    const offAbs = Math.abs(off);
+    const oh = pad2(Math.floor(offAbs/60));
+    const om = pad2(offAbs%60);
+    // Bitrix costuma aceitar datetime com offset (mais seguro que Z em UTC)
+    return `${y}-${mo}-${d}T${hh}:${mi}:${ss}${sign}${oh}:${om}`;
   }
 
-  // ✅ Formato Bitrix BR comum: DD.MM.YYYY HH:MM:SS
-  function bxBRDateTime(d){
-    const dd = String(d.getDate()).padStart(2,"0");
-    const mm = String(d.getMonth()+1).padStart(2,"0");
-    const yy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2,"0");
-    const mi = String(d.getMinutes()).padStart(2,"0");
-    const ss = String(d.getSeconds()).padStart(2,"0");
-    return `${dd}.${mm}.${yy} ${hh}:${mi}:${ss}`;
-  }
-
-  function dayRangeLocal(){
+  function dayRange(){
     const d0 = new Date(); d0.setHours(0,0,0,0);
     const d1 = new Date(d0.getTime() + 24*60*60*1000);
-    return {
-      startISO: bxLocalDateTime(d0), endISO: bxLocalDateTime(d1),
-      startBR:  bxBRDateTime(d0),    endBR:  bxBRDateTime(d1)
-    };
+    return { startISO: isoWithOffset(d0), endISO: isoWithOffset(d1) };
   }
-  function monthRangeLocal(){
+  function monthRange(){
     const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
     const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
-    return {
-      startISO: bxLocalDateTime(d0), endISO: bxLocalDateTime(d1),
-      startBR:  bxBRDateTime(d0),    endBR:  bxBRDateTime(d1)
-    };
+    return { startISO: isoWithOffset(d0), endISO: isoWithOffset(d1) };
+  }
+
+  function isoFromLocalInput(v){
+    if(!v) return "";
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if(!m) return "";
+    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
+    const dt = new Date(y, mo, d, hh, mi, 0, 0);
+    if(Number.isNaN(dt.getTime())) return "";
+    return isoWithOffset(dt);
   }
 
   function fmtDateBRFromISO(iso){
@@ -197,7 +223,8 @@
   function userNameById(id){
     const s = String(id||"");
     const u = CONFIG.USERS.find(x=>String(x.id)===s);
-    return u ? u.name : (s ? ("USER " + s) : "—");
+    if(u) return u.name;
+    return s ? ("USER " + s) : "—";
   }
 
   // =========================
@@ -225,7 +252,7 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(9000, Number(options.timeoutMs || 19000));
+    const timeoutMs = Math.max(7000, Number(options.timeoutMs || 15000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
@@ -265,7 +292,7 @@
 
         if(attempt < 2 && (transientHTTP || aborted || net)){
           clearTimeout(t);
-          await sleep(240 + attempt*420);
+          await sleep(260 + attempt*520);
           continue;
         }
         clearTimeout(t);
@@ -303,17 +330,8 @@
     return out.slice(0, max);
   }
 
-  async function retry(fn, tries=3, baseDelay=320){
-    let last;
-    for(let i=0;i<tries;i++){
-      try{ return await fn(); }
-      catch(e){ last = e; await sleep(baseDelay + i*520); }
-    }
-    throw last;
-  }
-
   // =========================
-  // Offline queue (RAM)
+  // “Offline”: fila de ações (só RAM)
   // =========================
   const pendingOps = [];
   function enqueueOp(name, run){ pendingOps.push({ name, run }); }
@@ -330,7 +348,9 @@
           await op.run();
           pendingOps.shift();
           await sleep(90);
-        }catch(_){ break; }
+        }catch(_){
+          break;
+        }
       }
     } finally{
       flushBusy = false;
@@ -338,7 +358,7 @@
   }
 
   // =========================
-  // Audio + Plane
+  // Audio — 3 bipes
   // =========================
   function tripleBeep(){
     try{
@@ -365,39 +385,43 @@
     }catch(_){}
   }
 
+  // =========================
+  // Paper plane animation — AMARELO ~10cm (maior) 3D de lado
+  // =========================
   function flyPlaneYellow(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
+      // ~10cm visual: 360px (aprox)
       d.innerHTML = `
-        <svg viewBox="0 0 420 240" width="420" height="240" aria-hidden="true">
+        <svg viewBox="0 0 320 200" width="360" height="360" aria-hidden="true">
           <defs>
-            <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#ffe55a"/>
-              <stop offset="1" stop-color="#ffb800"/>
+            <linearGradient id="gBody" x1="0" x2="1">
+              <stop offset="0" stop-color="#ffe46a"/>
+              <stop offset="0.55" stop-color="#ffd400"/>
+              <stop offset="1" stop-color="#f2b800"/>
             </linearGradient>
-            <linearGradient id="g2" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0" stop-color="#ffd400"/>
-              <stop offset="1" stop-color="#ff8f00"/>
+            <linearGradient id="gFold" x1="0" x2="1">
+              <stop offset="0" stop-color="rgba(0,0,0,.14)"/>
+              <stop offset="1" stop-color="rgba(0,0,0,0)"/>
             </linearGradient>
-            <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="rgba(0,0,0,.35)"/>
+            <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="rgba(0,0,0,.28)"/>
             </filter>
           </defs>
-          <g filter="url(#sh)">
-            <path d="M30 140 L370 60 L280 182 L190 150 Z"
-                  fill="url(#g1)" stroke="rgba(0,0,0,.35)" stroke-width="5" />
-            <path d="M190 150 L370 60"
-                  stroke="rgba(0,0,0,.28)" stroke-width="6" />
-            <path d="M30 140 L190 150 L260 210 L95 205 Z"
-                  fill="url(#g2)" stroke="rgba(0,0,0,.28)" stroke-width="5" />
-            <path d="M370 60 L405 48 L382 80 Z"
-                  fill="#ffcc00" stroke="rgba(0,0,0,.32)" stroke-width="5" />
+
+          <!-- “de lado” / 3D: corpo + asa + dobra -->
+          <g filter="url(#shadow)">
+            <path d="M18 112 L302 60 L196 170 L156 130 L18 112 Z"
+              fill="url(#gBody)" stroke="rgba(0,0,0,.35)" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M156 130 L302 60" stroke="rgba(0,0,0,.32)" stroke-width="4" stroke-linecap="round"/>
+            <path d="M18 112 L196 170 L156 130 Z" fill="rgba(255,255,255,.12)"/>
+            <path d="M92 118 L210 152" stroke="url(#gFold)" stroke-width="10" stroke-linecap="round"/>
           </g>
         </svg>
       `;
       document.body.appendChild(d);
-      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
+      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2400);
     }catch(_){}
   }
 
@@ -424,6 +448,8 @@
     radial-gradient(900px 650px at 55% 95%, rgba(255,150,200,.12), transparent 60%),
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
+
+/* Top bar */
 .cgdTop{
   position: sticky;
   top: 0;
@@ -449,6 +475,7 @@
 }
 .cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
 .cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
+
 .cgdPill{
   border: 1px solid rgba(255,255,255,.16);
   background: rgba(255,255,255,.10);
@@ -458,6 +485,8 @@
   font-size: 12px;
   font-weight: 950;
 }
+
+/* Botões com contraste forte (padrão) */
 .cgdBtn{
   cursor:pointer;
   border: 2px solid rgba(255,255,255,.22);
@@ -470,6 +499,8 @@
 }
 .cgdBtn:active{ transform: translateY(1px); }
 .cgdBtn[disabled]{ opacity:.6; cursor:not-allowed; transform:none; }
+
+/* Mini botões */
 .cgdMiniBtn{
   cursor:pointer;
   border: 2px solid rgba(10,10,12,.85);
@@ -480,10 +511,31 @@
   font-size: 12px;
   font-weight: 950;
 }
-.cgdMiniBtn.primary{ background: rgba(120,210,255,.32); border-color: rgba(10,10,12,.75); }
-.cgdMiniBtn.danger{ background: rgba(255,70,120,.18); border-color: rgba(10,10,12,.75); }
-.cgdLayout{ margin-top: 12px; display:flex; gap: 12px; align-items: stretch; }
-.cgdGrid{ flex: 1 1 auto; display:grid; grid-template-columns: 0.85fr 2.15fr; gap: 12px; }
+.cgdMiniBtn.primary{
+  background: rgba(120,210,255,.32);
+  border-color: rgba(10,10,12,.75);
+}
+.cgdMiniBtn.danger{
+  background: rgba(255,70,120,.18);
+  border-color: rgba(10,10,12,.75);
+}
+
+/* Layout */
+.cgdLayout{
+  margin-top: 12px;
+  display:flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.cgdGrid{
+  flex: 1 1 auto;
+  display:grid;
+  grid-template-columns: 0.85fr 2.15fr;
+  gap: 12px;
+}
+
+/* Sidebar FILA */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -513,7 +565,14 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
-.cgdQueueBody{ padding: 10px; overflow:auto; min-height: 0; display:flex; flex-direction: column; gap: 8px; }
+.cgdQueueBody{
+  padding: 10px;
+  overflow:auto;
+  min-height: 0;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .cgdQueueRowItem{
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -527,6 +586,8 @@
 .cgdQueueRowItem .nm{ font-weight: 950; font-size: 12px; }
 .cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
 .cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
+
+/* Colunas */
 .cgdCol{
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -537,7 +598,13 @@
   display:flex;
   flex-direction: column;
 }
-.cgdColHead{ padding: 8px 10px 10px; background: rgba(255,255,255,.78); border-bottom: 1px solid var(--border); }
+
+/* Cabeçalho das colunas — título central e ações abaixo */
+.cgdColHead{
+  padding: 8px 10px 10px;
+  background: rgba(255,255,255,.78);
+  border-bottom: 1px solid var(--border);
+}
 .cgdColHead .hTitle{
   width:100%;
   text-align:center;
@@ -550,8 +617,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cgdColHead .hActionsRow{ margin-top: 8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }
-.cgdList{ padding: 10px; display:flex; flex-direction: column; gap: 10px; overflow:auto; min-height: 0; }
+.cgdColHead .hActionsRow{
+  margin-top: 8px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:center;
+}
+
+.cgdList{
+  padding: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow:auto;
+  min-height: 0;
+}
+
 .cgdCard{
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -559,9 +642,25 @@
   box-shadow: 0 8px 20px rgba(20,30,60,.08);
   padding: 10px 10px 10px;
 }
-.cgdCardRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
-.cgdLeadName{ font-weight: 950; font-size: 14px; line-height: 1.2; word-break: break-word; flex: 1 1 auto; }
-.cgdBadges{ display:flex; gap:6px; flex-wrap: wrap; margin-top: 8px; }
+.cgdCardRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap:10px;
+}
+.cgdLeadName{
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.2;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.cgdBadges{
+  display:flex;
+  gap:6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 .cgdBadge{
   font-size: 10px;
   font-weight: 950;
@@ -571,7 +670,15 @@
   background: rgba(255,255,255,.9);
 }
 .cgdBadge.oper{ border: 0; padding: 5px 10px; }
-.cgdActions{ margin-top: 10px; display:flex; gap:8px; justify-content: flex-end; flex-wrap: wrap; }
+.cgdActions{
+  margin-top: 10px;
+  display:flex;
+  gap:8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* 🚨 NOVO LEAD: preto/branco; com leads -> vermelho/preto */
 .cgdAlertBox{
   border: 2px solid rgba(10,10,12,.85);
   border-radius: 16px;
@@ -583,14 +690,41 @@
   justify-content: space-between;
   gap: 10px;
 }
-.cgdAlertBox.hot{ background: rgba(255,0,0,.92); color: #111; border-color: rgba(0,0,0,.35); }
-.cgdAlertBox .txt{ font-weight: 950; font-size: 12px; line-height: 1.25; width: 100%; }
-.cgdAlertBox .txt small{ display:block; margin-top: 4px; font-size: 11px; opacity: .92; font-weight: 900; }
+.cgdAlertBox.hot{
+  background: rgba(255,0,0,.92);
+  color: #111;
+  border-color: rgba(0,0,0,.35);
+}
+.cgdAlertBox .txt{
+  font-weight: 950;
+  font-size: 12px;
+  line-height: 1.25;
+  width: 100%;
+}
+.cgdAlertBox .txt small{
+  display:block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: .92;
+  font-weight: 900;
+}
 
-#listWho.cgdWhoGrid{ display:grid !important; grid-template-columns: 1fr 1fr; gap: 10px; }
-@media (max-width: 1100px){ #listWho.cgdWhoGrid{ grid-template-columns: 1fr; } }
+/* HISTÓRICO em 2 colunas */
+#listWho.cgdWhoGrid{
+  display:grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 1100px){
+  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
+}
 
-.cgdUserLine{ display:flex; gap:10px; align-items:flex-start; }
+/* Usuária: foto maior + layout */
+.cgdUserLine{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
 .cgdUserPic{
   width: 52px; height: 52px;
   border-radius: 999px;
@@ -600,11 +734,12 @@
   flex: 0 0 auto;
 }
 
+/* Bottom bar */
 .cgdBottom{
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(10,10,12,.95);
+  background: rgba(14,16,20,.98); /* ✅ cinza bem escuro */
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -616,7 +751,8 @@
 }
 .cgdBottom .bLeft{ display:flex; align-items:center; gap:10px; min-width: 340px; }
 .cgdBottom .bCenter{ flex:1; text-align:center; font-style: italic; font-weight: 900; opacity:.92; }
-.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 360px; }
+.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 420px; }
+
 .cgdBossPics{ display:flex; gap:8px; align-items:center; }
 .cgdBossPic{
   width: 34px; height: 34px;
@@ -626,8 +762,23 @@
   background: rgba(255,255,255,.08);
 }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
-.cgdCnpj{ font-size: 11px; line-height: 1.25; }
+.cgdAddrLabel{ font-size: 10px; font-weight: 950; opacity: .72; letter-spacing:.2px; text-transform: uppercase; margin-bottom:2px; }
+.cgdCnpj{
+  font-size: 11px;
+  line-height: 1.25;
+  display:flex;              /* ✅ lado a lado */
+  gap: 18px;
+  justify-content:flex-end;
+  flex-wrap: nowrap;
+  text-align:left;
+}
+.cgdCnpj .blk{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
 
+/* Modals */
 .cgdModalOverlay{
   position: fixed;
   inset: 0;
@@ -660,7 +811,11 @@
   background: rgba(255,255,255,.75);
 }
 .cgdModalTitle{ font-weight: 950; font-size: 13px; }
-.cgdModalBody{ padding: 12px 14px; overflow: auto; min-height: 0; }
+.cgdModalBody{
+  padding: 12px 14px;
+  overflow: auto;
+  min-height: 0;
+}
 .cgdModalFoot{
   padding: 12px 14px;
   border-top: 1px solid rgba(30,40,70,.12);
@@ -678,7 +833,9 @@
   font-size: 12px;
   background: rgba(255,255,255,.95);
 }
-.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.cgdRow{
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+}
 .cgdTable{
   width: 100%;
   border-collapse: collapse;
@@ -697,23 +854,25 @@
 
 body{ padding-bottom: 110px !important; }
 
+/* Paper plane */
 .cgdPlane{
   position: fixed;
-  top: 86px;
-  left: -520px;
-  width: 420px;
-  height: 240px;
+  top: 90px;
+  left: -420px;
+  width: 360px;
+  height: 360px;
   z-index: 9999;
   pointer-events:none;
   opacity: .98;
-  animation: planeFly 1.9s linear forwards;
+  animation: planeFly 2.1s linear forwards;
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(6deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(10deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 820px)) rotate(-4deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 860px)) rotate(-8deg); opacity: 0; }
 }
 
+/* DARK MODE */
 body.cgdDark #cgdApp{
   background: linear-gradient(135deg, #2a2d33, #23262b 50%, #1f2227);
   color: rgba(255,255,255,.92);
@@ -733,7 +892,9 @@ body.cgdDark .cgdCard{
   background: rgba(248,248,245,.92) !important;
   color: rgba(18,26,40,.92) !important;
 }
-body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
+body.cgdDark .cgdBadge{
+  background: rgba(255,255,255,.9) !important;
+}
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
@@ -777,14 +938,17 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // State (RAM only)
+  // State (somente RAM)
   // =========================
   const state = {
     soundOn: true,
     dark: false,
 
-    maxNewLeadIdSeen: 0,
-    _newLeadFirstPulseDone: false,
+    // novo lead detection
+    lastNewLeadId: null,
+    lastNewLeadMaxId: 0,     // ✅ para não disparar avião ao PEGAR
+    lastNewLeadCount: 0,
+    _newLeadFirstLoadDone: false,
 
     newLeadsAll: [],
     newLeadsRender: [],
@@ -798,18 +962,19 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     lastServedUserName: "—",
 
+    // cache fotos usuários (RAM)
     userPhoto: new Map(),
     userPhotoTs: new Map(),
     userPhotoPending: new Set(),
   };
 
   // =========================
-  // Fotos users (RAM cache)
+  // Fotos: robusto + rápido
   // =========================
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
   async function fetchUserPhotoOnce(userId){
-    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 15000 });
+    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
     const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
     const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
     return photo || "";
@@ -833,7 +998,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           photo = await fetchUserPhotoOnce(id);
           if(photo) break;
         }catch(_){}
-        await sleep(220 + i*320);
+        await sleep(180 + i*240);
       }
     } finally{
       state.userPhotoPending.delete(id);
@@ -852,7 +1017,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     for(let i=0;i<all.length;i+=6){
       const part = all.slice(i,i+6);
       await Promise.all(part.map(id=>ensureUserPhoto(id)));
-      await sleep(140);
+      await sleep(120);
     }
   }
 
@@ -870,6 +1035,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       img.onerror = ()=>{ img.src = BLANK_IMG; };
       box.appendChild(img);
     });
+
     setTimeout(()=>{
       ids.forEach((id, idx)=>{
         const img = box.children[idx];
@@ -901,10 +1067,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
           <div class="cgdTopRight">
             <div class="cgdPill" id="pillPending">Pendentes: 0</div>
-            <div class="cgdPill" id="pillDay">Leads do dia: …</div>
-            <div class="cgdPill" id="pillMonth">Leads do mês: …</div>
-
-            <button class="cgdBtn" id="btnDiag">DIAG ${esc(CONFIG.DIAG_LEAD_ID)}</button>
+            <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
+            <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
 
             <select class="cgdSelect" id="searchScope">
               <option value="ALL">Busca geral</option>
@@ -957,25 +1121,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
                 </div>
               </div>
               <div class="cgdList cgdWhoGrid" id="listWho">
-                ${CONFIG.USERS.map(u=>`
-                  <div class="cgdCard">
-                    <div class="cgdUserLine">
-                      <img class="cgdUserPic" alt="${esc(u.name)}" src="${BLANK_IMG}" />
-                      <div style="width:100%">
-                        <div class="cgdCardRow">
-                          <div style="font-weight:950">${esc(u.name)}</div>
-                          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
-                            <span class="cgdBadge">dia: …</span>
-                            <span class="cgdBadge">mês: …</span>
-                            <button class="cgdMiniBtn" disabled>Abrir</button>
-                          </div>
-                        </div>
-                        <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.55">Carregando últimos leads…</div>
-                        <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.45">—</div>
-                      </div>
-                    </div>
-                  </div>
-                `).join("")}
+                <div style="opacity:.7;font-weight:900">Carregando…</div>
               </div>
             </section>
           </div>
@@ -1001,16 +1147,22 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         <div class="cgdBottom">
           <div class="bLeft">
             <div class="cgdBossPics" id="bossPics"></div>
-            <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+            <div>
+              <div class="cgdAddrLabel">Endereço</div>
+              <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+            </div>
           </div>
           <div class="bCenter">System created by GRUPO CGD</div>
           <div class="bRight">
             <div class="cgdCnpj">
-              <div><b>CGD CORRETORA</b></div>
-              <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              <div style="height:6px"></div>
-              <div><b>CGD BARRA</b></div>
-              <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+              <div class="blk">
+                <div><b>CGD CORRETORA</b></div>
+                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              </div>
+              <div class="blk">
+                <div><b>CGD BARRA</b></div>
+                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1019,7 +1171,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // Queue JSON via Pipeline 27
+  // Queue JSON via Pipeline 27 (multi-PC)
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -1075,7 +1227,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           return { dealId: String(deal.ID), ...parseQueue(raw) };
         }catch(err){
           lastErr = err;
-          await sleep(220 + attempt*420);
+          await sleep(200 + attempt*350);
         }
       }
       throw lastErr || new Error("Falha ao carregar fila");
@@ -1101,20 +1253,24 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           return;
         }catch(err){
           lastErr = err;
-          await sleep(240 + attempt*520);
+          await sleep(220 + attempt*420);
         }
       }
       throw lastErr || new Error("Falha ao salvar fila");
     });
   }
 
+  // =========================
+  // Render queue sidebar
+  // =========================
   function setStatus(txt){
     const el = $("#statusLine");
     if(el) el.textContent = txt;
   }
   function setLastServed(name){
+    state.lastServedUserName = name || "—";
     const el = $("#lastServed");
-    if(el) el.textContent = name || "—";
+    if(el) el.textContent = state.lastServedUserName;
   }
 
   function renderQueueSidebar(){
@@ -1178,73 +1334,58 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // =========================
   async function fetchNewLeadsAll(){
     const items = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": "NEW" },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
     }, CONFIG.LIMIT_BATCH_MAX);
     return items || [];
   }
 
-  async function fetchNewLeadPulse(){
+  async function fetchNewLeadsCount(){
     const data = await bxRaw("crm.lead.list", {
-      filter: { "STATUS_ID": "NEW" },
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 14000 });
-
-    const total = Number(data && data.total);
-    const items = Array.isArray(data?.result) ? data.result : [];
-    const newestId = items && items[0] ? Number(items[0].ID) : 0;
-
-    return {
-      total: Number.isFinite(total) ? total : items.length,
-      newestId: Number.isFinite(newestId) ? newestId : 0
-    };
-  }
-
-  // ✅ Filtro OR (ISO + BR) para DATETIME do Bitrix
-  function buildPegFilterBase(startISO, endISO, startBR, endBR){
-    const F = CONFIG.UF_DATA_PEGAR;
-    return {
-      "STATUS_ID": CONFIG.COUNT_STATUS_FILTER,
-      "LOGIC": "OR",
-      "0": {
-        [">=" + F]: startISO,
-        ["<" + F]:  endISO
-      },
-      "1": {
-        [">=" + F]: startBR,
-        ["<" + F]:  endBR
-      }
-    };
-  }
-
-  async function fetchPegTotalRange(startISO, endISO, startBR, endBR){
-    const data = await bxRaw("crm.lead.list", {
-      filter: buildPegFilterBase(startISO, endISO, startBR, endBR),
-      order: { ID: "DESC" },
-      select: ["ID"],
-      start: 0
-    }, { timeoutMs: 20000 });
-
+    }, { timeoutMs: 16000 });
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
     return items.length;
   }
 
-  async function fetchPegTotalRangeUser(userId, startISO, endISO, startBR, endBR){
-    const base = buildPegFilterBase(startISO, endISO, startBR, endBR);
-    base["ASSIGNED_BY_ID"] = String(userId);
+  // ✅ Contagens por Data PEGAR (dia e mês) + ✅ filtro por STATUS permitido
+  function countFilterBase(startISO, endISO){
+    return {
+      [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+      ["<"  + CONFIG.UF_DATA_PEGAR]: endISO,
+      "STATUS_ID": CONFIG.COUNT_STATUS_ALLOWED.slice()
+    };
+  }
 
+  async function fetchPegCountRangeAll(startISO, endISO){
     const data = await bxRaw("crm.lead.list", {
-      filter: base,
+      filter: countFilterBase(startISO, endISO),
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 20000 });
+    }, { timeoutMs: 17000 });
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
 
+  async function fetchPegCountRangeUser(userId, startISO, endISO){
+    const data = await bxRaw("crm.lead.list", {
+      filter: {
+        ...countFilterBase(startISO, endISO),
+        "ASSIGNED_BY_ID": String(userId),
+      },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 17000 });
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
@@ -1277,7 +1418,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("PREVENT")) return { bg:"#0b2a6b", fg:"#fff" };
+    // ✅ PREVENT: azul escuro (não preto)
+    if(op.includes("PREVENT")) return { bg:"#0a2a66", fg:"#fff" };
     if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
     if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
     if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
@@ -1317,16 +1459,17 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
+    // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
+    renderPendingCount(state.pendingCount - 1);
 
-    // ✅ salva Data PEGAR no formato BR (mais compatível com filtro)
     enqueueOp("pickLead", async ()=>{
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
-        STATUS_ID: "IN_PROCESS",
-        [CONFIG.UF_DATA_PEGAR]: bxBRDateTime(new Date())
+        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+        [CONFIG.UF_DATA_PEGAR]: isoWithOffset(new Date()) // ✅ grava Data PEGAR com offset local
       });
     });
 
@@ -1353,13 +1496,58 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
+    renderPendingCount(state.pendingCount - 1);
 
-    enqueueOp("discardLead", async ()=>{ await leadUpdate(leadId, { STATUS_ID: "JUNK" }); });
+    enqueueOp("discardLead", async ()=>{
+      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    });
+    flushOps();
+  }
+
+  async function actionMoveLead(leadId, statusId){
+    enqueueOp("moveLead", async ()=>{
+      const fields = { STATUS_ID: statusId };
+      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
+        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const t = String(lead?.TITLE||"").trim();
+        if(!t.startsWith(CONFIG.HOT_EMOJI)){
+          fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
+        }
+      }
+      await leadUpdate(leadId, fields);
+    });
     flushOps();
   }
 
   async function actionTransferLead(leadId, toUserId){
-    enqueueOp("transferLead", async ()=>{ await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) }); });
+    enqueueOp("transferLead", async ()=>{
+      await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) });
+    });
+    flushOps();
+  }
+
+  async function actionSetPrazo(leadId, iso){
+    enqueueOp("setPrazo", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    });
+    flushOps();
+  }
+
+  async function createFollowUpDeal(userId, lead, iso){
+    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
+    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
+    enqueueOp("createDealFollowUp", async ()=>{
+      await bx("crm.deal.add", {
+        fields: {
+          CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+          STAGE_ID: stage || "C17:NEW",
+          ASSIGNED_BY_ID: String(userId),
+          TITLE: title,
+          COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
+          [CONFIG.UF_PRAZO]: iso || undefined
+        }
+      });
+    });
     flushOps();
   }
 
@@ -1427,8 +1615,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   function renderStats(stats){
-    $("#pillDay").textContent = `Leads do dia: ${stats.day}`;
-    $("#pillMonth").textContent = `Leads do mês: ${stats.month}`;
+    $("#pillDay").textContent = `Leads do dia: ${stats.day||0}`;
+    $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
   }
 
   function computeUserOrder(){
@@ -1455,15 +1643,12 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const ordered = computeUserOrder();
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || {};
-      const l1 = us.lastTwo?.[0];
-      const l2 = us.lastTwo?.[1];
+      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const l1 = us.lastTwo[0];
+      const l2 = us.lastTwo[1];
 
       const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
       const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
-
-      const day = (us.pulledToday===0 || us.pulledToday) ? us.pulledToday : "…";
-      const mon = (us.pulledMonth===0 || us.pulledMonth) ? us.pulledMonth : "…";
 
       const imgUrl = state.userPhoto.get(String(u.id)) || BLANK_IMG;
 
@@ -1476,8 +1661,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
             <div class="cgdCardRow">
               <div style="font-weight:950">${esc(u.name)}</div>
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
-                <span class="cgdBadge">dia: ${esc(day)}</span>
-                <span class="cgdBadge">mês: ${esc(mon)}</span>
+                <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
+                <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
                 <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
               </div>
             </div>
@@ -1489,6 +1674,14 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       list.appendChild(card);
     });
 
+    if(ordered.length===0){
+      const empty = document.createElement("div");
+      empty.style.opacity=".75";
+      empty.style.fontWeight="900";
+      empty.textContent="Nenhuma usuária para mostrar (todas ocultas).";
+      list.appendChild(empty);
+    }
+
     setTimeout(async ()=>{
       const imgs = $$("img[data-user-pic]");
       const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
@@ -1498,129 +1691,796 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         const url = state.userPhoto.get(id) || "";
         if(url && img.src !== url) img.src = url;
       });
-    }, 250);
+    }, 500);
   }
 
   // =========================
-  // HISTÓRICO — FAST FIRST
+  // Fetch Usuárias (RÁPIDO pro Histórico)
   // =========================
-  let usersLastTwoBusy = false;
-  async function refreshUsersLastTwo(){
-    if(usersLastTwoBusy) return;
-    usersLastTwoBusy = true;
-    try{
-      const users = CONFIG.USERS.slice();
-      for(let i=0;i<users.length;i+=4){
-        const part = users.slice(i,i+4);
-        await Promise.all(part.map(async u=>{
-          const last = await bxListAll("crm.lead.list", {
-            filter: { "ASSIGNED_BY_ID": String(u.id) },
-            order: { DATE_MODIFY: "DESC" },
-            select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"]
-          }, CONFIG.LIMIT_LAST_TWO_FETCH);
+  async function fetchUserLastTwoFast(userId){
+    const last = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"]
+    }, CONFIG.LIMIT_LAST_TWO_FETCH);
 
-          const lastTwo = (last||[]).filter(x=>{
-            const st = String(x.STATUS_ID||"");
-            return st==="IN_PROCESS" || st==="UC_JT9G60" || st==="UC_0NFA3H";
-          }).slice(0,2);
+    const lastTwo = (last||[]).filter(x=>{
+      const st = String(x.STATUS_ID||"");
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+    }).slice(0,2);
 
-          state.userStats[u.id] = { ...(state.userStats[u.id]||{}), lastTwo };
-        }));
-        renderWho();
-        await sleep(140);
+    return { lastTwo };
+  }
+
+  // =========================
+  // Lista completa (somente quando abrir modal ABRIR)
+  // ✅ retry robusto e menos paralelismo (reduz falha intermitente)
+  // =========================
+  async function fetchUserStatsFull(userId){
+    const { startISO: dayS, endISO: dayE } = dayRange();
+    const { startISO: monS, endISO: monE } = monthRange();
+
+    // contagens primeiro (rápido)
+    const pulledToday = await fetchPegCountRangeUser(userId, dayS, dayE);
+    const pulledMonth = await fetchPegCountRangeUser(userId, monS, monE);
+
+    // lista depois (mais pesada)
+    const list = await bxListAll("crm.lead.list", {
+      filter: { "ASSIGNED_BY_ID": String(userId) },
+      order: { DATE_MODIFY: "DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, CONFIG.LIMIT_USER_LAST);
+
+    const lastTwo = (list||[]).filter(x=>{
+      const st = String(x.STATUS_ID||"");
+      return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
+    }).slice(0,2);
+
+    return { pulledToday: pulledToday||0, pulledMonth: pulledMonth||0, lastTwo, list: list || [] };
+  }
+
+  async function fetchUserStatsFullRetry(userId){
+    let lastErr = null;
+    for(let i=0;i<3;i++){
+      try{
+        return await fetchUserStatsFull(userId);
+      }catch(err){
+        lastErr = err;
+        await sleep(260 + i*520);
       }
-    }catch(err){
-      console.warn("users lastTwo failed", err);
-    }finally{
-      usersLastTwoBusy = false;
     }
-  }
-
-  let usersCountsBusy = false;
-  async function refreshUsersCounts(){
-    if(usersCountsBusy) return;
-    usersCountsBusy = true;
-    try{
-      const dayR = dayRangeLocal();
-      const monR = monthRangeLocal();
-
-      const users = CONFIG.USERS.slice();
-      for(let i=0;i<users.length;i+=3){
-        const part = users.slice(i,i+3);
-        await Promise.all(part.map(async u=>{
-          const [d, m] = await Promise.all([
-            fetchPegTotalRangeUser(u.id, dayR.startISO, dayR.endISO, dayR.startBR, dayR.endBR),
-            fetchPegTotalRangeUser(u.id, monR.startISO, monR.endISO, monR.startBR, monR.endBR)
-          ]);
-          state.userStats[u.id] = { ...(state.userStats[u.id]||{}), pulledToday: d||0, pulledMonth: m||0 };
-        }));
-        renderWho();
-        await sleep(170);
-      }
-    }catch(err){
-      console.warn("users counts failed", err);
-    }finally{
-      usersCountsBusy = false;
-    }
+    throw lastErr || new Error("Falha ao carregar dados da usuária");
   }
 
   // =========================
-  // Diagnóstico (Lead 6979)
+  // Modals (mantidos)
   // =========================
-  async function runDiag(){
-    const id = String(CONFIG.DIAG_LEAD_ID);
-    openModal(`DIAGNÓSTICO • Lead #${id}`, `<div style="opacity:.75;font-weight:900">Consultando Bitrix…</div>`);
+  async function modalHideUsers(){
+    openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
+    let q;
     try{
-      const lead = await retry(()=> bx("crm.lead.get", { id }), 3, 350);
-      const peg = lead?.[CONFIG.UF_DATA_PEGAR];
-
-      const dayR = dayRangeLocal();
-      const monR = monthRangeLocal();
-
-      const dayISO = await fetchPegTotalRange(dayR.startISO, dayR.endISO, "00.00.0000 00:00:00", "00.00.0000 00:00:01").catch(()=> null);
-      const dayBR  = await fetchPegTotalRange("0000-00-00T00:00:00", "0000-00-00T00:00:01", dayR.startBR, dayR.endBR).catch(()=> null);
-      const dayOR  = await fetchPegTotalRange(dayR.startISO, dayR.endISO, dayR.startBR, dayR.endBR).catch(()=> null);
-
-      const monISO = await fetchPegTotalRange(monR.startISO, monR.endISO, "00.00.0000 00:00:00", "00.00.0000 00:00:01").catch(()=> null);
-      const monBR  = await fetchPegTotalRange("0000-00-00T00:00:00", "0000-00-00T00:00:01", monR.startBR, monR.endBR).catch(()=> null);
-      const monOR  = await fetchPegTotalRange(monR.startISO, monR.endISO, monR.startBR, monR.endBR).catch(()=> null);
-
-      openModal(`DIAGNÓSTICO • Lead #${id}`, `
-        <div style="font-weight:950;margin-bottom:8px">Valor salvo no campo Data PEGAR (${esc(CONFIG.UF_DATA_PEGAR)}):</div>
-        <div class="cgdBadge" style="display:inline-block;margin-bottom:12px"><b>${esc(peg || "— VAZIO —")}</b></div>
-
-        <div style="font-weight:950;margin:12px 0 8px">Ranges do dia:</div>
-        <div class="cgdBadge">ISO: ${esc(dayR.startISO)} → ${esc(dayR.endISO)}</div>
-        <div class="cgdBadge">BR: ${esc(dayR.startBR)} → ${esc(dayR.endBR)}</div>
-
-        <div style="font-weight:950;margin:12px 0 8px">Teste contagem do dia:</div>
-        <div class="cgdBadge">Somente ISO = <b>${esc(dayISO)}</b></div>
-        <div class="cgdBadge">Somente BR = <b>${esc(dayBR)}</b></div>
-        <div class="cgdBadge">ISO OR BR = <b>${esc(dayOR)}</b></div>
-
-        <div style="font-weight:950;margin:12px 0 8px">Teste contagem do mês:</div>
-        <div class="cgdBadge">Somente ISO = <b>${esc(monISO)}</b></div>
-        <div class="cgdBadge">Somente BR = <b>${esc(monBR)}</b></div>
-        <div class="cgdBadge">ISO OR BR = <b>${esc(monOR)}</b></div>
-
-        <div style="margin-top:14px;opacity:.75;font-weight:900">
-          Se o campo estiver vazio no lead 6979, a contagem vai dar 0 mesmo. Se estiver preenchido em BR e “Somente BR” der certo, fechamos o diagnóstico.
-        </div>
-      `);
-    }catch(err){
-      console.error(err);
+      q = await fetchQueue();
+    }catch(_){
       closeModal();
-      openModal(`DIAGNÓSTICO • Lead #${id}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
+
+    const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
+
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="huNone">Mostrar todas</button>
+        <button class="cgdBtn" id="huApply">Aplicar</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead><tr><th>Oculta</th><th>Usuária</th></tr></thead>
+        <tbody>
+          ${CONFIG.USERS.map(u=>{
+            const checked = hiddenSet.has(String(u.id)) ? "checked" : "";
+            return `<tr>
+              <td style="width:90px"><input type="checkbox" data-hu-user="${esc(u.id)}" ${checked} /></td>
+              <td><b>${esc(u.name)}</b></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    `;
+
+    openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+
+    $("#huNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
+    });
+
+    $("#huApply")?.addEventListener("click", async ()=>{
+      const btn = $("#huApply");
+      try{
+        btn.disabled = true;
+        const hidden = $$('input[type=checkbox][data-hu-user]')
+          .filter(ch=> ch.checked)
+          .map(ch=> String(ch.getAttribute("data-hu-user")));
+
+        await saveQueue(q.dealId, { order: q.order||[], hiddenUsers: hidden });
+
+        const fresh = await fetchQueue();
+        state.queue = { ...state.queue, ...fresh };
+        renderQueueSidebar();
+        renderWho();
+        setStatus(`Atualizado: ${nowBRTime()}`);
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalQueueManage(){
+    openModal("FILA • GERENCIAR", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
+    let q;
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("FILA • GERENCIAR", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    state.queue = { ...state.queue, ...q };
+
+    const current = (q.order || []).map(String);
+    const currentSet = new Set(current);
+
+    const rows = CONFIG.USERS.map(u=>{
+      const checked = currentSet.has(String(u.id)) ? "checked" : "";
+      return `<tr data-u="${esc(u.id)}">
+        <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
+        <td><b>${esc(u.name)}</b></td>
+      </tr>`;
+    }).join("");
+
+    const body = `
+      <div style="font-weight:950; margin-bottom:10px">Adicionar / retirar usuárias da fila</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="qAll">Selecionar todas</button>
+        <button class="cgdBtn" id="qNone">Limpar</button>
+        <button class="cgdBtn" id="qApply">Aplicar alterações</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
+        <tbody id="qTbody">${rows}</tbody>
+      </table>
+    `;
+
+    openModal("FILA • GERENCIAR", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+
+    const tbody = $("#qTbody");
+    const getChecked = ()=> $$('input[type=checkbox][data-q-user]', tbody)
+      .filter(ch=>ch.checked)
+      .map(ch=> String(ch.getAttribute("data-q-user")));
+
+    $("#qAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = true);
+    });
+    $("#qNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = false);
+    });
+
+    $("#qApply")?.addEventListener("click", async ()=>{
+      const btn = $("#qApply");
+      try{
+        btn.disabled = true;
+
+        const checked = getChecked();
+        const keep = current.filter(id=> checked.includes(id));
+        const add = checked.filter(id=> !keep.includes(id));
+        const next = keep.concat(add);
+
+        await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+        const fresh = await fetchQueue();
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...fresh };
+        renderQueueSidebar();
+        setStatus(`Atualizado: ${nowBRTime()}`);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="pickFirst">PRIMEIRA DA FILA</button>
+      </div>
+
+      <div style="height:1px;background:rgba(30,40,70,.10);margin:10px 0"></div>
+
+      <div style="font-weight:950;margin-bottom:8px">Ou selecionar usuária:</div>
+      <div class="cgdRow">
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+        <button class="cgdBtn" id="pickGo">Confirmar</button>
+      </div>
+      <div style="font-size:11px;font-weight:900;opacity:.75;margin-top:10px">
+        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>. A usuária vai para o final da fila.
+      </div>
+    `;
+    openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
+
+    $("#pickFirst")?.addEventListener("click", async ()=>{
+      const btn = $("#pickFirst");
+      try{
+        btn.disabled = true;
+
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const order = (q.order||[]).map(String);
+        if(order.length === 0){
+          alert("Fila vazia. Clique em FILA > Gerenciar para adicionar usuárias.");
+          return;
+        }
+
+        const firstId = order.shift();
+        order.push(firstId);
+
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: order.slice() };
+        renderQueueSidebar();
+
+        const nm = userNameById(firstId);
+        setLastServed(nm);
+        setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
+
+        enqueueOp("saveQueueRotate", async ()=>{
+          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+        });
+
+        await actionPickLead(leadId, firstId, false);
+        flushOps();
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      const btn = $("#pickGo");
+      try{
+        btn.disabled = true;
+        const uid = $("#pickUser").value;
+        await actionPickLead(leadId, uid, true);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalBatchTransfer(){
+    openModal("TRANSFERIR EM LOTE", `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+      <div style="opacity:.75;font-weight:900">Carregando leads pendentes…</div>
+    `);
+
+    let all;
+    try{
+      all = state.newLeadsAll && state.newLeadsAll.length ? state.newLeadsAll.slice() : await fetchNewLeadsAll();
+    }catch(_){
+      closeModal();
+      return openModal("TRANSFERIR EM LOTE", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    const opsUser = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+
+    function uniq(arr){
+      const s = new Set(arr.filter(Boolean).map(String));
+      return Array.from(s).sort((a,b)=> String(a).localeCompare(String(b)));
+    }
+
+    const operadoras = uniq(all.map(it=> pickUF(it, CONFIG.UF_OPERADORA)));
+    const opsOper = [`<option value="ALL">Todas</option>`].concat(
+      operadoras.map(o=> `<option value="${esc(o)}">${esc(o)}</option>`)
+    ).join("");
+
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Operadora:</label>
+        <select class="cgdSelect" id="btOper">${opsOper}</select>
+
+        <label style="font-weight:950">Data do Lead:</label>
+        <input class="cgdInput" type="date" id="btDate" />
+
+        <label style="font-weight:950">Transferir para:</label>
+        <select class="cgdSelect" id="btUser">${opsUser}</select>
+
+        <button class="cgdBtn" id="btApply">Aplicar filtro</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Leads listados: <b id="btCount">0</b></div>
+        <div class="cgdBadge">Pendentes total: <b>${esc(state.pendingCount||all.length)}</b></div>
+      </div>
+
+      <table class="cgdTable">
+        <thead>
+          <tr>
+            <th style="width:80px">Sel.</th>
+            <th>Lead</th>
+            <th style="width:280px">Info</th>
+          </tr>
+        </thead>
+        <tbody id="btTbody"></tbody>
+      </table>
+    `;
+
+    openModal("TRANSFERIR EM LOTE", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
+    `);
+
+    const tbody = $("#btTbody");
+    const countEl = $("#btCount");
+
+    function matchDate(it, yyyy_mm_dd){
+      if(!yyyy_mm_dd) return true;
+      const dtuf = pickUF(it, CONFIG.UF_DT_LEAD);
+      const t = Date.parse(String(dtuf||""));
+      if(!Number.isFinite(t)) return false;
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const da= String(d.getDate()).padStart(2,"0");
+      return `${y}-${m}-${da}` === yyyy_mm_dd;
+    }
+
+    function filtered(){
+      const op = $("#btOper").value;
+      const date = $("#btDate").value;
+      return all.filter(it=>{
+        const oper = String(pickUF(it, CONFIG.UF_OPERADORA)||"");
+        if(op!=="ALL" && oper!==op) return false;
+        if(!matchDate(it, date)) return false;
+        return true;
+      });
+    }
+
+    function draw(list){
+      countEl.textContent = String(list.length);
+      tbody.innerHTML = list.length ? list.map(it=>{
+        const info = leadBadgesRich(it);
+        const infoHtml = info.map(([k,v])=> `<div style="font-weight:900;opacity:.85">${esc(k)}: ${esc(v)}</div>`).join("");
+        return `
+          <tr>
+            <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
+            <td>
+              <b>${esc(leadDisplayName(it))}</b>
+              <div style="opacity:.7;font-weight:900;font-size:11px">STATUS: ${esc(stageName(it.STATUS_ID))}</div>
+            </td>
+            <td>${infoHtml}</td>
+          </tr>
+        `;
+      }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    draw(filtered());
+    $("#btApply")?.addEventListener("click", ()=> draw(filtered()));
+
+    $("#btDo")?.addEventListener("click", async ()=>{
+      const btn = $("#btDo");
+      const toId = $("#btUser").value;
+      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
+        .filter(x=>x.checked)
+        .map(x=> x.getAttribute("data-bt-id"));
+
+      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
+      try{
+        btn.disabled = true;
+
+        ids.forEach(id=>{
+          state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
+        });
+        state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+        renderNewLeads(state.newLeadsRender);
+
+        for(const id of ids){
+          await actionPickLead(id, toId, true);
+          await sleep(60);
+        }
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalUserOpen(userId){
+    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
+    if(!u) return;
+
+    openModal(`ABRIR • ${u.name}`, `
+      <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
+      <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
+    `);
+
+    let us;
+    try{
+      us = await fetchUserStatsFullRetry(u.id);
+    }catch(_){
+      closeModal();
+      return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    state.userStats[u.id] = us;
+    renderWho();
+
+    const body = `
+      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
+        <div style="font-weight:950">LEADS DA USUÁRIA • buscar / mover / follow-up</div>
+        <button class="cgdBtn" id="muRefresh">Atualizar</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Puxados (dia): <b>${esc(us.pulledToday||0)}</b></div>
+        <div class="cgdBadge">Puxados (mês): <b>${esc(us.pulledMonth||0)}</b></div>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" id="muSearch" placeholder="Filtrar na lista (rápido)..." style="min-width:260px" />
+        <select class="cgdSelect" id="muStage">
+          <option value="ALL">Todas as etapas</option>
+          ${Object.values(CONFIG.LEAD_STATUS).map(st=>`<option value="${esc(st)}">${esc(stageName(st))}</option>`).join("")}
+        </select>
+        <button class="cgdBtn" id="muAll">Marcar todos</button>
+        <button class="cgdBtn" id="muNone">Desmarcar</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" type="datetime-local" id="muBulkDate" />
+        <button class="cgdBtn" id="muBulkPrazo">FOLLOW-UP em lote</button>
+
+        <select class="cgdSelect" id="muMoveTo">
+          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Mover p/ PERDIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Mover p/ CONVERTIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Mover p/ ATENDIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Mover p/ EM ATENDIMENTO</option>
+        </select>
+        <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead>
+          <tr>
+            <th style="width:70px">Sel.</th>
+            <th>Lead</th>
+            <th style="width:290px">FOLLOW-UP</th>
+            <th style="width:290px">Mover</th>
+          </tr>
+        </thead>
+        <tbody id="muTbody"></tbody>
+      </table>
+    `;
+
+    openModal(`ABRIR • ${u.name}`, body);
+
+    const tbody = $("#muTbody");
+    const search = $("#muSearch");
+    const stageSel = $("#muStage");
+
+    function listFiltered(){
+      const q = (search.value||"").trim().toLowerCase();
+      const st = (stageSel.value||"ALL");
+      return (us.list||[]).filter(it=>{
+        const title = leadDisplayName(it).toLowerCase();
+        const rawT = String(it.TITLE||"").toLowerCase();
+        if(q && !(title.includes(q) || rawT.includes(q))) return false;
+        if(st!=="ALL" && String(it.STATUS_ID)!==String(st)) return false;
+        return true;
+      });
+    }
+
+    function renderRows(){
+      const list = listFiltered();
+      tbody.innerHTML = list.length ? list.map(it=>{
+        const id = String(it.ID);
+        const name = leadDisplayName(it);
+        const st = String(it.STATUS_ID||"—");
+        const dm = (it.DATE_MODIFY||"").replace("T"," ").slice(0,19);
+        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? CONFIG.HOT_EMOJI+" " : "";
+        return `<tr>
+          <td><input type="checkbox" data-sel="${esc(id)}" /></td>
+          <td>
+            <b>${esc(hot + name)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))} • ${esc(dm||"—")}</div>
+          </td>
+          <td>
+            <div class="cgdRow">
+              <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+              <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+              <button class="cgdBtn" data-save-fupdeal="${esc(id)}">Salvar + Criar CARD</button>
+            </div>
+          </td>
+          <td>
+            <div class="cgdRow">
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.PERDIDO)}">Perdido</button>
+              <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTIDO)}">Convertido</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    renderRows();
+
+    $("#muRefresh")?.addEventListener("click", async ()=>{
+      closeModal();
+      await modalUserOpen(userId);
+    });
+
+    search?.addEventListener("input", renderRows);
+    stageSel?.addEventListener("change", renderRows);
+
+    $("#muAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
+    });
+    $("#muNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false);
+    });
+
+    function selectedIds(){
+      return $$('input[type=checkbox][data-sel]')
+        .filter(ch=> ch.checked)
+        .map(ch=> ch.getAttribute("data-sel"));
+    }
+
+    $("#muBulkPrazo")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
+      if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
+      for(const id of ids){
+        await actionSetPrazo(id, iso);
+        await sleep(60);
+      }
+      alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+    });
+
+    $("#muBulkMove")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const to = $("#muMoveTo")?.value;
+      for(const id of ids){
+        await actionMoveLead(id, to);
+        await sleep(60);
+      }
+      alert("Movimento em lote enfileirado ✅ (sincroniza quando normalizar a conexão)");
+    });
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const sp = e.target.closest("[data-save-prazo]");
+      const sd = e.target.closest("[data-save-fupdeal]");
+      const mv = e.target.closest("[data-move]");
+
+      if(sp){
+        const leadId = sp.getAttribute("data-save-prazo");
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(!iso) return alert("Preencha data/hora corretamente.");
+        await actionSetPrazo(leadId, iso);
+        alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
+      }
+
+      if(sd){
+        const leadId = sd.getAttribute("data-save-fupdeal");
+        const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(iso) await actionSetPrazo(leadId, iso);
+        if(lead) await createFollowUpDeal(u.id, lead, iso || "");
+        alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
+      }
+
+      if(mv){
+        const leadId = mv.getAttribute("data-move");
+        const to = mv.getAttribute("data-to");
+        await actionMoveLead(leadId, to);
+        alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
+      }
+    });
   }
 
   // =========================
-  // ABRIR (retry)
+  // Busca global no Bitrix por nome
   // =========================
+  function uniqById(list){
+    const m = new Map();
+    (list||[]).forEach(x=>{
+      const id = String(x.ID||"");
+      if(id) m.set(id, x);
+    });
+    return Array.from(m.values());
+  }
+
+  async function searchLeadsByName(term, assignedIdOrAll){
+    const t = String(term||"").trim();
+    if(!t) return [];
+
+    const baseFilter = {};
+    if(assignedIdOrAll && assignedIdOrAll !== "ALL"){
+      baseFilter["ASSIGNED_BY_ID"] = String(assignedIdOrAll);
+    }
+
+    const a = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%TITLE": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const b = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%NAME": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const c = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%LAST_NAME": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const merged = uniqById([...(a||[]), ...(b||[]), ...(c||[])]);
+    return merged.slice(0, 60);
+  }
+
+  function modalTransferOne(leadId){
+    const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+    openModal("TRANSFERIR LEAD", `
+      <div style="font-weight:950;margin-bottom:10px">Transferir Lead #${esc(leadId)}</div>
+      <div class="cgdRow">
+        <select class="cgdSelect" id="trUser">${opts}</select>
+        <button class="cgdBtn" id="trGo">Transferir</button>
+      </div>
+      <div style="opacity:.75;font-weight:900;margin-top:10px">Apenas muda o RESPONSÁVEL (não altera etapa).</div>
+    `, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
+    $("#trGo")?.addEventListener("click", async ()=>{
+      const btn = $("#trGo");
+      try{
+        btn.disabled = true;
+        const uid = $("#trUser").value;
+        await actionTransferLead(leadId, uid);
+        alert("Transferência enfileirada ✅");
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function modalSearchResults(term, results){
+    const rows = (results||[]).map(it=>{
+      const name = leadDisplayName(it);
+      const st = stageName(it.STATUS_ID);
+      const respId = String(it.ASSIGNED_BY_ID||"");
+      const respNm = userNameById(respId);
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      return `
+        <tr>
+          <td style="width:70px"><input type="checkbox" data-sel-del="${esc(it.ID)}" /></td>
+          <td>
+            <b>${esc(name)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(st)} • RESPONSÁVEL: <b>${esc(respNm)}</b></div>
+          </td>
+          <td style="width:360px">
+            <div style="font-weight:900;opacity:.9">OPERADORA: ${esc(oper||"—")}</div>
+            <div style="font-weight:900;opacity:.9">IDADE: ${esc(idade||"—")}</div>
+            <div style="font-weight:900;opacity:.9">TELEFONE: ${esc(tel||"—")}</div>
+            <div style="font-weight:900;opacity:.9">BAIRRO: ${esc(bairro||"—")}</div>
+            <div style="font-weight:900;opacity:.9">FONTE: ${esc(fonte||"—")}</div>
+            <div style="font-weight:900;opacity:.9">DATA/HORA: ${esc(dt||"—")}</div>
+          </td>
+          <td style="width:240px;text-align:right">
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+              <button class="cgdBtn" data-open-lead="${esc(it.ID)}">Abrir</button>
+              <button class="cgdBtn" data-transfer-lead="${esc(it.ID)}">Transferir</button>
+              <button class="cgdBtn" data-del-one="${esc(it.ID)}">Excluir</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    openModal(`BUSCA • ${term}`, `
+      <div class="cgdRow" style="justify-content:space-between;margin-bottom:10px">
+        <div style="font-weight:950">Resultados: <b>${esc((results||[]).length)}</b></div>
+        <div class="cgdRow">
+          <button class="cgdBtn" id="sdAll">Marcar todos</button>
+          <button class="cgdBtn" id="sdNone">Desmarcar</button>
+          <button class="cgdBtn" id="sdDel">Excluir selecionados</button>
+        </div>
+      </div>
+      <table class="cgdTable">
+        <thead><tr><th>Sel.</th><th>Lead</th><th>Dados</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead encontrado.</td></tr>`}</tbody>
+      </table>
+    `);
+
+    $("#sdAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel-del]').forEach(ch=> ch.checked = true);
+    });
+    $("#sdNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel-del]').forEach(ch=> ch.checked = false);
+    });
+
+    $("#sdDel")?.addEventListener("click", async ()=>{
+      const ids = $$('input[type=checkbox][data-sel-del]').filter(ch=>ch.checked).map(ch=>ch.getAttribute("data-sel-del"));
+      if(!ids.length) return alert("Selecione pelo menos 1 lead para excluir.");
+      if(!confirm(`Excluir ${ids.length} lead(s)?`)) return;
+      try{
+        for(const id of ids){
+          enqueueOp("deleteLead", async ()=>{ await leadDelete(id); });
+          await sleep(40);
+        }
+        flushOps();
+        alert("Exclusões enfileiradas ✅");
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }
+    });
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const b = e.target.closest("[data-open-lead]");
+      const t = e.target.closest("[data-transfer-lead]");
+      const d = e.target.closest("[data-del-one]");
+
+      if(b){
+        const id = b.getAttribute("data-open-lead");
+        await modalLeadDetails(id);
+      }
+      if(t){
+        const id = t.getAttribute("data-transfer-lead");
+        modalTransferOne(id);
+      }
+      if(d){
+        const id = d.getAttribute("data-del-one");
+        if(!confirm(`Excluir Lead #${id}?`)) return;
+        enqueueOp("deleteLeadOne", async ()=>{ await leadDelete(id); });
+        flushOps();
+        alert("Exclusão enfileirada ✅");
+      }
+    });
+  }
+
   async function modalLeadDetails(leadId){
     openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
     try{
-      const it = await retry(()=> bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 22000 }), 3, 380);
+      const it = await bx("crm.lead.get", { id: String(leadId) });
       const name = leadDisplayName(it);
       const st = stageName(it.STATUS_ID);
 
@@ -1633,7 +2493,6 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       const bairro = pickUF(it, CONFIG.UF_BAIRRO);
       const fonte = pickUF(it, CONFIG.UF_FONTE);
       const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
-      const pegar = it?.[CONFIG.UF_DATA_PEGAR];
 
       openModal(`LEAD • ${name}`, `
         <div class="cgdRow" style="margin-bottom:10px">
@@ -1642,7 +2501,6 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
         </div>
         <div style="font-weight:900;opacity:.9;line-height:1.4">
-          <div>DATA PEGAR: <b>${esc(pegar||"—")}</b></div>
           <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
           <div>IDADE: <b>${esc(idade||"—")}</b></div>
           <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
@@ -1660,75 +2518,110 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // =========================
   // Refresh orchestration
   // =========================
-  function setPending(n){
-    state.pendingCount = Math.max(0, Number(n||0));
-    const el = $("#pillPending");
-    if(el) el.textContent = `Pendentes: ${state.pendingCount}`;
-  }
-
-  let pulseBusy = false;
-  async function refreshNewPulse(){
-    if(pulseBusy) return;
-    pulseBusy = true;
-    try{
-      const p = await fetchNewLeadPulse();
-      setPending(p.total);
-
-      const newest = Number(p.newestId||0);
-      if(!state._newLeadFirstPulseDone){
-        state._newLeadFirstPulseDone = true;
-        state.maxNewLeadIdSeen = newest || 0;
-        return;
-      }
-
-      if(newest && newest > (state.maxNewLeadIdSeen||0)){
-        state.maxNewLeadIdSeen = newest;
-        flyPlaneYellow();
-        if(state.soundOn) tripleBeep();
-        refreshNewLeadsFull();
-      }
-    }catch(_){
-    }finally{
-      pulseBusy = false;
-    }
-  }
-
-  async function refreshNewLeadsFull(){
+  async function refreshNewLeads(){
     try{
       const items = await fetchNewLeadsAll();
       state.newLeadsAll = items || [];
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
+
+      const newest = items && items[0] ? String(items[0].ID) : null;
+      const newestNum = newest ? Number(newest) : 0;
+      const curCount = (items||[]).length;
+
+      // primeira carga
+      if(!state._newLeadFirstLoadDone){
+        state._newLeadFirstLoadDone = true;
+        state.lastNewLeadId = newest;
+        state.lastNewLeadMaxId = Number.isFinite(newestNum) ? newestNum : 0;
+        state.lastNewLeadCount = curCount;
+        return;
+      }
+
+      // ✅ Dispara avião SOMENTE quando entra lead novo (ID maior que o maior visto)
+      // (quando alguém "pega", o topo muda mas o max NÃO aumenta)
+      const maxBefore = state.lastNewLeadMaxId || 0;
+      const maxNow = Number.isFinite(newestNum) ? Math.max(maxBefore, newestNum) : maxBefore;
+
+      const isNew = Number.isFinite(newestNum) && newestNum > maxBefore;
+      if(isNew){
+        state.lastNewLeadId = newest;
+        state.lastNewLeadMaxId = maxNow;
+        state.lastNewLeadCount = curCount;
+        flyPlaneYellow();
+        if(state.soundOn) tripleBeep();
+      }else{
+        // mantém max id conhecido
+        state.lastNewLeadId = newest || state.lastNewLeadId;
+        state.lastNewLeadMaxId = maxNow;
+        state.lastNewLeadCount = curCount;
+      }
     }catch(err){
-      console.warn("new leads full fetch failed", err);
+      console.warn("new leads fetch failed", err);
     }
   }
 
-  let statsBusy = false;
-  async function refreshStats(){
-    if(statsBusy) return;
-    statsBusy = true;
+  async function refreshPendingCount(){
     try{
-      const dayR = dayRangeLocal();
-      const monR = monthRangeLocal();
+      const n = await fetchNewLeadsCount();
+      renderPendingCount(n);
+    }catch(err){
+      console.warn("pending count failed", err);
+    }
+  }
 
+  async function refreshStats(){
+    try{
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
+
+      // ✅ dia = dia, mês = mês (sem misturar)
       const [day, month] = await Promise.all([
-        fetchPegTotalRange(dayR.startISO, dayR.endISO, dayR.startBR, dayR.endBR),
-        fetchPegTotalRange(monR.startISO, monR.endISO, monR.startBR, monR.endBR)
+        fetchPegCountRangeAll(dayS, dayE),
+        fetchPegCountRangeAll(monS, monE)
       ]);
 
       state.stats = { day: day||0, month: month||0 };
       renderStats(state.stats);
     }catch(err){
       console.warn("stats failed", err);
-    }finally{
-      statsBusy = false;
+    }
+  }
+
+  async function refreshUsersFast(){
+    try{
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
+
+      const users = CONFIG.USERS.slice();
+      for(let i=0;i<users.length;i+=4){
+        const part = users.slice(i,i+4);
+        const jobs = part.map(async u=>{
+          const [d, m, lt] = await Promise.all([
+            fetchPegCountRangeUser(u.id, dayS, dayE),
+            fetchPegCountRangeUser(u.id, monS, monE),
+            fetchUserLastTwoFast(u.id)
+          ]);
+          state.userStats[u.id] = {
+            ...(state.userStats[u.id]||{}),
+            pulledToday: d||0,
+            pulledMonth: m||0,
+            lastTwo: lt.lastTwo || []
+          };
+        });
+        await Promise.all(jobs);
+        renderWho();
+        await sleep(120);
+      }
+    }catch(err){
+      console.warn("user stats failed", err);
     }
   }
 
   async function refreshQueue(){
     try{
       if(Date.now() - state.queueLocalTouchTs < 1400) return;
+
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
       renderQueueSidebar();
@@ -1740,20 +2633,25 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
   async function hardRefreshAll(){
     setStatus(`Atualizando… (${nowBRTime()})`);
-    await Promise.allSettled([ refreshNewPulse(), refreshNewLeadsFull(), refreshStats(), refreshQueue() ]);
-    await refreshUsersLastTwo();
-    refreshUsersCounts();
+    await Promise.allSettled([
+      refreshNewLeads(),
+      refreshPendingCount(),
+      refreshStats(),
+      refreshQueue()
+    ]);
+    await refreshUsersFast();
     setStatus(`Atualizado: ${nowBRTime()}`);
   }
 
   // =========================
-  // UI
+  // Events / UI
   // =========================
   function updateSoundUI(){
     $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
     const so = $("#btnSoundOn");
     if(so) so.style.display = state.soundOn ? "none" : "inline-block";
   }
+
   function applyDark(){
     document.body.classList.toggle("cgdDark", !!state.dark);
     const b = $("#btnDark");
@@ -1761,25 +2659,49 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   function wire(){
-    $("#btnSound")?.addEventListener("click", ()=>{ state.soundOn = !state.soundOn; updateSoundUI(); });
-    $("#btnSilence")?.addEventListener("click", ()=>{ state.soundOn = false; updateSoundUI(); });
-    $("#btnSoundOn")?.addEventListener("click", ()=>{ state.soundOn = true; updateSoundUI(); if((state.newLeadsAll||[]).length > 0) tripleBeep(); });
+    $("#btnSound")?.addEventListener("click", ()=>{
+      state.soundOn = !state.soundOn;
+      updateSoundUI();
+    });
 
-    $("#btnDark")?.addEventListener("click", ()=>{ state.dark = !state.dark; applyDark(); });
+    $("#btnSilence")?.addEventListener("click", ()=>{
+      state.soundOn = false;
+      updateSoundUI();
+    });
+
+    $("#btnSoundOn")?.addEventListener("click", ()=>{
+      state.soundOn = true;
+      updateSoundUI();
+      if((state.newLeadsAll||[]).length > 0) tripleBeep();
+    });
+
+    $("#btnDark")?.addEventListener("click", ()=>{
+      state.dark = !state.dark;
+      applyDark();
+    });
 
     $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
-    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeadsFull);
-    $("#btnRefreshWho")?.addEventListener("click", async ()=>{ await refreshUsersLastTwo(); refreshUsersCounts(); });
+    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
+    $("#btnRefreshWho")?.addEventListener("click", refreshUsersFast);
 
-    $("#btnDiag")?.addEventListener("click", runDiag);
+    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
+    $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
-    $("#btnGET")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.GET, "_blank", "noopener"));
-    $("#btnVendas")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener"));
+    $("#btnGET")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.GET, "_blank", "noopener");
+    });
+    $("#btnVendas")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener");
+    });
+
+    // FILA
+    $("#btnQueueManage")?.addEventListener("click", modalQueueManage);
 
     $("#queueBody")?.addEventListener("click", async (e)=>{
       const up = e.target.closest("[data-q-up]");
       const dn = e.target.closest("[data-q-down]");
       if(!up && !dn) return;
+
       try{
         const id = up ? up.getAttribute("data-q-up") : dn.getAttribute("data-q-down");
         const dir = up ? "up" : "down";
@@ -1796,16 +2718,14 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       }
     });
 
-    $("#btnQueueManage")?.addEventListener("click", async ()=>{
-      await refreshQueue();
-      alert("Gerenciar fila: se você quiser o modal completo aqui (add/remover/ordenar), eu reponho.");
-    });
-
     $("#btnQueueWalk")?.addEventListener("click", async ()=>{
       try{
         const q = state.queue.dealId ? state.queue : await fetchQueue();
         const order = (q.order||[]).map(String);
-        if(order.length===0){ alert("Fila vazia. Clique em Gerenciar para adicionar usuárias."); return; }
+        if(order.length===0){
+          alert("Fila vazia. Clique em Gerenciar para adicionar usuárias.");
+          return;
+        }
         const nextId = order.shift();
         order.push(nextId);
 
@@ -1837,17 +2757,44 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       }
     });
 
-    // Clique nos cards
+    // Busca global
+    $("#btnSearch")?.addEventListener("click", async ()=>{
+      const term = ($("#searchBox").value||"").trim();
+      if(!term) return;
+      const scope = ($("#searchScope").value||"ALL");
+      openModal("BUSCA", `<div style="opacity:.75;font-weight:900">Buscando no Bitrix…</div>`);
+      try{
+        const res = await searchLeadsByName(term, scope);
+        modalSearchResults(term, res);
+      }catch(err){
+        console.error(err);
+        closeModal();
+        openModal("BUSCA", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      }
+    });
+
+    $("#searchBox")?.addEventListener("keydown", (e)=>{
+      if(e.key==="Enter") $("#btnSearch")?.click();
+    });
+
+    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
-      const openLead = e.target.closest("[data-open-lead]");
+      const ou = e.target.closest("[data-open-user]");
+
       if(g){
-        // mantém modal antigo simples (não incluído aqui por brevidade)
-        alert("PEGAR está no seu modal atual. Se quiser, eu reponho o modal completo aqui.");
+        const id = g.getAttribute("data-grab");
+        modalPickLead(id);
       }
-      if(d) actionDiscardLead(d.getAttribute("data-discard"));
-      if(openLead) modalLeadDetails(openLead.getAttribute("data-open-lead"));
+      if(d){
+        const id = d.getAttribute("data-discard");
+        actionDiscardLead(id);
+      }
+      if(ou){
+        const uid = ou.getAttribute("data-open-user");
+        modalUserOpen(uid);
+      }
     });
   }
 
@@ -1855,7 +2802,11 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // Start
   // =========================
   async function start(){
-    if(!CONFIG.WEBHOOK) return;
+    if(!CONFIG.WEBHOOK){
+      const sentinel = document.getElementById("cgd-sentinel");
+      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
+      return;
+    }
 
     injectCSS();
     mount();
@@ -1863,23 +2814,20 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     updateSoundUI();
     applyDark();
 
+    // aquece fotos em background
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
-    await Promise.allSettled([ refreshNewPulse(), refreshNewLeadsFull(), refreshStats(), refreshQueue() ]);
-    await refreshUsersLastTwo();
-    refreshUsersCounts();
+    await hardRefreshAll();
+    renderBossPics();
 
-    setStatus(`Atualizado: ${nowBRTime()}`);
-
-    setInterval(refreshNewPulse, CONFIG.FAST_NEW_PULSE_MS);
-    setInterval(refreshNewLeadsFull, CONFIG.FULL_NEW_LEADS_MS);
-
+    // refreshes
+    setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
+    setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
+    setInterval(refreshUsersFast, CONFIG.REFRESH_WHO_MS);
 
-    setInterval(refreshUsersLastTwo, CONFIG.REFRESH_USERS_LASTTWO_MS);
-    setInterval(refreshUsersCounts, CONFIG.REFRESH_USERS_COUNTS_MS);
-
+    // offline flush
     setInterval(flushOps, 2500);
   }
 
