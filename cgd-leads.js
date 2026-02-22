@@ -1,13 +1,17 @@
 /* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
-   ✅ FIXES desta versão:
-   1) Contagem DIA/MÊS voltou a funcionar:
-      - Agora os ranges são calculados no fuso do Bitrix (+03:00), igual ao que aparece no seu diagnóstico (date_start +03:00).
-      - Data PEGAR também é gravada em +03:00 (mesmo padrão).
-      - Considera SOMENTE as colunas: EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO (JUNK), CONVERTIDO.
-
-   2) ABRIR:
-      - Agora lista os leads COM as informações do lead (Operadora, Idade, Telefone, Bairro, Origem, Data/Hora).
-      - Mantém botões de mover + follow-up.
+   - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - UI refinada + ajustes de layout (títulos centralizados, botões abaixo do título, contrastes)
+   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
+   - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
+     ✅ Considera apenas etapas: EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO, CONVERTIDO
+   - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+   - Correções:
+     ✅ Avião só quando ENTRA lead novo em NOVOS LEADS (não quando remove por PEGAR/DESCARTAR)
+     ✅ Avião maior (~10cm), papel amarelo 3D de lado
+     ✅ PREVENT com fundo azul escuro na badge OPERADORA
+     ✅ Barra inferior: cinza bem escuro + CNPJs lado a lado + label "Endereço"
+     ✅ ABRIR: lista com informações do lead (operadora, idade, tel, bairro, fonte, data)
+     ✅ ABRIR mais robusto (retry) para reduzir erro intermitente "Sem conexão"
 */
 (function(){
   "use strict";
@@ -18,18 +22,21 @@
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
 
+    // Campo UF usado no Follow-up (no LEAD)
     UF_PRAZO: "UF_CRM_1768175087",
 
-    // ✅ Data PEGAR
+    // ✅ Data PEGAR (base oficial de contagem "dia" e "mês")
     UF_DATA_PEGAR: "UF_CRM_1771741018",
 
+    // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014",
-    UF_IDADE:     "UF_CRM_1771339221",
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
+    // Fila multi-PC via PIPELINE 27 (controle)
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -37,41 +44,47 @@
       TITLE_KEY: "__QUEUE__CGD__"
     },
 
+    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
     FOLLOWUP_DEALS: {
       CATEGORY_ID: 17,
       STAGE_BY_USER: {
-        "15":   "C17:UC_FQ8UPI",
-        "19":   "C17:UC_1HXNTB",
-        "17":   "C17:UC_RRQKAQ",
-        "23":   "C17:UC_4HQGI1",
-        "811":  "C17:UC_8Y4R4V",
-        "3081": "C17:EXECUTING",
-        "3083": "C17:UC_8O5UFO",
-        "3079": "C17:UC_P1P9RJ",
-        "3085": "C17:UC_U8AAGB",
-        "3389": "C17:UC_A6LSS8",
-        "815":  "C17:UC_ZT6WEB",
-        "3387": "C17:UC_RXISLQ"
+        "15":   "C17:UC_FQ8UPI",   // ALINE
+        "19":   "C17:UC_1HXNTB",   // ADRIANA
+        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
+        "23":   "C17:UC_4HQGI1",   // MARIANA
+        "811":  "C17:UC_8Y4R4V",   // JOSIANE
+        "3081": "C17:EXECUTING",   // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",   // GABRIEL
+        "3387": "C17:UC_RXISLQ"    // BEATRIZ
       }
     },
 
+    // Logo topo (troque aqui quando quiser)
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
+    // Links
     LINKS: {
       GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
       VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
     },
 
+    // Refresh
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
     REFRESH_WHO_MS: 12000,
 
+    // Limites
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
-    LIMIT_USER_LAST:  160,
+    LIMIT_USER_LAST:  160, // ABRIR: lista completa (um pouco maior)
     LIMIT_LAST_TWO_FETCH: 12,
 
+    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -87,8 +100,10 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // Sócios (fotos na barra inferior)
     BOSSES: [27, 1, 15],
 
+    // ✅ Status/Stages de LEADS
     LEAD_STATUS: {
       NOVO_LEAD: "NEW",
       EM_ATENDIMENTO: "IN_PROCESS",
@@ -96,19 +111,23 @@
       QUALIFICADO: "UC_0NFA3H",
       PERDIDO: "UC_5IMTI4",
       CONVERTIDO: "UC_B3RQAF",
-      LEAD_CONVERTIDO_SISTEMA: "CONVERTED",
-      LEAD_DESCARTADO_SISTEMA: "JUNK",
+      DESCARTADO_SISTEMA: "JUNK",       // lead descartado (sistema)
+      CONVERTIDO_SISTEMA: "CONVERTED"   // lead convertido (sistema)
     },
 
-    // ✅ Contagem só nessas etapas:
+    // ✅ Contagem deve considerar APENAS estas colunas:
+    // EM ATENDIMENTO, ATENDIDO, QUALIFICADO, LEAD DESCARTADO, CONVERTIDO
     COUNT_STATUS_ALLOWED: [
-      "IN_PROCESS",
-      "UC_JT9G60",
-      "UC_0NFA3H",
-      "JUNK",
-      "UC_B3RQAF"
+      "IN_PROCESS",     // EM ATENDIMENTO
+      "UC_JT9G60",      // ATENDIDO
+      "UC_0NFA3H",      // QUALIFICADO
+      "JUNK",           // LEAD DESCARTADO (sistema)
+      "UC_B3RQAF"       // CONVERTIDO (custom)
+      // se você quiser também contar "CONVERTED" (sistema), adicione aqui:
+      // "CONVERTED"
     ],
 
+    // Nomes (para exibir na busca)
     LEAD_STATUS_NAMES: {
       "NEW": "NOVO LEAD",
       "IN_PROCESS": "EM ATENDIMENTO",
@@ -117,9 +136,10 @@
       "UC_5IMTI4": "PERDIDO",
       "UC_B3RQAF": "CONVERTIDO",
       "CONVERTED": "LEAD CONVERTIDO (sistema)",
-      "JUNK": "LEAD DESCARTADO (sistema)"
+      "JUNK": "DESCARTADO (sistema)"
     },
 
+    // Select do lead
     LEAD_SELECT: [
       "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
       "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
@@ -128,10 +148,7 @@
       "UF_*"
     ],
 
-    HOT_EMOJI: "🔥",
-
-    // ✅ Bitrix/portal aparece no diagnóstico em +03:00
-    PORTAL_TZ_OFFSET_MINUTES: 180
+    HOT_EMOJI: "🔥"
   };
 
   // =========================
@@ -148,72 +165,56 @@
     try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
   }
 
+  // =========================
+  // Datas: ISO com offset BR (-03:00) por padrão
+  // =========================
   function pad2(n){ return String(n).padStart(2,"0"); }
 
-  // =========================
-  // ✅ TIME: sempre no fuso do PORTAL (+03:00)
-  // =========================
-  function portalPartsFromNow(){
-    // pega "agora" e converte para um "relógio" do portal
-    const offMin = CONFIG.PORTAL_TZ_OFFSET_MINUTES;
-    const ms = Date.now() + offMin*60*1000;
-    const d = new Date(ms);
-    // usar getters UTC para não misturar com o fuso do PC
+  function isoLocalWithOffset(dt, offsetMinutes){
+    // offsetMinutes: ex -180 para -03:00
+    offsetMinutes = Number.isFinite(offsetMinutes) ? offsetMinutes : -180;
+
+    const y = dt.getFullYear();
+    const mo = pad2(dt.getMonth()+1);
+    const d = pad2(dt.getDate());
+    const hh = pad2(dt.getHours());
+    const mi = pad2(dt.getMinutes());
+    const ss = pad2(dt.getSeconds());
+
+    const sign = offsetMinutes <= 0 ? "-" : "+";
+    const abs = Math.abs(offsetMinutes);
+    const oh = pad2(Math.floor(abs/60));
+    const om = pad2(abs%60);
+    return `${y}-${mo}-${d}T${hh}:${mi}:${ss}${sign}${oh}:${om}`;
+  }
+
+  function dayRange(){
+    const d0 = new Date(); d0.setHours(0,0,0,0);
+    const d1 = new Date(d0.getTime() + 24*60*60*1000);
     return {
-      y: d.getUTCFullYear(),
-      m: d.getUTCMonth()+1,
-      d: d.getUTCDate(),
-      hh: d.getUTCHours(),
-      mi: d.getUTCMinutes(),
-      ss: d.getUTCSeconds()
+      startISO: isoLocalWithOffset(d0, -180),
+      endISO: isoLocalWithOffset(d1, -180)
     };
   }
 
-  function isoPortal(y, m, d, hh, mi, ss){
-    const off = CONFIG.PORTAL_TZ_OFFSET_MINUTES;
-    const sign = off >= 0 ? "+" : "-";
-    const abs = Math.abs(off);
-    const oh = pad2(Math.floor(abs/60));
-    const om = pad2(abs%60);
-    return `${y}-${pad2(m)}-${pad2(d)}T${pad2(hh)}:${pad2(mi)}:${pad2(ss)}${sign}${oh}:${om}`;
+  function monthRange(){
+    const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
+    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1);
+    return {
+      startISO: isoLocalWithOffset(d0, -180),
+      endISO: isoLocalWithOffset(d1, -180)
+    };
   }
 
-  function isoNowPortal(){
-    const p = portalPartsFromNow();
-    return isoPortal(p.y,p.m,p.d,p.hh,p.mi,p.ss);
-  }
-
-  function dayRangePortal(){
-    const p = portalPartsFromNow();
-    const start = isoPortal(p.y, p.m, p.d, 0,0,0);
-    // soma 1 dia no "calendário do portal"
-    const dt = new Date(Date.UTC(p.y, p.m-1, p.d, 0,0,0) + 24*60*60*1000);
-    const end = isoPortal(dt.getUTCFullYear(), dt.getUTCMonth()+1, dt.getUTCDate(), 0,0,0);
-    return { startISO: start, endISO: end };
-  }
-
-  function monthRangePortal(){
-    const p = portalPartsFromNow();
-    const start = isoPortal(p.y, p.m, 1, 0,0,0);
-    const dt = new Date(Date.UTC(p.y, p.m-1, 1, 0,0,0));
-    dt.setUTCMonth(dt.getUTCMonth()+1);
-    const end = isoPortal(dt.getUTCFullYear(), dt.getUTCMonth()+1, 1, 0,0,0);
-    return { startISO: start, endISO: end };
-  }
-
-  function isoFromLocalInputToPortal(v){
-    // datetime-local (do PC) -> converte para string no portal (+03:00) mantendo o "momento"
+  function isoFromLocalInput(v){
     if(!v) return "";
     const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     if(!m) return "";
     const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
-    const local = new Date(y, mo, d, hh, mi, 0, 0);
-    if(Number.isNaN(local.getTime())) return "";
-    // converte momento UTC -> aplica offset portal
-    const offMin = CONFIG.PORTAL_TZ_OFFSET_MINUTES;
-    const ms = local.getTime() + offMin*60*1000;
-    const p = new Date(ms);
-    return isoPortal(p.getUTCFullYear(), p.getUTCMonth()+1, p.getUTCDate(), p.getUTCHours(), p.getUTCMinutes(), 0);
+    const dt = new Date(y, mo, d, hh, mi, 0, 0);
+    if(Number.isNaN(dt.getTime())) return "";
+    // salva como ISO com offset BR para ficar coerente no Bitrix
+    return isoLocalWithOffset(dt, -180);
   }
 
   function fmtDateBRFromISO(iso){
@@ -241,6 +242,21 @@
   }
 
   // =========================
+  // Robust retry helper
+  // =========================
+  async function retryAsync(fn, tries=3, baseDelay=250){
+    let last;
+    for(let i=0;i<tries;i++){
+      try{ return await fn(); }
+      catch(err){
+        last = err;
+        await sleep(baseDelay + i*baseDelay);
+      }
+    }
+    throw last;
+  }
+
+  // =========================
   // Webhook client
   // =========================
   function toPairs(prefix, obj, out){
@@ -265,14 +281,14 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(7000, Number(options.timeoutMs || 15000));
+    const timeoutMs = Math.max(8000, Number(options.timeoutMs || 18000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
 
     let lastErr = null;
 
-    for(let attempt=0; attempt<3; attempt++){
+    for(let attempt=0; attempt<4; attempt++){
       const ctrl = new AbortController();
       const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, timeoutMs);
 
@@ -295,7 +311,7 @@
           e._bxError = data.error;
           throw e;
         }
-        return data;
+        return data; // ✅ objeto completo
       }catch(err){
         lastErr = err;
         const http = err && err._httpStatus;
@@ -303,7 +319,7 @@
         const aborted = (err && (err.name==="AbortError"));
         const net = (err && String(err.message||err).toLowerCase().includes("failed to fetch"));
 
-        if(attempt < 2 && (transientHTTP || aborted || net)){
+        if(attempt < 3 && (transientHTTP || aborted || net)){
           clearTimeout(t);
           await sleep(260 + attempt*520);
           continue;
@@ -344,7 +360,7 @@
   }
 
   // =========================
-  // Offline queue (RAM)
+  // “Offline”: fila de ações (só RAM)
   // =========================
   const pendingOps = [];
   function enqueueOp(name, run){ pendingOps.push({ name, run }); }
@@ -399,39 +415,44 @@
   }
 
   // =========================
-  // Paper plane animation — AMARELO ~10cm
+  // Paper plane animation — AMARELO ~10cm (maior) — 3D side
   // =========================
   function flyPlaneYellow(){
     try{
       const d = document.createElement("div");
       d.className = "cgdPlane";
       d.innerHTML = `
-        <svg viewBox="0 0 320 200" width="360" height="360" aria-hidden="true">
+        <svg viewBox="0 0 240 140" width="380" height="380" aria-hidden="true">
           <defs>
             <linearGradient id="gBody" x1="0" x2="1">
-              <stop offset="0" stop-color="#ffe46a"/>
+              <stop offset="0" stop-color="#ffe86a"/>
               <stop offset="0.55" stop-color="#ffd400"/>
-              <stop offset="1" stop-color="#f2b800"/>
+              <stop offset="1" stop-color="#ffbf00"/>
             </linearGradient>
-            <linearGradient id="gFold" x1="0" x2="1">
-              <stop offset="0" stop-color="rgba(0,0,0,.14)"/>
+            <linearGradient id="gShadow" x1="0" x2="1">
+              <stop offset="0" stop-color="rgba(0,0,0,0.22)"/>
               <stop offset="1" stop-color="rgba(0,0,0,0)"/>
             </linearGradient>
-            <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="rgba(0,0,0,.28)"/>
-            </filter>
           </defs>
-          <g filter="url(#shadow)">
-            <path d="M18 112 L302 60 L196 170 L156 130 L18 112 Z"
-              fill="url(#gBody)" stroke="rgba(0,0,0,.35)" stroke-width="4" stroke-linejoin="round"/>
-            <path d="M156 130 L302 60" stroke="rgba(0,0,0,.32)" stroke-width="4" stroke-linecap="round"/>
-            <path d="M18 112 L196 170 L156 130 Z" fill="rgba(255,255,255,.12)"/>
-            <path d="M92 118 L210 152" stroke="url(#gFold)" stroke-width="10" stroke-linecap="round"/>
-          </g>
+
+          <!-- “corpo” do avião (lateral 3D) -->
+          <path d="M12 74 L220 18 L148 112 L120 86 L12 74 Z"
+                fill="url(#gBody)" stroke="rgba(0,0,0,.28)" stroke-width="4" />
+
+          <!-- dobra superior -->
+          <path d="M120 86 L220 18"
+                stroke="rgba(0,0,0,.28)" stroke-width="4" />
+
+          <!-- sombra/dobra inferior para dar 3D -->
+          <path d="M12 74 L120 86 L148 112"
+                fill="url(#gShadow)" opacity="0.55"/>
+
+          <!-- “bico” -->
+          <path d="M220 18 L210 48 L196 30 Z" fill="rgba(255,255,255,.22)" />
         </svg>
       `;
       document.body.appendChild(d);
-      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2400);
+      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
     }catch(_){}
   }
 
@@ -449,7 +470,7 @@
   --shadow: 0 10px 30px rgba(20,30,60,.10);
 
   min-height: calc(100vh - 90px);
-  padding: 10px 12px 110px;
+  padding: 10px 12px 120px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
   color: var(--text);
   background:
@@ -458,6 +479,8 @@
     radial-gradient(900px 650px at 55% 95%, rgba(255,150,200,.12), transparent 60%),
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
+
+/* Top bar */
 .cgdTop{
   position: sticky;
   top: 0;
@@ -493,6 +516,8 @@
   font-size: 12px;
   font-weight: 950;
 }
+
+/* Botões com contraste forte (padrão) */
 .cgdBtn{
   cursor:pointer;
   border: 2px solid rgba(255,255,255,.22);
@@ -506,6 +531,7 @@
 .cgdBtn:active{ transform: translateY(1px); }
 .cgdBtn[disabled]{ opacity:.6; cursor:not-allowed; transform:none; }
 
+/* Mini botões */
 .cgdMiniBtn{
   cursor:pointer;
   border: 2px solid rgba(10,10,12,.85);
@@ -516,12 +542,31 @@
   font-size: 12px;
   font-weight: 950;
 }
-.cgdMiniBtn.primary{ background: rgba(120,210,255,.32); border-color: rgba(10,10,12,.75); }
-.cgdMiniBtn.danger{ background: rgba(255,70,120,.18); border-color: rgba(10,10,12,.75); }
+.cgdMiniBtn.primary{
+  background: rgba(120,210,255,.32);
+  border-color: rgba(10,10,12,.75);
+}
+.cgdMiniBtn.danger{
+  background: rgba(255,70,120,.18);
+  border-color: rgba(10,10,12,.75);
+}
 
-.cgdLayout{ margin-top: 12px; display:flex; gap: 12px; align-items: stretch; }
-.cgdGrid{ flex: 1 1 auto; display:grid; grid-template-columns: 0.85fr 2.15fr; gap: 12px; }
+/* Layout */
+.cgdLayout{
+  margin-top: 12px;
+  display:flex;
+  gap: 12px;
+  align-items: stretch;
+}
 
+.cgdGrid{
+  flex: 1 1 auto;
+  display:grid;
+  grid-template-columns: 0.85fr 2.15fr;
+  gap: 12px;
+}
+
+/* Sidebar FILA — +20% largura */
 .cgdQueueSide{
   width: 390px;
   border: 1px solid var(--border);
@@ -551,7 +596,14 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
-.cgdQueueBody{ padding: 10px; overflow:auto; min-height: 0; display:flex; flex-direction: column; gap: 8px; }
+.cgdQueueBody{
+  padding: 10px;
+  overflow:auto;
+  min-height: 0;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .cgdQueueRowItem{
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -566,6 +618,7 @@
 .cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
 .cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
 
+/* Colunas */
 .cgdCol{
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -576,6 +629,8 @@
   display:flex;
   flex-direction: column;
 }
+
+/* Cabeçalho das colunas — título central e ações abaixo */
 .cgdColHead{
   padding: 8px 10px 10px;
   background: rgba(255,255,255,.78);
@@ -601,7 +656,15 @@
   flex-wrap:wrap;
   justify-content:center;
 }
-.cgdList{ padding: 10px; display:flex; flex-direction: column; gap: 10px; overflow:auto; min-height: 0; }
+
+.cgdList{
+  padding: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow:auto;
+  min-height: 0;
+}
 
 .cgdCard{
   border: 1px solid var(--border);
@@ -610,9 +673,25 @@
   box-shadow: 0 8px 20px rgba(20,30,60,.08);
   padding: 10px 10px 10px;
 }
-.cgdCardRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
-.cgdLeadName{ font-weight: 950; font-size: 14px; line-height: 1.2; word-break: break-word; flex: 1 1 auto; }
-.cgdBadges{ display:flex; gap:6px; flex-wrap: wrap; margin-top: 8px; }
+.cgdCardRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap:10px;
+}
+.cgdLeadName{
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.2;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.cgdBadges{
+  display:flex;
+  gap:6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 .cgdBadge{
   font-size: 10px;
   font-weight: 950;
@@ -622,8 +701,15 @@
   background: rgba(255,255,255,.9);
 }
 .cgdBadge.oper{ border: 0; padding: 5px 10px; }
-.cgdActions{ margin-top: 10px; display:flex; gap:8px; justify-content: flex-end; flex-wrap: wrap; }
+.cgdActions{
+  margin-top: 10px;
+  display:flex;
+  gap:8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
 
+/* 🚨 NOVO LEAD: preto/branco; com leads -> vermelho/preto */
 .cgdAlertBox{
   border: 2px solid rgba(10,10,12,.85);
   border-radius: 16px;
@@ -635,14 +721,41 @@
   justify-content: space-between;
   gap: 10px;
 }
-.cgdAlertBox.hot{ background: rgba(255,0,0,.92); color: #111; border-color: rgba(0,0,0,.35); }
-.cgdAlertBox .txt{ font-weight: 950; font-size: 12px; line-height: 1.25; width: 100%; }
-.cgdAlertBox .txt small{ display:block; margin-top: 4px; font-size: 11px; opacity: .92; font-weight: 900; }
+.cgdAlertBox.hot{
+  background: rgba(255,0,0,.92);
+  color: #111;
+  border-color: rgba(0,0,0,.35);
+}
+.cgdAlertBox .txt{
+  font-weight: 950;
+  font-size: 12px;
+  line-height: 1.25;
+  width: 100%;
+}
+.cgdAlertBox .txt small{
+  display:block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: .92;
+  font-weight: 900;
+}
 
-#listWho.cgdWhoGrid{ display:grid !important; grid-template-columns: 1fr 1fr; gap: 10px; }
-@media (max-width: 1100px){ #listWho.cgdWhoGrid{ grid-template-columns: 1fr; } }
+/* HISTÓRICO em 2 colunas */
+#listWho.cgdWhoGrid{
+  display:grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 1100px){
+  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
+}
 
-.cgdUserLine{ display:flex; gap:10px; align-items:flex-start; }
+/* Usuária: foto maior + layout */
+.cgdUserLine{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
 .cgdUserPic{
   width: 52px; height: 52px;
   border-radius: 999px;
@@ -652,12 +765,12 @@
   flex: 0 0 auto;
 }
 
-/* Bottom */
+/* Bottom bar */
 .cgdBottom{
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 80;
-  background: rgba(14,16,20,.98);
+  background: rgba(16,16,18,.96); /* ✅ cinza bem escuro */
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
@@ -667,11 +780,10 @@
   justify-content: space-between;
   gap: 12px;
 }
-.cgdBottom .bLeft{ display:flex; align-items:center; gap:10px; min-width: 340px; }
+.cgdBottom .bLeft{ display:flex; align-items:flex-start; gap:10px; min-width: 360px; }
 .cgdBottom .bCenter{ flex:1; text-align:center; font-style: italic; font-weight: 900; opacity:.92; }
-.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 420px; }
-
-.cgdBossPics{ display:flex; gap:8px; align-items:center; }
+.cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 520px; }
+.cgdBossPics{ display:flex; gap:8px; align-items:center; margin-top:2px; }
 .cgdBossPic{
   width: 34px; height: 34px;
   border-radius: 999px;
@@ -679,19 +791,22 @@
   border: 1px solid rgba(255,255,255,.18);
   background: rgba(255,255,255,.08);
 }
+.cgdAddrWrap{ display:flex; flex-direction:column; gap:4px; }
+.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .85; }
 .cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
-.cgdAddrLabel{ font-size: 10px; font-weight: 950; opacity: .72; letter-spacing:.2px; text-transform: uppercase; margin-bottom:2px; }
-.cgdCnpj{
+.cgdCnpjRow{
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+  justify-content:flex-end;
+  flex-wrap: wrap;
   font-size: 11px;
   line-height: 1.25;
-  display:flex;
-  gap: 18px;
-  justify-content:flex-end;
-  flex-wrap: nowrap;
-  text-align:left;
 }
-.cgdCnpj .blk{ display:flex; flex-direction:column; gap:2px; }
+.cgdCnpjBox{ white-space: nowrap; }
+.cgdCnpjBox b{ font-size: 11px; }
 
+/* Modals */
 .cgdModalOverlay{
   position: fixed;
   inset: 0;
@@ -704,7 +819,7 @@
   padding: 16px;
 }
 .cgdModal{
-  width: min(1040px, 96vw);
+  width: min(1180px, 96vw);
   max-height: min(88vh, 900px);
   background: rgba(255,255,255,.94);
   border: 1px solid rgba(30,40,70,.16);
@@ -724,7 +839,11 @@
   background: rgba(255,255,255,.75);
 }
 .cgdModalTitle{ font-weight: 950; font-size: 13px; }
-.cgdModalBody{ padding: 12px 14px; overflow: auto; min-height: 0; }
+.cgdModalBody{
+  padding: 12px 14px;
+  overflow: auto;
+  min-height: 0;
+}
 .cgdModalFoot{
   padding: 12px 14px;
   border-top: 1px solid rgba(30,40,70,.12);
@@ -742,7 +861,9 @@
   font-size: 12px;
   background: rgba(255,255,255,.95);
 }
-.cgdRow{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.cgdRow{
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+}
 .cgdTable{
   width: 100%;
   border-collapse: collapse;
@@ -759,25 +880,28 @@
 .cgdTable th{ text-align:left; font-weight: 950; background: rgba(245,248,255,.8); }
 .cgdTable tr:last-child td{ border-bottom: 0; }
 
-body{ padding-bottom: 110px !important; }
+body{ padding-bottom: 120px !important; }
 
+/* Paper plane */
 .cgdPlane{
   position: fixed;
-  top: 90px;
-  left: -420px;
-  width: 360px;
-  height: 360px;
+  top: 88px;
+  left: -520px;
+  width: 380px;
+  height: 380px;
   z-index: 9999;
   pointer-events:none;
   opacity: .98;
-  animation: planeFly 2.1s linear forwards;
+  animation: planeFly 1.9s linear forwards;
+  filter: drop-shadow(0 18px 20px rgba(0,0,0,.18));
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(10deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(6deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 860px)) rotate(-8deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 920px)) rotate(-8deg); opacity: 0; }
 }
 
+/* DARK MODE */
 body.cgdDark #cgdApp{
   background: linear-gradient(135deg, #2a2d33, #23262b 50%, #1f2227);
   color: rgba(255,255,255,.92);
@@ -797,10 +921,13 @@ body.cgdDark .cgdCard{
   background: rgba(248,248,245,.92) !important;
   color: rgba(18,26,40,.92) !important;
 }
-body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
+body.cgdDark .cgdBadge{
+  background: rgba(255,255,255,.9) !important;
+}
 @media (max-width: 1200px){
   .cgdLayout{ flex-direction: column; }
   .cgdQueueSide{ width: auto; min-height: unset; }
+  .cgdBottom .bRight{ min-width: unset; }
 }
     `;
     const st = document.createElement("style");
@@ -809,7 +936,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // Modal
+  // Modal system
   // =========================
   function openModal(title, bodyHTML, footHTML){
     closeModal();
@@ -841,41 +968,41 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // State (RAM)
+  // State (somente RAM)
   // =========================
   const state = {
     soundOn: true,
     dark: false,
 
-    lastNewLeadId: null,
-    lastNewLeadMaxId: 0,
-    lastNewLeadCount: 0,
     _newLeadFirstLoadDone: false,
+    _newTopIds: [],
 
     newLeadsAll: [],
     newLeadsRender: [],
     pendingCount: 0,
 
     stats: { day:0, month:0 },
-    userStats: {},
+
+    userStats: {}, // {id: { pulledToday, pulledMonth, lastTwo, list? }}
 
     queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
     queueLocalTouchTs: 0,
 
     lastServedUserName: "—",
 
-    userPhoto: new Map(),
-    userPhotoTs: new Map(),
-    userPhotoPending: new Set(),
+    // cache fotos usuários (RAM)
+    userPhoto: new Map(),         // id -> url (string)
+    userPhotoTs: new Map(),       // id -> ms
+    userPhotoPending: new Set(),  // id
   };
 
   // =========================
-  // Fotos
+  // Fotos: robusto + rápido
   // =========================
   const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
   async function fetchUserPhotoOnce(userId){
-    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
+    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 12000 });
     const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
     const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
     return photo || "";
@@ -1048,22 +1175,18 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         <div class="cgdBottom">
           <div class="bLeft">
             <div class="cgdBossPics" id="bossPics"></div>
-            <div>
+            <div class="cgdAddrWrap">
               <div class="cgdAddrLabel">Endereço</div>
               <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
             </div>
           </div>
+
           <div class="bCenter">System created by GRUPO CGD</div>
+
           <div class="bRight">
-            <div class="cgdCnpj">
-              <div class="blk">
-                <div><b>CGD CORRETORA</b></div>
-                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              </div>
-              <div class="blk">
-                <div><b>CGD BARRA</b></div>
-                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
-              </div>
+            <div class="cgdCnpjRow">
+              <div class="cgdCnpjBox"><b>CGD CORRETORA</b> CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              <div class="cgdCnpjBox"><b>CGD BARRA</b> CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
             </div>
           </div>
         </div>
@@ -1072,7 +1195,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // Queue JSON via Pipeline 27
+  // Queue JSON via Pipeline 27 (multi-PC)
   // =========================
   async function ensureQueueDeal(){
     const items = await bxListAll("crm.deal.list", {
@@ -1128,7 +1251,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           return { dealId: String(deal.ID), ...parseQueue(raw) };
         }catch(err){
           lastErr = err;
-          await sleep(200 + attempt*350);
+          await sleep(220 + attempt*420);
         }
       }
       throw lastErr || new Error("Falha ao carregar fila");
@@ -1154,7 +1277,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           return;
         }catch(err){
           lastErr = err;
-          await sleep(220 + attempt*420);
+          await sleep(260 + attempt*520);
         }
       }
       throw lastErr || new Error("Falha ao salvar fila");
@@ -1231,7 +1354,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // LEADS
+  // LEADS: fetch / actions
   // =========================
   async function fetchNewLeadsAll(){
     const items = await bxListAll("crm.lead.list", {
@@ -1248,49 +1371,74 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 16000 });
+    }, { timeoutMs: 22000 });
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
     return items.length;
   }
 
-  // ✅ filtro base da contagem (portal tz +03)
+  // =========================
+  // ✅ Contagens por Data PEGAR (dia e mês) + múltiplos STATUS + tolerância de offset
+  // =========================
   function countFilterBase(startISO, endISO){
     return {
       [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
       ["<"  + CONFIG.UF_DATA_PEGAR]: endISO,
-      "STATUS_ID": CONFIG.COUNT_STATUS_ALLOWED.slice()
+      "@STATUS_ID": CONFIG.COUNT_STATUS_ALLOWED.slice()
     };
   }
 
-  async function fetchPegCountRangeAll(startISO, endISO){
+  async function countOnce(filter){
     const data = await bxRaw("crm.lead.list", {
-      filter: countFilterBase(startISO, endISO),
+      filter,
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 18000 });
+    }, { timeoutMs: 24000 });
+
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
+
     const items = Array.isArray(data?.result) ? data.result : [];
     return items.length;
   }
 
+  function rangesWithOffsets(startISO, endISO){
+    const swapOffset = (iso, newOff) => String(iso).replace(/([+-]\d{2}:\d{2})$/, newOff);
+    const noOffset = (iso) => String(iso).replace(/([+-]\d{2}:\d{2})$/, "");
+
+    const s = String(startISO), e = String(endISO);
+
+    const variants = [
+      { s, e },
+      { s: swapOffset(s, "+03:00"), e: swapOffset(e, "+03:00") },
+      { s: swapOffset(s, "-03:00"), e: swapOffset(e, "-03:00") },
+      { s: noOffset(s), e: noOffset(e) }
+    ];
+
+    const seen = new Set();
+    return variants.filter(v=>{
+      const k = v.s + "||" + v.e;
+      if(seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  async function fetchPegCountRangeAll(startISO, endISO){
+    const vars = rangesWithOffsets(startISO, endISO);
+    const totals = await Promise.all(vars.map(v => countOnce(countFilterBase(v.s, v.e)).catch(()=>0)));
+    return Math.max(0, ...totals);
+  }
+
   async function fetchPegCountRangeUser(userId, startISO, endISO){
-    const data = await bxRaw("crm.lead.list", {
-      filter: {
-        ...countFilterBase(startISO, endISO),
-        "ASSIGNED_BY_ID": String(userId),
-      },
-      order: { ID: "DESC" },
-      select: ["ID"],
-      start: 0
-    }, { timeoutMs: 18000 });
-    const total = Number(data && data.total);
-    if(Number.isFinite(total)) return total;
-    const items = Array.isArray(data?.result) ? data.result : [];
-    return items.length;
+    const vars = rangesWithOffsets(startISO, endISO);
+    const totals = await Promise.all(vars.map(v => {
+      const f = { ...countFilterBase(v.s, v.e), "ASSIGNED_BY_ID": String(userId) };
+      return countOnce(f).catch(()=>0);
+    }));
+    return Math.max(0, ...totals);
   }
 
   function leadDisplayName(it){
@@ -1319,7 +1467,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   function operStyle(operRaw){
     const op = String(operRaw||"").toUpperCase();
     if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("PREVENT")) return { bg:"#0a2a66", fg:"#fff" };
+    // ✅ PREVENT: azul escuro
+    if(op.includes("PREVENT")) return { bg:"#0b2a6b", fg:"#fff" };
     if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
     if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
     if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
@@ -1341,9 +1490,13 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     if(idade) b.push(["IDADE", idade]);
     if(tel)   b.push(["TELEFONE", tel]);
     if(bairro)b.push(["BAIRRO", bairro]);
-    if(fonte) b.push(["ORIGEM", fonte]);
+    if(fonte) b.push(["FONTE", fonte]);
     if(dt)    b.push(["DATA", dt]);
 
+    if(b.length < 2){
+      if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
+      if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
+    }
     return b.slice(0, 6);
   }
 
@@ -1355,6 +1508,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
+    // UI otimista
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
@@ -1364,8 +1518,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       await leadUpdate(leadId, {
         ASSIGNED_BY_ID: String(userId),
         STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        // ✅ grava Data PEGAR no padrão do portal (+03:00)
-        [CONFIG.UF_DATA_PEGAR]: isoNowPortal()
+        [CONFIG.UF_DATA_PEGAR]: isoLocalWithOffset(new Date(), -180) // ✅ grava Data PEGAR coerente
       });
     });
 
@@ -1404,7 +1557,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     enqueueOp("moveLead", async ()=>{
       const fields = { STATUS_ID: statusId };
       if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
-        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const lead = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 24000 });
         const t = String(lead?.TITLE||"").trim();
         if(!t.startsWith(CONFIG.HOT_EMOJI)){
           fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
@@ -1442,7 +1595,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
           [CONFIG.UF_PRAZO]: iso || undefined
         }
-      });
+      }, { timeoutMs: 24000 });
     });
     flushOps();
   }
@@ -1591,7 +1744,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // Fetch Usuárias (rápido)
+  // Fetch Usuárias (RÁPIDO pro Histórico)
   // =========================
   async function fetchUserLastTwoFast(userId){
     const last = await bxListAll("crm.lead.list", {
@@ -1608,52 +1761,41 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     return { lastTwo };
   }
 
-  // =========================
-  // ABRIR: FULL + retry
-  // =========================
+  // Lista completa (somente quando abrir modal ABRIR)
   async function fetchUserStatsFull(userId){
-    const { startISO: dayS, endISO: dayE } = dayRangePortal();
-    const { startISO: monS, endISO: monE } = monthRangePortal();
+    const { startISO: dayS, endISO: dayE } = dayRange();
+    const { startISO: monS, endISO: monE } = monthRange();
 
-    const pulledToday = await fetchPegCountRangeUser(userId, dayS, dayE);
-    const pulledMonth = await fetchPegCountRangeUser(userId, monS, monE);
-
-    const list = await bxListAll("crm.lead.list", {
-      filter: { "ASSIGNED_BY_ID": String(userId) },
-      order: { DATE_MODIFY: "DESC" },
-      select: CONFIG.LEAD_SELECT
-    }, CONFIG.LIMIT_USER_LAST);
+    const [pulledToday, pulledMonth, list] = await Promise.all([
+      fetchPegCountRangeUser(userId, dayS, dayE),
+      fetchPegCountRangeUser(userId, monS, monE),
+      bxListAll("crm.lead.list", {
+        filter: { "ASSIGNED_BY_ID": String(userId) },
+        order: { DATE_MODIFY: "DESC" },
+        select: CONFIG.LEAD_SELECT
+      }, CONFIG.LIMIT_USER_LAST)
+    ]);
 
     const lastTwo = (list||[]).filter(x=>{
       const st = String(x.STATUS_ID||"");
       return st===CONFIG.LEAD_STATUS.EM_ATENDIMENTO || st===CONFIG.LEAD_STATUS.QUALIFICADO || st===CONFIG.LEAD_STATUS.ATENDIDO;
     }).slice(0,2);
 
-    return { pulledToday: pulledToday||0, pulledMonth: pulledMonth||0, lastTwo, list: list || [] };
-  }
-
-  async function fetchUserStatsFullRetry(userId){
-    let lastErr = null;
-    for(let i=0;i<3;i++){
-      try{
-        return await fetchUserStatsFull(userId);
-      }catch(err){
-        lastErr = err;
-        await sleep(260 + i*520);
-      }
-    }
-    throw lastErr || new Error("Falha ao carregar dados da usuária");
+    return { pulledToday, pulledMonth, lastTwo, list: list || [] };
   }
 
   // =========================
-  // Modals: Ocultar / Fila / Pegar / Batch
-  // (iguais — mantidos)
+  // Modals
   // =========================
   async function modalHideUsers(){
     openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
     let q;
-    try{ q = await fetchQueue(); }
-    catch(_){ closeModal(); return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`); }
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
 
     const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
 
@@ -1711,8 +1853,12 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   async function modalQueueManage(){
     openModal("FILA • GERENCIAR", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
     let q;
-    try{ q = await fetchQueue(); }
-    catch(_){ closeModal(); return openModal("FILA • GERENCIAR", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`); }
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("FILA • GERENCIAR", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
 
     state.queue = { ...state.queue, ...q };
 
@@ -1907,7 +2053,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           <tr>
             <th style="width:80px">Sel.</th>
             <th>Lead</th>
-            <th style="width:340px">Informações</th>
+            <th style="width:280px">Info</th>
           </tr>
         </thead>
         <tbody id="btTbody"></tbody>
@@ -1957,7 +2103,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
               <b>${esc(leadDisplayName(it))}</b>
               <div style="opacity:.7;font-weight:900;font-size:11px">STATUS: ${esc(stageName(it.STATUS_ID))}</div>
             </td>
-            <td>${infoHtml || `<div style="opacity:.7;font-weight:900">—</div>`}</td>
+            <td>${infoHtml}</td>
           </tr>
         `;
       }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
@@ -1996,9 +2142,6 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     });
   }
 
-  // =========================
-  // ✅ ABRIR (com infos)
-  // =========================
   async function modalUserOpen(userId){
     const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
     if(!u) return;
@@ -2010,8 +2153,10 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     let us;
     try{
-      us = await fetchUserStatsFullRetry(u.id);
-    }catch(_){
+      // ✅ retry para reduzir erro intermitente
+      us = await retryAsync(()=>fetchUserStatsFull(u.id), 3, 350);
+    }catch(err){
+      console.error(err);
       closeModal();
       return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
     }
@@ -2021,7 +2166,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const body = `
       <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
-        <div style="font-weight:950">LEADS DA USUÁRIA • lista com informações</div>
+        <div style="font-weight:950">LEADS DA USUÁRIA • buscar / mover / follow-up</div>
         <button class="cgdBtn" id="muRefresh">Atualizar</button>
       </div>
 
@@ -2031,10 +2176,10 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       </div>
 
       <div class="cgdRow" style="margin-bottom:12px">
-        <input class="cgdInput" id="muSearch" placeholder="Filtrar por nome/telefone/bairro/origem..." style="min-width:320px" />
+        <input class="cgdInput" id="muSearch" placeholder="Filtrar na lista (rápido)..." style="min-width:260px" />
         <select class="cgdSelect" id="muStage">
           <option value="ALL">Todas as etapas</option>
-          ${Object.entries(CONFIG.LEAD_STATUS_NAMES).map(([k,v])=>`<option value="${esc(k)}">${esc(v)}</option>`).join("")}
+          ${Object.values(CONFIG.LEAD_STATUS).map(st=>`<option value="${esc(st)}">${esc(stageName(st))}</option>`).join("")}
         </select>
         <button class="cgdBtn" id="muAll">Marcar todos</button>
         <button class="cgdBtn" id="muNone">Desmarcar</button>
@@ -2059,9 +2204,9 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           <tr>
             <th style="width:70px">Sel.</th>
             <th>Lead</th>
-            <th style="width:340px">Informações</th>
-            <th style="width:290px">FOLLOW-UP</th>
-            <th style="width:290px">Mover</th>
+            <th style="width:360px">Informações</th>
+            <th style="width:300px">FOLLOW-UP</th>
+            <th style="width:300px">Mover</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -2074,35 +2219,33 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     const search = $("#muSearch");
     const stageSel = $("#muStage");
 
-    function textOf(it){
-      const info = leadBadgesRich(it).map(([k,v])=> `${k}:${v}`).join(" ").toLowerCase();
-      const name = leadDisplayName(it).toLowerCase();
-      const title = String(it.TITLE||"").toLowerCase();
-      return `${name} ${title} ${info}`.trim();
-    }
-
     function listFiltered(){
       const q = (search.value||"").trim().toLowerCase();
       const st = (stageSel.value||"ALL");
       return (us.list||[]).filter(it=>{
+        const title = leadDisplayName(it).toLowerCase();
+        const rawT = String(it.TITLE||"").toLowerCase();
+        if(q && !(title.includes(q) || rawT.includes(q))) return false;
         if(st!=="ALL" && String(it.STATUS_ID)!==String(st)) return false;
-        if(!q) return true;
-        return textOf(it).includes(q);
+        return true;
       });
     }
 
-    function infoHTML(it){
-      const pairs = leadBadgesRich(it);
-      if(!pairs.length) return `<div style="opacity:.75;font-weight:900">—</div>`;
-      return pairs.map(([k,v])=>{
-        if(k==="OPERADORA"){
-          const st = operStyle(v);
-          return `<div style="font-weight:950">
-            <span class="cgdBadge oper" style="background:${esc(st.bg)}; color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>
-          </div>`;
-        }
-        return `<div style="font-weight:900;opacity:.88">${esc(k)}: ${esc(v)}</div>`;
-      }).join("");
+    function infoHtml(it){
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade= pickUF(it, CONFIG.UF_IDADE);
+      const tel  = bestPhone(it);
+      const bairro=pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte= pickUF(it, CONFIG.UF_FONTE);
+      const dt   = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      return `
+        <div style="font-weight:900;opacity:.9">OPERADORA: <b>${esc(oper||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">IDADE: <b>${esc(idade||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">TELEFONE: <b>${esc(tel||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">BAIRRO: <b>${esc(bairro||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">FONTE: <b>${esc(fonte||"—")}</b></div>
+        <div style="font-weight:900;opacity:.9">DATA/HORA: <b>${esc(dt||"—")}</b></div>
+      `;
     }
 
     function renderRows(){
@@ -2117,9 +2260,9 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           <td><input type="checkbox" data-sel="${esc(id)}" /></td>
           <td>
             <b>${esc(hot + name)}</b>
-            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))} • MOD: ${esc(dm||"—")}</div>
+            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))} • ${esc(dm||"—")}</div>
           </td>
-          <td>${infoHTML(it)}</td>
+          <td>${infoHtml(it)}</td>
           <td>
             <div class="cgdRow">
               <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
@@ -2165,13 +2308,13 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     $("#muBulkPrazo")?.addEventListener("click", async ()=>{
       const ids = selectedIds();
       if(!ids.length) return alert("Selecione pelo menos 1 lead.");
-      const iso = isoFromLocalInputToPortal($("#muBulkDate")?.value || "");
+      const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
       if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
       for(const id of ids){
         await actionSetPrazo(id, iso);
         await sleep(60);
       }
-      alert("FOLLOW-UP em lote enfileirado ✅");
+      alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
     });
 
     $("#muBulkMove")?.addEventListener("click", async ()=>{
@@ -2182,7 +2325,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         await actionMoveLead(id, to);
         await sleep(60);
       }
-      alert("Movimento em lote enfileirado ✅");
+      alert("Movimento em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
     });
 
     $(".cgdModalBody")?.addEventListener("click", async (e)=>{
@@ -2193,33 +2336,33 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       if(sp){
         const leadId = sp.getAttribute("data-save-prazo");
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
-        const iso = isoFromLocalInputToPortal(inp?.value || "");
+        const iso = isoFromLocalInput(inp?.value || "");
         if(!iso) return alert("Preencha data/hora corretamente.");
         await actionSetPrazo(leadId, iso);
-        alert("FOLLOW-UP salvo ✅");
+        alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
       }
 
       if(sd){
         const leadId = sd.getAttribute("data-save-fupdeal");
         const lead = (us.list||[]).find(x=> String(x.ID)===String(leadId));
         const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
-        const iso = isoFromLocalInputToPortal(inp?.value || "");
+        const iso = isoFromLocalInput(inp?.value || "");
         if(iso) await actionSetPrazo(leadId, iso);
         if(lead) await createFollowUpDeal(u.id, lead, iso || "");
-        alert("FOLLOW-UP + CARD enfileirados ✅");
+        alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
       }
 
       if(mv){
         const leadId = mv.getAttribute("data-move");
         const to = mv.getAttribute("data-to");
         await actionMoveLead(leadId, to);
-        alert("Movimento enfileirado ✅");
+        alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
       }
     });
   }
 
   // =========================
-  // Busca global (mantida)
+  // Busca global no Bitrix por nome
   // =========================
   function uniqById(list){
     const m = new Map();
@@ -2293,22 +2436,26 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       const st = stageName(it.STATUS_ID);
       const respId = String(it.ASSIGNED_BY_ID||"");
       const respNm = userNameById(respId);
-      const info = leadBadgesRich(it);
-      const infoHtml = info.map(([k,v])=>{
-        if(k==="OPERADORA"){
-          const s = operStyle(v);
-          return `<span class="cgdBadge oper" style="background:${esc(s.bg)};color:${esc(s.fg)}">${esc(k)}: ${esc(v)}</span>`;
-        }
-        return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
-      }).join(" ");
-
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
       return `
         <tr>
           <td style="width:70px"><input type="checkbox" data-sel-del="${esc(it.ID)}" /></td>
           <td>
             <b>${esc(name)}</b>
             <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(st)} • RESPONSÁVEL: <b>${esc(respNm)}</b></div>
-            <div class="cgdBadges" style="margin-top:8px">${infoHtml || ""}</div>
+          </td>
+          <td style="width:360px">
+            <div style="font-weight:900;opacity:.9">OPERADORA: ${esc(oper||"—")}</div>
+            <div style="font-weight:900;opacity:.9">IDADE: ${esc(idade||"—")}</div>
+            <div style="font-weight:900;opacity:.9">TELEFONE: ${esc(tel||"—")}</div>
+            <div style="font-weight:900;opacity:.9">BAIRRO: ${esc(bairro||"—")}</div>
+            <div style="font-weight:900;opacity:.9">FONTE: ${esc(fonte||"—")}</div>
+            <div style="font-weight:900;opacity:.9">DATA/HORA: ${esc(dt||"—")}</div>
           </td>
           <td style="width:240px;text-align:right">
             <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
@@ -2331,8 +2478,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         </div>
       </div>
       <table class="cgdTable">
-        <thead><tr><th>Sel.</th><th>Lead</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead encontrado.</td></tr>`}</tbody>
+        <thead><tr><th>Sel.</th><th>Lead</th><th>Dados</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead encontrado.</td></tr>`}</tbody>
       </table>
     `);
 
@@ -2386,21 +2533,19 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   async function modalLeadDetails(leadId){
     openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
     try{
-      const it = await bx("crm.lead.get", { id: String(leadId) });
+      const it = await bx("crm.lead.get", { id: String(leadId) }, { timeoutMs: 24000 });
       const name = leadDisplayName(it);
       const st = stageName(it.STATUS_ID);
 
       const respId = String(it.ASSIGNED_BY_ID||"");
       const respNm = userNameById(respId);
 
-      const info = leadBadgesRich(it);
-      const infoHtml = info.map(([k,v])=>{
-        if(k==="OPERADORA"){
-          const s = operStyle(v);
-          return `<span class="cgdBadge oper" style="background:${esc(s.bg)};color:${esc(s.fg)}">${esc(k)}: ${esc(v)}</span>`;
-        }
-        return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
-      }).join("");
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
 
       openModal(`LEAD • ${name}`, `
         <div class="cgdRow" style="margin-bottom:10px">
@@ -2408,7 +2553,14 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
           <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
         </div>
-        <div class="cgdBadges">${infoHtml || ""}</div>
+        <div style="font-weight:900;opacity:.9;line-height:1.4">
+          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
+          <div>IDADE: <b>${esc(idade||"—")}</b></div>
+          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
+          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
+          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
+          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
+        </div>
       `);
     }catch(_){
       closeModal();
@@ -2419,8 +2571,6 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // =========================
   // Refresh orchestration
   // =========================
-  function renderPendingCountUI(){ renderPendingCount(state.pendingCount); }
-
   async function refreshNewLeads(){
     try{
       const items = await fetchNewLeadsAll();
@@ -2428,32 +2578,25 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
       renderNewLeads(state.newLeadsRender);
 
-      const newest = items && items[0] ? String(items[0].ID) : null;
-      const newestNum = newest ? Number(newest) : 0;
-      const curCount = (items||[]).length;
+      const topIds = (items||[]).slice(0,5).map(x=>String(x.ID||"")).filter(Boolean);
 
+      // ✅ aviãozinho só quando ENTRA lead novo (topId novo que não existia no top anterior)
       if(!state._newLeadFirstLoadDone){
         state._newLeadFirstLoadDone = true;
-        state.lastNewLeadId = newest;
-        state.lastNewLeadMaxId = Number.isFinite(newestNum) ? newestNum : 0;
-        state.lastNewLeadCount = curCount;
+        state._newTopIds = topIds.slice();
         return;
       }
 
-      const maxBefore = state.lastNewLeadMaxId || 0;
-      const maxNow = Number.isFinite(newestNum) ? Math.max(maxBefore, newestNum) : maxBefore;
+      const prev = new Set(state._newTopIds || []);
+      const newest = topIds[0] || "";
+      const isNewEntry = newest && !prev.has(newest);
 
-      const isNew = Number.isFinite(newestNum) && newestNum > maxBefore;
-      if(isNew){
-        state.lastNewLeadId = newest;
-        state.lastNewLeadMaxId = maxNow;
-        state.lastNewLeadCount = curCount;
+      // Atualiza memória dos top ids
+      state._newTopIds = topIds.slice();
+
+      if(isNewEntry){
         flyPlaneYellow();
         if(state.soundOn) tripleBeep();
-      }else{
-        state.lastNewLeadId = newest || state.lastNewLeadId;
-        state.lastNewLeadMaxId = maxNow;
-        state.lastNewLeadCount = curCount;
       }
     }catch(err){
       console.warn("new leads fetch failed", err);
@@ -2469,11 +2612,10 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     }
   }
 
-  // ✅ aqui é o FIX da contagem (ranges no portal +03)
   async function refreshStats(){
     try{
-      const { startISO: dayS, endISO: dayE } = dayRangePortal();
-      const { startISO: monS, endISO: monE } = monthRangePortal();
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
 
       const [day, month] = await Promise.all([
         fetchPegCountRangeAll(dayS, dayE),
@@ -2489,8 +2631,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
   async function refreshUsersFast(){
     try{
-      const { startISO: dayS, endISO: dayE } = dayRangePortal();
-      const { startISO: monS, endISO: monE } = monthRangePortal();
+      const { startISO: dayS, endISO: dayE } = dayRange();
+      const { startISO: monS, endISO: monE } = monthRange();
 
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=4){
@@ -2520,6 +2662,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   async function refreshQueue(){
     try{
       if(Date.now() - state.queueLocalTouchTs < 1400) return;
+
       const q = await fetchQueue();
       state.queue = { ...state.queue, ...q };
       renderQueueSidebar();
@@ -2542,7 +2685,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   // =========================
-  // UI events
+  // Events / UI
   // =========================
   function updateSoundUI(){
     $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
@@ -2585,15 +2728,21 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
     $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
 
-    $("#btnGET")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.GET, "_blank", "noopener"));
-    $("#btnVendas")?.addEventListener("click", ()=> window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener"));
+    $("#btnGET")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.GET, "_blank", "noopener");
+    });
+    $("#btnVendas")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener");
+    });
 
+    // FILA
     $("#btnQueueManage")?.addEventListener("click", modalQueueManage);
 
     $("#queueBody")?.addEventListener("click", async (e)=>{
       const up = e.target.closest("[data-q-up]");
       const dn = e.target.closest("[data-q-down]");
       if(!up && !dn) return;
+
       try{
         const id = up ? up.getAttribute("data-q-up") : dn.getAttribute("data-q-down");
         const dir = up ? "up" : "down";
@@ -2649,6 +2798,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       }
     });
 
+    // Busca global
     $("#btnSearch")?.addEventListener("click", async ()=>{
       const term = ($("#searchBox").value||"").trim();
       if(!term) return;
@@ -2668,6 +2818,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       if(e.key==="Enter") $("#btnSearch")?.click();
     });
 
+    // Delegação cards
     document.addEventListener("click", (e)=>{
       const g = e.target.closest("[data-grab]");
       const d = e.target.closest("[data-discard]");
@@ -2709,12 +2860,14 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     await hardRefreshAll();
     renderBossPics();
 
+    // refreshes
     setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
     setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
     setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
     setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
     setInterval(refreshUsersFast, CONFIG.REFRESH_WHO_MS);
 
+    // offline flush
     setInterval(flushOps, 2500);
   }
 
