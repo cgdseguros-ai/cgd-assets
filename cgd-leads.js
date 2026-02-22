@@ -1,31 +1,83 @@
-/* cgd-leads.js — CGD Leads Panel (LITE / FAST)
-   - Contagem DIA/MÊS (total + por user) por UF_DATA_PEGAR = UF_CRM_1771741018
-   - Considera apenas STATUS: IN_PROCESS, UC_JT9G60, UC_0NFA3H, JUNK, CONVERTED
-   - NOVOS LEADS (NEW) + alerta + avião só na entrada real de novo lead
-   - HISTÓRICO: cards por user com dia/mês + ABRIR (lista leve)
-   - Barra inferior: cinza escuro + CNPJs lado a lado + "Endereço"
+/* cgd-leads.js — Painel de Leads (Bitrix24 Sites)
+   - SEM storage do navegador (NADA de localStorage/sessionStorage)
+   - UI refinada + ajustes de layout (títulos centralizados, botões abaixo do título, contrastes)
+   - Fila multi-PC via QUEUE_JSON (Deal em Pipeline 27 / Stage QUEUE_JSON)
+   - Contagens por "Data PEGAR" (UF_CRM_1771741018): dia e mês (geral e por USER)
+   - Busca global: mostra RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+   - Correções: avião de papel amarelo 3D (10cm) só em lead novo; alerta NOVO LEAD preto→vermelho; histórico mais rápido com batch; ABRIR com info do lead (sem “atualizado/id”, modal mais largo)
 */
 (function(){
   "use strict";
 
+  // =========================
+  // CONFIG — AJUSTE AQUI
+  // =========================
   const CONFIG = {
     WEBHOOK: "https://b24-6iyx5y.bitrix24.com.br/rest/1/w84d3lpz7hwutyeb/",
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
 
-    // ✅ Data PEGAR
+    // Campo UF usado no Follow-up (no LEAD)
+    UF_PRAZO: "UF_CRM_1768175087",
+
+    // ✅ Data PEGAR (base oficial de contagem "dia" e "mês")
     UF_DATA_PEGAR: "UF_CRM_1771741018",
 
-    // Campos úteis (se existirem)
+    // Campos no card/badges (se existirem)
     UF_OPERADORA: "UF_CRM_1771282782",
-    UF_DT_LEAD:   "UF_CRM_1771333014",
-    UF_IDADE:     "UF_CRM_1771339221",
+    UF_DT_LEAD:   "UF_CRM_1771333014", // Data/Hora do Lead (UF)
+    UF_IDADE:     "UF_CRM_1771339221", // Idade (texto)
     UF_BAIRRO:    "UF_CRM_LEAD_1731909705398",
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
-    // ✅ IMPORTANTÍSSIMO: Bitrix está em +03:00 (veio no seu JSON).
-    BITRIX_TZ: "+03:00",
+    // Fila multi-PC via PIPELINE 27 (controle)
+    QUEUE: {
+      CATEGORY_ID: 27,
+      STAGE_ID: "C27:UC_SVUYIO",
+      UF_QUEUE_JSON: "UF_CRM_1771293519",
+      TITLE_KEY: "__QUEUE__CGD__"
+    },
 
+    // Pipeline 17 (Negócios) — Follow-up cria Deal aqui
+    FOLLOWUP_DEALS: {
+      CATEGORY_ID: 17,
+      STAGE_BY_USER: {
+        "15":   "C17:UC_FQ8UPI",   // ALINE
+        "19":   "C17:UC_1HXNTB",   // ADRIANA
+        "17":   "C17:UC_RRQKAQ",   // ANDREYNA
+        "23":   "C17:UC_4HQGI1",   // MARIANA
+        "811":  "C17:UC_8Y4R4V",   // JOSIANE
+        "3081": "C17:EXECUTING",   // BRUNA LUISA
+        "3083": "C17:UC_8O5UFO",   // FERNANDA SILVA
+        "3079": "C17:UC_P1P9RJ",   // LIVIA ALVES
+        "3085": "C17:UC_U8AAGB",   // NICOLLE BELMONTE
+        "3389": "C17:UC_A6LSS8",   // ANNA CLARA
+        "815":  "C17:UC_ZT6WEB",   // GABRIEL
+        "3387": "C17:UC_RXISLQ"    // BEATRIZ
+      }
+    },
+
+    // Logo topo
+    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
+
+    // Links
+    LINKS: {
+      GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
+      VENDAS: "https://cgdcorretorabase.bitrix24.site/vendas/"
+    },
+
+    // Refresh
+    REFRESH_NEW_LEADS_MS: 4500,
+    REFRESH_STATS_MS: 9000,
+    REFRESH_QUEUE_MS: 3000,
+    REFRESH_WHO_MS: 12000,
+
+    // Limites
+    LIMIT_NEW_RENDER: 30,
+    LIMIT_BATCH_MAX:  600,
+    LIMIT_USER_LAST:  120, // usado no modal ABRIR
+    LIMIT_LAST_TWO_FETCH: 12,
+
+    // Usuárias do painel
     USERS: [
       { name:"ALINE", id:15 },
       { name:"ADRIANA", id:19 },
@@ -41,91 +93,125 @@
       { name:"BEATRIZ", id:3387 },
     ],
 
+    // Sócios (fotos na barra inferior)
+    BOSSES: [27, 1, 15],
+
+    // ✅ Status/Stages de LEADS (Bitrix)
     LEAD_STATUS: {
-      NOVO: "NEW",
-      EM_ATEND: "IN_PROCESS",
+      NOVO_LEAD: "NEW",
+      EM_ATENDIMENTO: "IN_PROCESS",
       ATENDIDO: "UC_JT9G60",
-      QUALIF: "UC_0NFA3H",
-      // SISTEMA:
-      DESCARTADO: "JUNK",
-      CONVERTIDO: "CONVERTED"
+      QUALIFICADO: "UC_0NFA3H",
+      PERDIDO: "UC_5IMTI4",       // (seu “Perdido” do funil)
+      CONVERTIDO: "UC_B3RQAF",    // (seu “Convertido” do funil)
+      CONVERTED_SYS: "CONVERTED", // ✅ Convertido do sistema
+      JUNK_SYS: "JUNK"            // ✅ Descartado do sistema
     },
 
-    STATUS_NAMES: {
-      "NEW":"NOVO LEAD",
-      "IN_PROCESS":"EM ATENDIMENTO",
-      "UC_JT9G60":"ATENDIDO",
-      "UC_0NFA3H":"QUALIFICADO",
-      "JUNK":"LEAD DESCARTADO (sistema)",
-      "CONVERTED":"LEAD CONVERTIDO (sistema)"
+    // ✅ Etapas que entram no CÁLCULO (dia/mês)
+    COUNT_STATUS: [
+      "IN_PROCESS",   // Em atendimento
+      "UC_JT9G60",    // Atendido
+      "UC_0NFA3H",    // Qualificado
+      "JUNK",         // Lead descartado (sistema)
+      "CONVERTED"     // Lead convertido (sistema)
+    ],
+
+    // Nomes (para exibir)
+    LEAD_STATUS_NAMES: {
+      "NEW": "NOVO LEAD",
+      "IN_PROCESS": "EM ATENDIMENTO",
+      "UC_JT9G60": "ATENDIDO",
+      "UC_0NFA3H": "QUALIFICADO",
+      "UC_5IMTI4": "PERDIDO",
+      "UC_B3RQAF": "CONVERTIDO",
+      "CONVERTED": "LEAD CONVERTIDO (sistema)",
+      "JUNK": "DESCARTADO (sistema)"
     },
 
-    // ✅ contagem considera só estes
-    COUNT_STATUS: ["IN_PROCESS","UC_JT9G60","UC_0NFA3H","JUNK","CONVERTED"],
+    // Select do lead
+    LEAD_SELECT: [
+      "ID","TITLE","NAME","LAST_NAME","SECOND_NAME",
+      "STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
+      "SOURCE_ID","PHONE","EMAIL",
+      "ADDRESS_CITY","ADDRESS","ADDRESS_2","ADDRESS_REGION",
+      "UF_*"
+    ],
 
-    REFRESH_NEW_MS: 4500,
-    REFRESH_COUNT_MS: 6500,
-
-    LIMIT_NEW_RENDER: 30,
-    LIMIT_USER_OPEN: 140
+    HOT_EMOJI: "🔥"
   };
 
+  // =========================
+  // Helpers DOM
+  // =========================
   const $ = (q, el=document)=> el.querySelector(q);
   const $$ = (q, el=document)=> Array.from(el.querySelectorAll(q));
   const esc = (s)=> String(s??"").replace(/[&<>"']/g, m => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[m]));
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-  const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
-  function pad2(n){ return String(n).padStart(2,"0"); }
-  function nowBR(){ try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; } }
+  function nowBRTime(){
+    try{ return new Date().toLocaleTimeString("pt-BR"); }catch(_){ return ""; }
+  }
 
+  // Formata Date local em "YYYY-MM-DDTHH:MM:SS" (sem Z)
+  // (Bitrix aceita bem esse padrão em filtros e evita confusão de timezone)
+  function fmtLocalNoZ(dt){
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth()+1).padStart(2,"0");
+    const d = String(dt.getDate()).padStart(2,"0");
+    const hh = String(dt.getHours()).padStart(2,"0");
+    const mi = String(dt.getMinutes()).padStart(2,"0");
+    const ss = String(dt.getSeconds()).padStart(2,"0");
+    return `${y}-${m}-${d}T${hh}:${mi}:${ss}`;
+  }
+
+  function dayRange(){
+    const d0 = new Date(); d0.setHours(0,0,0,0);
+    const d1 = new Date(d0); d1.setHours(23,59,59,999);
+    return { startISO: fmtLocalNoZ(d0), endISO: fmtLocalNoZ(d1) };
+  }
+  function monthRange(){
+    const d0 = new Date(); d0.setDate(1); d0.setHours(0,0,0,0);
+    const d1 = new Date(d0); d1.setMonth(d1.getMonth()+1); d1.setMilliseconds(-1); // último ms do mês anterior
+    return { startISO: fmtLocalNoZ(d0), endISO: fmtLocalNoZ(d1) };
+  }
+
+  function isoFromLocalInput(v){
+    if(!v) return "";
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if(!m) return "";
+    const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mi=+m[5];
+    const dt = new Date(y, mo, d, hh, mi, 0, 0);
+    if(Number.isNaN(dt.getTime())) return "";
+    // Para gravar no UF, mantém ISO "Z" (padrão) — consistente no banco
+    return dt.toISOString();
+  }
   function fmtDateBRFromISO(iso){
     if(!iso) return "";
     const t = Date.parse(String(iso));
     if(!Number.isFinite(t)) return String(iso);
     const d = new Date(t);
-    return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const dd = String(d.getDate()).padStart(2,"0");
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const yy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2,"0");
+    const mi = String(d.getMinutes()).padStart(2,"0");
+    return `${dd}/${mm}/${yy} ${hh}:${mi}`;
   }
-
   function stageName(id){
-    return CONFIG.STATUS_NAMES[String(id||"")] || String(id||"—");
+    return CONFIG.LEAD_STATUS_NAMES[String(id||"")] || String(id||"—");
   }
-
-  function leadDisplayName(it){
-    const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
-    if(nm) return nm;
-    const t = String(it.TITLE||"").trim();
-    return t || `Lead #${it.ID}`;
-  }
-
-  function pickUF(it, key){
-    try{ return it && Object.prototype.hasOwnProperty.call(it, key) ? it[key] : (it?it[key]:""); }
-    catch(_){ return ""; }
-  }
-
-  function bestPhone(it){
-    const uf = pickUF(it, CONFIG.UF_TELEFONE);
-    if(uf) return String(uf);
-    const p = it && it.PHONE;
-    if(Array.isArray(p) && p[0] && p[0].VALUE) return String(p[0].VALUE);
-    return "";
-  }
-
-  function operStyle(operRaw){
-    const op = String(operRaw||"").toUpperCase();
-    if(op.includes("PREVENT")) return { bg:"#0b2a5a", fg:"#fff" }; // ✅ azul escuro
-    if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
-    if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
-    if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
-    if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
-    if(op.includes("ALICE")) return { bg:"#ff7bb8", fg:"#111" };
-    return { bg:"rgba(255,255,255,.9)", fg:"rgba(18,26,40,.92)" };
+  function userNameById(id){
+    const s = String(id||"");
+    const u = CONFIG.USERS.find(x=>String(x.id)===s);
+    if(u) return u.name;
+    return s ? ("USER " + s) : "—";
   }
 
   // =========================
-  // Bitrix client (robusto + retries)
+  // Webhook client
   // =========================
   function toPairs(prefix, obj, out){
     out = out || [];
@@ -149,15 +235,17 @@
   }
 
   async function bxRaw(method, params={}, options={}){
-    const timeoutMs = Math.max(6000, Number(options.timeoutMs || 14000));
+    const timeoutMs = Math.max(7000, Number(options.timeoutMs || 14000));
     const pairs = toPairs("", params, []);
     const body = new URLSearchParams();
     for(const [k,v] of pairs){ if(k) body.append(k, v); }
 
     let lastErr = null;
+
     for(let attempt=0; attempt<3; attempt++){
       const ctrl = new AbortController();
       const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, timeoutMs);
+
       try{
         const resp = await fetch(CONFIG.WEBHOOK + method, {
           method:"POST",
@@ -165,16 +253,32 @@
           body,
           signal: ctrl.signal
         });
+
         const data = await resp.json().catch(()=> ({}));
-        if(!resp.ok) throw new Error(`HTTP ${resp.status} em ${method}`);
-        if(data && data.error) throw new Error(data.error_description || data.error);
+        if(!resp.ok){
+          const e = new Error(`HTTP ${resp.status} em ${method}`);
+          e._httpStatus = resp.status;
+          throw e;
+        }
+        if(data && data.error){
+          const e = new Error(data.error_description || data.error);
+          e._bxError = data.error;
+          throw e;
+        }
         return data;
       }catch(err){
         lastErr = err;
-        const msg = String(err && err.message || err).toLowerCase();
-        const retry = msg.includes("failed to fetch") || msg.includes("network") || msg.includes("timeout") || msg.includes("http 5") || msg.includes("http 429");
+        const http = err && err._httpStatus;
+        const transientHTTP = (http===429 || http===500 || http===502 || http===503 || http===504);
+        const aborted = (err && (err.name==="AbortError"));
+        const net = (err && String(err.message||err).toLowerCase().includes("failed to fetch"));
+
+        if(attempt < 2 && (transientHTTP || aborted || net)){
+          clearTimeout(t);
+          await sleep(260 + attempt*520);
+          continue;
+        }
         clearTimeout(t);
-        if(attempt < 2 && retry){ await sleep(220 + attempt*420); continue; }
         throw err;
       }finally{
         clearTimeout(t);
@@ -188,128 +292,321 @@
     return data.result;
   }
 
-  async function bxListAll(method, params, max=400){
+  async function bxListAll(method, params, max=500){
     let start = 0;
     let out = [];
     while(true){
       const r = await bx(method, { ...params, start });
-      const items = Array.isArray(r) ? r : [];
+      const items = Array.isArray(r) ? r : (r && Array.isArray(r.items) ? r.items : []);
       out = out.concat(items);
       if(out.length >= max) break;
-      if(items.length < 50) break;
-      start += 50;
+
+      if(r && typeof r === "object" && r.next !== undefined && r.next !== null){
+        start = r.next;
+        if(!start) break;
+      }else{
+        if(items.length < 50) break;
+        start = start + 50;
+      }
+      if(items.length === 0) break;
     }
     return out.slice(0, max);
   }
 
-  async function bxBatch(cmdObj, timeoutMs=18000){
-    const data = await bxRaw("batch", { halt: 0, cmd: cmdObj }, { timeoutMs });
-    return (data && data.result) ? data.result : {};
-  }
-
-  // =========================
-  // ✅ Funções de tempo no timezone do Bitrix (+03:00)
-  // =========================
-  function tzMinutes(tz){
-    const m = String(tz||"").match(/^([+-])(\d{2}):(\d{2})$/);
-    if(!m) return 0;
-    const sign = (m[1]==="-") ? -1 : 1;
-    return sign * (parseInt(m[2],10)*60 + parseInt(m[3],10));
-  }
-
-  // converte Date “agora” → string no TZ do Bitrix
-  function nowInBitrixTzParts(d=new Date()){
-    const off = tzMinutes(CONFIG.BITRIX_TZ); // minutos do TZ Bitrix
-    const utcMs = d.getTime() + d.getTimezoneOffset()*60000;
-    const tzMs = utcMs + off*60000;
-    const x = new Date(tzMs);
-    return {
-      y: x.getUTCFullYear(),
-      m: x.getUTCMonth()+1,
-      d: x.getUTCDate(),
-      hh: x.getUTCHours(),
-      mi: x.getUTCMinutes(),
-      ss: x.getUTCSeconds()
+  // Batch helper (acelera MUITO as contagens/histórico)
+  function qsFromObj(obj){
+    const parts = [];
+    const enc = encodeURIComponent;
+    const walk = (prefix, val)=>{
+      if(val === null || val === undefined) return;
+      if(Array.isArray(val)){
+        for(let i=0;i<val.length;i++){
+          walk(prefix ? `${prefix}[${i}]` : String(i), val[i]);
+        }
+        return;
+      }
+      if(typeof val === "object"){
+        for(const k of Object.keys(val)){
+          walk(prefix ? `${prefix}[${k}]` : k, val[k]);
+        }
+        return;
+      }
+      if(prefix) parts.push(`${enc(prefix)}=${enc(String(val))}`);
     };
+    walk("", obj);
+    return parts.join("&");
   }
 
-  function isoBitrix(y,m,d,hh,mi,ss){
-    return `${y}-${pad2(m)}-${pad2(d)}T${pad2(hh)}:${pad2(mi)}:${pad2(ss)}${CONFIG.BITRIX_TZ}`;
-  }
-
-  function dayRangeBitrix(){
-    const p = nowInBitrixTzParts();
-    const start = isoBitrix(p.y,p.m,p.d,0,0,0);
-    // próximo dia 00:00
-    const dt = new Date(Date.UTC(p.y,p.m-1,p.d,0,0,0));
-    dt.setUTCDate(dt.getUTCDate()+1);
-    const end = isoBitrix(dt.getUTCFullYear(), dt.getUTCMonth()+1, dt.getUTCDate(), 0,0,0);
-    return { startISO: start, endISO: end };
-  }
-
-  function monthRangeBitrix(){
-    const p = nowInBitrixTzParts();
-    const start = isoBitrix(p.y,p.m,1,0,0,0);
-    const dt = new Date(Date.UTC(p.y,p.m-1,1,0,0,0));
-    dt.setUTCMonth(dt.getUTCMonth()+1);
-    const end = isoBitrix(dt.getUTCFullYear(), dt.getUTCMonth()+1, 1, 0,0,0);
-    return { startISO: start, endISO: end };
+  async function bxBatch(cmdMap, options={}){
+    // cmdMap: { key: "method?query", ... }
+    const data = await bxRaw("batch", { cmd: cmdMap }, { timeoutMs: options.timeoutMs || 20000 });
+    return data && data.result ? data.result : {};
   }
 
   // =========================
-  // UI
+  // “Offline”: fila de ações (só RAM)
+  // =========================
+  const pendingOps = [];
+  function enqueueOp(name, run){ pendingOps.push({ name, run }); }
+
+  let flushBusy = false;
+  async function flushOps(){
+    if(flushBusy) return;
+    if(pendingOps.length === 0) return;
+    flushBusy = true;
+    try{
+      for(let i=0; i<25 && pendingOps.length; i++){
+        const op = pendingOps[0];
+        try{
+          await op.run();
+          pendingOps.shift();
+          await sleep(90);
+        }catch(_){
+          break;
+        }
+      }
+    } finally{
+      flushBusy = false;
+    }
+  }
+
+  // =========================
+  // Audio — 3 bipes
+  // =========================
+  function tripleBeep(){
+    try{
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return;
+      const ctx = new AC();
+      const t0 = ctx.currentTime;
+      const make = (t)=>{
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = "sine";
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.20, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t);
+        o.stop(t + 0.18);
+      };
+      make(t0 + 0.00);
+      make(t0 + 0.26);
+      make(t0 + 0.52);
+      setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 1000);
+    }catch(_){}
+  }
+
+  // =========================
+  // Paper plane animation — 3D side view, ~10cm (≈380px)
+  // =========================
+  function flyPlaneYellow(){
+    try{
+      const d = document.createElement("div");
+      d.className = "cgdPlane";
+      d.innerHTML = `
+        <svg viewBox="0 0 260 140" width="380" height="210" aria-hidden="true">
+          <defs>
+            <linearGradient id="plA" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#ffe36a"/>
+              <stop offset="0.55" stop-color="#ffd400"/>
+              <stop offset="1" stop-color="#f3b800"/>
+            </linearGradient>
+            <linearGradient id="plB" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="rgba(255,255,255,.65)"/>
+              <stop offset="1" stop-color="rgba(0,0,0,.06)"/>
+            </linearGradient>
+            <filter id="plSh" x="-20%" y="-30%" width="140%" height="200%">
+              <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="rgba(0,0,0,.25)"/>
+            </filter>
+          </defs>
+
+          <!-- “lado” do avião (estilo 3D) -->
+          <g filter="url(#plSh)" transform="translate(10,18)">
+            <!-- asa principal -->
+            <path d="M0 62 L232 0 L172 108 L122 76 L0 62 Z"
+              fill="url(#plA)" stroke="rgba(0,0,0,.35)" stroke-width="2.4" />
+            <!-- dobra (highlight) -->
+            <path d="M122 76 L232 0"
+              fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3.2" />
+            <!-- sombra/dobra inferior -->
+            <path d="M0 62 L122 76 L172 108"
+              fill="none" stroke="rgba(0,0,0,.18)" stroke-width="3.0" />
+            <!-- detalhe (flap) -->
+            <path d="M60 66 L120 76 L92 94 Z"
+              fill="url(#plB)" stroke="rgba(0,0,0,.18)" stroke-width="1.6" />
+          </g>
+        </svg>
+      `;
+      document.body.appendChild(d);
+      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
+    }catch(_){}
+  }
+
+  // =========================
+  // CSS
   // =========================
   function injectCSS(){
     const css = `
 #cgdApp{
   --radius:18px;
   --border: rgba(30,40,70,.12);
+  --text: rgba(18,26,40,.92);
+  --muted: rgba(18,26,40,.62);
+  --card2: rgba(255,255,255,.92);
   --shadow: 0 10px 30px rgba(20,30,60,.10);
+
   min-height: calc(100vh - 90px);
   padding: 10px 12px 110px;
   font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-  color: rgba(18,26,40,.92);
+  color: var(--text);
   background:
     radial-gradient(900px 600px at 15% 20%, rgba(176,140,255,.18), transparent 55%),
     radial-gradient(900px 600px at 85% 20%, rgba(120,210,255,.14), transparent 55%),
     radial-gradient(900px 650px at 55% 95%, rgba(255,150,200,.12), transparent 60%),
     linear-gradient(135deg, #f7f3ff, #f3fbff 50%, #fff7fb);
 }
+
+/* Top bar */
 .cgdTop{
-  position: sticky; top: 0; z-index: 50;
+  position: sticky;
+  top: 0;
+  z-index: 50;
   background: rgba(18,20,24,.92);
   color: #fff;
   border: 1px solid rgba(255,255,255,.10);
   border-radius: 999px;
   padding: 10px 12px;
-  display:flex; align-items:center; justify-content: space-between; gap: 10px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
   box-shadow: var(--shadow);
 }
-.cgdTopLeft{ display:flex; align-items:center; gap:10px; }
+.cgdTopLeft{ display:flex; align-items:center; gap:10px; min-width: 320px; }
 .cgdLogo{
-  width: 56px; height: 56px; border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.14); object-fit: cover;
+  width: 56px; height: 56px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.14);
+  object-fit: cover;
   background: rgba(255,255,255,.08);
 }
 .cgdTitle{ font-weight: 950; letter-spacing:.2px; font-size: 13px; white-space: nowrap; }
 .cgdTopRight{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
+
 .cgdPill{
   border: 1px solid rgba(255,255,255,.16);
   background: rgba(255,255,255,.10);
-  color:#fff; border-radius: 999px;
-  padding: 6px 10px; font-size: 12px; font-weight: 950;
+  color:#fff;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 950;
 }
+
+/* Botões com contraste forte (padrão) */
 .cgdBtn{
   cursor:pointer;
   border: 2px solid rgba(255,255,255,.22);
   background: rgba(10,10,12,.92);
-  color:#fff; border-radius: 999px;
-  padding: 8px 12px; font-size: 12px; font-weight: 950;
+  color:#fff;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 950;
 }
 .cgdBtn:active{ transform: translateY(1px); }
 .cgdBtn[disabled]{ opacity:.6; cursor:not-allowed; transform:none; }
 
-.cgdLayout{ margin-top: 12px; display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Mini botões */
+.cgdMiniBtn{
+  cursor:pointer;
+  border: 2px solid rgba(10,10,12,.85);
+  background: rgba(255,255,255,.95);
+  color: rgba(10,10,12,.92);
+  border-radius: 12px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+.cgdMiniBtn.primary{
+  background: rgba(120,210,255,.32);
+  border-color: rgba(10,10,12,.75);
+}
+.cgdMiniBtn.danger{
+  background: rgba(255,70,120,.18);
+  border-color: rgba(10,10,12,.75);
+}
+
+/* Layout */
+.cgdLayout{
+  margin-top: 12px;
+  display:flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.cgdGrid{
+  flex: 1 1 auto;
+  display:grid;
+  grid-template-columns: 0.85fr 2.15fr;
+  gap: 12px;
+}
+
+/* Sidebar FILA */
+.cgdQueueSide{
+  width: 390px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.62);
+  box-shadow: var(--shadow);
+  overflow:hidden;
+  display:flex;
+  flex-direction: column;
+  min-height: 68vh;
+}
+.cgdQueueHead{
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,.78);
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cgdQueueHead .qt{
+  width: 100%;
+  text-align: center;
+  font-weight: 950;
+  font-size: 12px;
+  letter-spacing:.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.cgdQueueBody{
+  padding: 10px;
+  overflow:auto;
+  min-height: 0;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cgdQueueRowItem{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,.92);
+  padding: 10px 10px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cgdQueueRowItem .nm{ font-weight: 950; font-size: 12px; }
+.cgdQueueRowItem .ord{ font-weight: 950; opacity:.65; font-size: 12px; }
+.cgdQueueArrows{ display:flex; gap:6px; align-items:center; }
+
+/* Colunas */
 .cgdCol{
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -317,89 +614,195 @@
   box-shadow: var(--shadow);
   overflow: hidden;
   min-height: 68vh;
-  display:flex; flex-direction: column;
+  display:flex;
+  flex-direction: column;
 }
+
+/* Cabeçalho das colunas — título central e ações abaixo */
 .cgdColHead{
-  padding: 10px;
+  padding: 8px 10px 10px;
   background: rgba(255,255,255,.78);
   border-bottom: 1px solid var(--border);
-  display:flex; align-items:center; justify-content: space-between; gap: 10px;
 }
-.cgdColHead .hTitle{ font-weight: 950; font-size: 12px; letter-spacing:.3px; text-transform: uppercase; }
-.cgdList{ padding: 10px; display:flex; flex-direction: column; gap: 10px; overflow:auto; min-height: 0; }
+.cgdColHead .hTitle{
+  width:100%;
+  text-align:center;
+  font-weight: 950;
+  font-size: 12px;
+  letter-spacing:.3px;
+  text-transform: uppercase;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cgdColHead .hActionsRow{
+  margin-top: 8px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:center;
+}
+
+.cgdList{
+  padding: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow:auto;
+  min-height: 0;
+}
+
 .cgdCard{
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: rgba(255,255,255,.92);
+  background: var(--card2);
   box-shadow: 0 8px 20px rgba(20,30,60,.08);
-  padding: 10px;
+  padding: 10px 10px 10px;
 }
-.cgdRow{ display:flex; align-items:flex-start; justify-content: space-between; gap:10px; }
-.cgdLeadName{ font-weight: 950; font-size: 14px; line-height: 1.2; word-break: break-word; }
-.cgdBadges{ display:flex; gap:6px; flex-wrap: wrap; margin-top: 8px; }
+.cgdCardRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap:10px;
+}
+.cgdLeadName{
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.2;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.cgdBadges{
+  display:flex;
+  gap:6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 .cgdBadge{
-  font-size: 10px; font-weight: 950;
+  font-size: 10px;
+  font-weight: 950;
   border: 1px solid rgba(30,40,70,.12);
-  padding: 4px 8px; border-radius: 999px;
+  padding: 4px 8px;
+  border-radius: 999px;
   background: rgba(255,255,255,.9);
 }
-.cgdActions{ margin-top: 10px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
-.cgdMiniBtn{
-  cursor:pointer;
-  border: 2px solid rgba(10,10,12,.85);
-  background: rgba(255,255,255,.95);
-  color: rgba(10,10,12,.92);
-  border-radius: 12px;
-  padding: 7px 10px; font-size: 12px; font-weight: 950;
+.cgdBadge.oper{ border: 0; padding: 5px 10px; }
+.cgdActions{
+  margin-top: 10px;
+  display:flex;
+  gap:8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
-.cgdMiniBtn.primary{ background: rgba(120,210,255,.32); }
-.cgdMiniBtn.danger{ background: rgba(255,70,120,.18); }
 
+/* 🚨 NOVO LEAD: preto/branco; com leads -> vermelho/preto */
 .cgdAlertBox{
   border: 2px solid rgba(10,10,12,.85);
   border-radius: 16px;
   padding: 12px;
   background: rgba(10,10,12,.94);
   color: #fff;
-  display:flex; align-items:center; justify-content: space-between; gap: 10px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
 }
-.cgdAlertBox.hot{ background: rgba(255,0,0,.92); color:#111; border-color: rgba(0,0,0,.35); }
-.cgdAlertBox .txt{ font-weight: 950; font-size: 12px; line-height: 1.25; width: 100%; }
-.cgdAlertBox .txt small{ display:block; margin-top: 4px; font-size: 11px; opacity: .92; font-weight: 900; }
+.cgdAlertBox.hot{
+  background: rgba(255,0,0,.92);
+  color: #111;
+  border-color: rgba(0,0,0,.35);
+}
+.cgdAlertBox .txt{
+  font-weight: 950;
+  font-size: 12px;
+  line-height: 1.25;
+  width: 100%;
+}
+.cgdAlertBox .txt small{
+  display:block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: .92;
+  font-weight: 900;
+}
 
-.cgdUserLine{ display:flex; gap:10px; align-items:flex-start; }
+/* HISTÓRICO em 2 colunas */
+#listWho.cgdWhoGrid{
+  display:grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 1100px){
+  #listWho.cgdWhoGrid{ grid-template-columns: 1fr; }
+}
+
+/* Usuária: foto maior + layout */
+.cgdUserLine{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+}
 .cgdUserPic{
   width: 52px; height: 52px;
-  border-radius: 999px; object-fit: cover;
+  border-radius: 999px;
+  object-fit: cover;
   border: 1px solid rgba(0,0,0,.10);
-  background:#fff; flex: 0 0 auto;
+  background:#fff;
+  flex: 0 0 auto;
 }
 
+/* Bottom bar */
 .cgdBottom{
-  position: fixed; left:0; right:0; bottom:0; z-index: 80;
-  background: rgba(22,24,28,.98); /* ✅ cinza bem escuro */
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 80;
+  background: rgba(18,20,24,.96); /* ✅ cinza bem escuro */
   color: #fff;
   backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255,255,255,.10);
   padding: 10px 12px;
-  display:flex; align-items:center; justify-content: space-between; gap: 12px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 12px;
 }
-.cgdBottom .bLeft{ display:flex; align-items:center; gap:10px; min-width: 340px; }
+.cgdBottom .bLeft{ display:flex; align-items:flex-start; gap:10px; min-width: 340px; }
 .cgdBottom .bCenter{ flex:1; text-align:center; font-style: italic; font-weight: 900; opacity:.92; }
 .cgdBottom .bRight{ text-align:right; font-weight: 900; opacity:.92; min-width: 360px; }
-.cgdAddrWrap{ display:flex; flex-direction: column; gap:2px; line-height: 1.1; }
-.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity: .95; }
-.cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; }
-.cgdCnpjRow{ display:flex; gap: 14px; align-items:flex-start; justify-content:flex-end; flex-wrap:wrap; }
-.cgdCnpjBox{ font-size: 11px; line-height: 1.25; font-weight: 900; opacity: .92; white-space: nowrap; }
+.cgdBossPics{ display:flex; gap:8px; align-items:center; margin-top:2px; }
+.cgdBossPic{
+  width: 34px; height: 34px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08);
+}
+.cgdAddrWrap{ display:flex; flex-direction:column; gap:4px; }
+.cgdAddrLabel{ font-size: 11px; font-weight: 950; opacity:.78; }
+.cgdAddr{ font-size: 11px; font-weight: 900; opacity: .92; line-height: 1.15; }
 
-/* Modal */
+.cgdCnpj{
+  font-size: 11px;
+  line-height: 1.25;
+  display:flex;              /* ✅ lado a lado */
+  gap: 16px;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+}
+.cgdCnpj .blk{ min-width: 220px; text-align:right; }
+
+/* Modals */
 .cgdModalOverlay{
-  position: fixed; inset: 0;
+  position: fixed;
+  inset: 0;
   background: rgba(0,0,0,.28);
   backdrop-filter: blur(4px);
   z-index: 200;
-  display:flex; align-items:center; justify-content:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   padding: 16px;
 }
 .cgdModal{
@@ -410,20 +813,33 @@
   border-radius: 20px;
   box-shadow: 0 24px 70px rgba(20,30,60,.22);
   overflow:hidden;
-  display:flex; flex-direction: column;
+  display:flex;
+  flex-direction: column;
 }
+.cgdModal.cgdModalWide{ width: min(1280px, 98vw); } /* ✅ ABRIR mais largo */
+
 .cgdModalHead{
   padding: 12px 14px;
-  display:flex; align-items:center; justify-content: space-between; gap: 10px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
   border-bottom: 1px solid rgba(30,40,70,.12);
   background: rgba(255,255,255,.75);
 }
 .cgdModalTitle{ font-weight: 950; font-size: 13px; }
-.cgdModalBody{ padding: 12px 14px; overflow: auto; min-height: 0; }
+.cgdModalBody{
+  padding: 12px 14px;
+  overflow: auto;
+  min-height: 0;
+}
 .cgdModalFoot{
   padding: 12px 14px;
   border-top: 1px solid rgba(30,40,70,.12);
-  display:flex; gap: 10px; justify-content:flex-end; flex-wrap: wrap;
+  display:flex;
+  gap: 10px;
+  justify-content:flex-end;
+  flex-wrap: wrap;
   background: rgba(255,255,255,.75);
 }
 .cgdInput, .cgdSelect{
@@ -433,6 +849,9 @@
   font-weight: 900;
   font-size: 12px;
   background: rgba(255,255,255,.95);
+}
+.cgdRow{
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
 }
 .cgdTable{
   width: 100%;
@@ -452,12 +871,12 @@
 
 body{ padding-bottom: 110px !important; }
 
-/* Avião amarelo 3D lateral (maior) */
+/* Paper plane */
 .cgdPlane{
   position: fixed;
-  top: 98px;
-  left: -520px;
-  width: 420px;
+  top: 85px;
+  left: -480px;
+  width: 380px;
   height: 210px;
   z-index: 9999;
   pointer-events:none;
@@ -465,9 +884,37 @@ body{ padding-bottom: 110px !important; }
   animation: planeFly 1.8s linear forwards;
 }
 @keyframes planeFly{
-  0%   { transform: translateX(0) rotate(6deg); opacity: .0; }
+  0%   { transform: translateX(0) rotate(8deg); opacity: .0; }
   10%  { opacity: .98; }
-  100% { transform: translateX(calc(100vw + 960px)) rotate(-6deg); opacity: 0; }
+  100% { transform: translateX(calc(100vw + 920px)) rotate(-6deg); opacity: 0; }
+}
+
+/* DARK MODE */
+body.cgdDark #cgdApp{
+  background: linear-gradient(135deg, #2a2d33, #23262b 50%, #1f2227);
+  color: rgba(255,255,255,.92);
+}
+body.cgdDark .cgdQueueSide,
+body.cgdDark .cgdCol{
+  background: rgba(25,27,31,.72) !important;
+  border-color: rgba(255,255,255,.10) !important;
+}
+body.cgdDark .cgdColHead,
+body.cgdDark .cgdQueueHead{
+  background: rgba(25,27,31,.82) !important;
+  border-color: rgba(255,255,255,.10) !important;
+  color:#fff;
+}
+body.cgdDark .cgdCard{
+  background: rgba(248,248,245,.92) !important;
+  color: rgba(18,26,40,.92) !important;
+}
+body.cgdDark .cgdBadge{
+  background: rgba(255,255,255,.9) !important;
+}
+@media (max-width: 1200px){
+  .cgdLayout{ flex-direction: column; }
+  .cgdQueueSide{ width: auto; min-height: unset; }
 }
     `;
     const st = document.createElement("style");
@@ -475,88 +922,9 @@ body{ padding-bottom: 110px !important; }
     document.head.appendChild(st);
   }
 
-  function mount(){
-    let root = document.getElementById("cgd-leads-root");
-    if(!root){
-      root = document.createElement("div");
-      root.id = "cgd-leads-root";
-      document.body.prepend(root);
-    }
-
-    root.innerHTML = `
-      <div id="cgdApp">
-        <div class="cgdTop">
-          <div class="cgdTopLeft">
-            <img class="cgdLogo" src="${esc(CONFIG.LOGO_URL)}" alt="CGD" />
-            <div class="cgdTitle">PAINEL DE LEADS • CGD CORRETORA (LITE)</div>
-          </div>
-          <div class="cgdTopRight">
-            <div class="cgdPill" id="pillPending">Pendentes: 0</div>
-            <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
-            <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
-            <button class="cgdBtn" id="btnRefresh">Atualizar</button>
-            <button class="cgdBtn" id="btnSound">Som: ON</button>
-            <div class="cgdPill" id="pillStatus">Atualizado: —</div>
-          </div>
-        </div>
-
-        <div class="cgdLayout">
-          <section class="cgdCol">
-            <div class="cgdColHead">
-              <div class="hTitle">NOVOS LEADS</div>
-              <button class="cgdBtn" id="btnRefreshNew">Atualizar</button>
-            </div>
-            <div class="cgdList" id="listNew">
-              <div class="cgdAlertBox" id="alertNew" style="display:none">
-                <div class="txt">
-                  🚨 <b>NOVO LEAD</b>
-                  <small>Alarme enquanto existir lead em “NOVO LEAD”.</small>
-                </div>
-                <button class="cgdBtn" id="btnSilence">Silenciar</button>
-              </div>
-              <div style="opacity:.7;font-weight:900">Carregando…</div>
-            </div>
-          </section>
-
-          <section class="cgdCol">
-            <div class="cgdColHead">
-              <div class="hTitle">HISTÓRICO DE LEADS (por usuária)</div>
-              <button class="cgdBtn" id="btnRefreshWho">Atualizar</button>
-            </div>
-            <div class="cgdList" id="listWho">
-              <div style="opacity:.7;font-weight:900">Carregando…</div>
-            </div>
-          </section>
-        </div>
-
-        <div class="cgdBottom">
-          <div class="bLeft">
-            <div class="cgdAddrWrap">
-              <div class="cgdAddrLabel">Endereço</div>
-              <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
-            </div>
-          </div>
-
-          <div class="bCenter">System created by GRUPO CGD</div>
-
-          <div class="bRight">
-            <div class="cgdCnpjRow">
-              <div class="cgdCnpjBox">
-                <div><b>CGD CORRETORA</b></div>
-                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-              </div>
-              <div class="cgdCnpjBox">
-                <div><b>CGD BARRA</b></div>
-                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // ===== Modal
+  // =========================
+  // Modal system
+  // =========================
   function openModal(title, bodyHTML, footHTML){
     closeModal();
     const ov = document.createElement("div");
@@ -573,115 +941,657 @@ body{ padding-bottom: 110px !important; }
     `;
     ov.addEventListener("click", (e)=>{
       if(e.target === ov) closeModal();
-      if(e.target.closest("[data-close-modal]")) closeModal();
+      const c = e.target.closest("[data-close-modal]");
+      if(c) closeModal();
     });
     document.body.appendChild(ov);
     document.addEventListener("keydown", escClose, {capture:true});
   }
-  function escClose(e){ if(e.key === "Escape") closeModal(); }
+  function escClose(e){ if(e.key === "Escape"){ closeModal(); } }
   function closeModal(){
     const ov = $(".cgdModalOverlay");
     if(ov) ov.remove();
     document.removeEventListener("keydown", escClose, {capture:true});
   }
 
-  // ===== Paper plane + beep (só na entrada real)
-  function tripleBeep(){
-    try{
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if(!AC) return;
-      const ctx = new AC();
-      const t0 = ctx.currentTime;
-      const make = (t)=>{
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = "sine";
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(0.20, t + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-        o.connect(g); g.connect(ctx.destination);
-        o.start(t); o.stop(t + 0.18);
-      };
-      make(t0 + 0.00); make(t0 + 0.26); make(t0 + 0.52);
-      setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 1000);
-    }catch(_){}
-  }
-
-  function flyPlaneYellow(){
-    try{
-      const d = document.createElement("div");
-      d.className = "cgdPlane";
-      d.innerHTML = `
-        <svg viewBox="0 0 240 120" width="380" height="190" aria-hidden="true">
-          <defs>
-            <linearGradient id="g1" x1="0" x2="1">
-              <stop offset="0" stop-color="#ffe66a"/>
-              <stop offset="1" stop-color="#ffbf00"/>
-            </linearGradient>
-            <linearGradient id="g2" x1="0" x2="1">
-              <stop offset="0" stop-color="rgba(0,0,0,.18)"/>
-              <stop offset="1" stop-color="rgba(0,0,0,0)"/>
-            </linearGradient>
-          </defs>
-          <path d="M10 62 L220 20 L168 102 L126 74 L10 62 Z"
-                fill="url(#g1)" stroke="rgba(0,0,0,.28)" stroke-width="3.2" />
-          <path d="M126 74 L220 20"
-                stroke="rgba(0,0,0,.25)" stroke-width="3.2" />
-          <path d="M10 62 L126 74 L168 102"
-                fill="none" stroke="url(#g2)" stroke-width="10" stroke-linecap="round"/>
-          <path d="M28 60 L190 30"
-                stroke="rgba(255,255,255,.35)" stroke-width="3" stroke-linecap="round" />
-        </svg>
-      `;
-      document.body.appendChild(d);
-      setTimeout(()=>{ try{ d.remove(); }catch(_){} }, 2200);
-    }catch(_){}
-  }
-
-  // ===== State
+  // =========================
+  // State (somente RAM)
+  // =========================
   const state = {
     soundOn: true,
-    newLeadIds: new Set(),
-    firstNewLoad: false,
-    planeCooldownUntil: 0,
+    dark: false,
+
+    lastNewLeadId: null,
+    _newLeadFirstLoadDone: false,
+    _lastNewCount: null,
+    _lastLocalPickTs: 0,
+
     newLeadsAll: [],
-    userStats: {}, // id -> {d,m}
-    totals: {d:0,m:0}
+    newLeadsRender: [],
+    pendingCount: 0,
+
+    stats: { day:0, month:0 },
+
+    userStats: {}, // {id: { pulledToday, pulledMonth, lastTwo, list? }}
+
+    queue: { order:[], updatedAt:0, dealId:null, hiddenUsers:[] },
+    queueLocalTouchTs: 0,
+
+    lastServedUserName: "—",
+
+    // cache fotos usuários (RAM)
+    userPhoto: new Map(),         // id -> url (string)
+    userPhotoTs: new Map(),       // id -> ms
+    userPhotoPending: new Set(),  // id
   };
 
-  function setStatus(txt){
-    const el = $("#pillStatus");
-    if(el) el.textContent = txt;
-  }
-  function setPending(n){
-    $("#pillPending").textContent = `Pendentes: ${Math.max(0, Number(n||0))}`;
-  }
-  function renderTotals(){
-    $("#pillDay").textContent = `Leads do dia: ${state.totals.d||0}`;
-    $("#pillMonth").textContent = `Leads do mês: ${state.totals.m||0}`;
+  // =========================
+  // Fotos: robusto + rápido
+  // =========================
+  const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+  async function fetchUserPhotoOnce(userId){
+    const r = await bx("user.get", { ID: String(userId) }, { timeoutMs: 9000 });
+    const u = Array.isArray(r) ? r[0] : (r?.[0] || r);
+    const photo = (u && (u.PERSONAL_PHOTO || u.WORK_PHOTO)) ? String(u.PERSONAL_PHOTO || u.WORK_PHOTO) : "";
+    return photo || "";
   }
 
-  function leadBadges(it){
-    const out = [];
+  async function ensureUserPhoto(userId){
+    const id = String(userId);
+    const now = Date.now();
+
+    const ts = state.userPhotoTs.get(id) || 0;
+    if(state.userPhoto.has(id) && (now - ts) < 30*60*1000) return state.userPhoto.get(id);
+
+    if(state.userPhotoPending.has(id)) return state.userPhoto.get(id) || "";
+
+    state.userPhotoPending.add(id);
+
+    let photo = "";
+    try{
+      for(let i=0;i<3;i++){
+        try{
+          photo = await fetchUserPhotoOnce(id);
+          if(photo) break;
+        }catch(_){}
+        await sleep(180 + i*240);
+      }
+    } finally{
+      state.userPhotoPending.delete(id);
+    }
+
+    state.userPhoto.set(id, photo || "");
+    state.userPhotoTs.set(id, now);
+    return state.userPhoto.get(id) || "";
+  }
+
+  async function warmUserPhotos(){
+    const ids = CONFIG.USERS.map(u=>String(u.id));
+    const bosses = CONFIG.BOSSES.map(x=>String(x));
+    const all = Array.from(new Set(ids.concat(bosses)));
+
+    for(let i=0;i<all.length;i+=6){
+      const part = all.slice(i,i+6);
+      await Promise.all(part.map(id=>ensureUserPhoto(id)));
+      await sleep(120);
+    }
+  }
+
+  async function renderBossPics(){
+    const box = document.getElementById("bossPics");
+    if(!box) return;
+    box.innerHTML = "";
+    const ids = CONFIG.BOSSES.map(String);
+    ids.forEach(id=>{
+      const img = document.createElement("img");
+      img.className = "cgdBossPic";
+      img.alt = "Sócio";
+      img.loading = "lazy";
+      img.src = state.userPhoto.get(id) || BLANK_IMG;
+      img.onerror = ()=>{ img.src = BLANK_IMG; };
+      box.appendChild(img);
+    });
+
+    setTimeout(()=>{
+      ids.forEach((id, idx)=>{
+        const img = box.children[idx];
+        if(!img) return;
+        const url = state.userPhoto.get(id) || "";
+        if(url) img.src = url;
+      });
+    }, 600);
+  }
+
+  // =========================
+  // Mount
+  // =========================
+  function mount(){
+    let root = document.getElementById("cgd-leads-root");
+    if(!root){
+      root = document.createElement("div");
+      root.id = "cgd-leads-root";
+      document.body.prepend(root);
+    }
+
+    root.innerHTML = `
+      <div id="cgdApp">
+        <div class="cgdTop">
+          <div class="cgdTopLeft">
+            <img class="cgdLogo" src="${esc(CONFIG.LOGO_URL)}" alt="CGD" />
+            <div class="cgdTitle">PAINEL DE LEADS • CGD CORRETORA</div>
+          </div>
+
+          <div class="cgdTopRight">
+            <div class="cgdPill" id="pillPending">Pendentes: 0</div>
+            <div class="cgdPill" id="pillDay">Leads do dia: 0</div>
+            <div class="cgdPill" id="pillMonth">Leads do mês: 0</div>
+
+            <select class="cgdSelect" id="searchScope">
+              <option value="ALL">Busca geral</option>
+              ${CONFIG.USERS.map(u=>`<option value="${esc(u.id)}">Busca: ${esc(u.name)}</option>`).join("")}
+            </select>
+            <input class="cgdInput" id="searchBox" placeholder="Buscar lead por nome…" style="min-width:220px" />
+            <button class="cgdBtn" id="btnSearch">Buscar</button>
+
+            <button class="cgdBtn" id="btnGET">GET</button>
+            <button class="cgdBtn" id="btnVendas">VENDAS</button>
+
+            <button class="cgdBtn" id="btnRefresh">Atualizar</button>
+            <button class="cgdBtn" id="btnSound">Som: ON</button>
+            <button class="cgdBtn" id="btnDark">Modo: Claro</button>
+          </div>
+        </div>
+
+        <div class="cgdLayout">
+          <div class="cgdGrid">
+            <section class="cgdCol" id="colNew">
+              <div class="cgdColHead">
+                <div class="hTitle">NOVOS LEADS</div>
+                <div class="hActionsRow">
+                  <button class="cgdBtn" id="btnBatch">Transferir em lote</button>
+                  <button class="cgdBtn" id="btnRefreshNew">Atualizar</button>
+                </div>
+              </div>
+
+              <div class="cgdList" id="listNew">
+                <div class="cgdAlertBox" id="alertNew" style="display:none">
+                  <div class="txt">
+                    🚨 <b>NOVO LEAD</b>
+                    <small>Alarme sonoro enquanto existir lead em “NOVO LEAD”.</small>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                    <button class="cgdBtn" id="btnSilence">Silenciar</button>
+                    <button class="cgdBtn" id="btnSoundOn" style="display:none">Ligar som</button>
+                  </div>
+                </div>
+                <div style="opacity:.7;font-weight:900">Carregando…</div>
+              </div>
+            </section>
+
+            <section class="cgdCol" id="colWho">
+              <div class="cgdColHead">
+                <div class="hTitle">HISTÓRICO DE LEADS</div>
+                <div class="hActionsRow">
+                  <button class="cgdBtn" id="btnHideUsers">Ocultar usuárias</button>
+                  <button class="cgdBtn" id="btnRefreshWho">Atualizar</button>
+                </div>
+              </div>
+              <div class="cgdList cgdWhoGrid" id="listWho">
+                <div style="opacity:.7;font-weight:900">Carregando…</div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="cgdQueueSide" id="queueSide">
+            <div class="cgdQueueHead">
+              <div class="qt">FILA</div>
+              <button class="cgdBtn" id="btnQueueManage">Gerenciar</button>
+            </div>
+            <div class="cgdQueueBody" id="queueBody">
+              <div style="opacity:.7;font-weight:900">Carregando fila…</div>
+            </div>
+            <div style="padding:10px; border-top:1px solid var(--border); display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
+              <button class="cgdBtn" id="btnQueueWalk">ANDAR FILA</button>
+              <button class="cgdBtn" id="btnQueueReset">RESETAR</button>
+            </div>
+            <div style="padding:10px; border-top:1px solid var(--border); font-size:11px; font-weight:900; opacity:.7">
+              Última: <b id="lastServed">—</b> • <span id="statusLine">Atualizado: —</span>
+            </div>
+          </aside>
+        </div>
+
+        <div class="cgdBottom">
+          <div class="bLeft">
+            <div class="cgdBossPics" id="bossPics"></div>
+            <div class="cgdAddrWrap">
+              <div class="cgdAddrLabel">Endereço</div>
+              <div class="cgdAddr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+            </div>
+          </div>
+          <div class="bCenter">System created by GRUPO CGD</div>
+          <div class="bRight">
+            <div class="cgdCnpj">
+              <div class="blk">
+                <div><b>CGD CORRETORA</b></div>
+                <div>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+              </div>
+              <div class="blk">
+                <div><b>CGD BARRA</b></div>
+                <div>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // =========================
+  // Queue JSON via Pipeline 27 (multi-PC)
+  // =========================
+  async function ensureQueueDeal(){
+    const items = await bxListAll("crm.deal.list", {
+      filter: {
+        CATEGORY_ID: CONFIG.QUEUE.CATEGORY_ID,
+        STAGE_ID: CONFIG.QUEUE.STAGE_ID,
+        "%TITLE": CONFIG.QUEUE.TITLE_KEY
+      },
+      order: { ID:"DESC" },
+      select: ["ID","TITLE", CONFIG.QUEUE.UF_QUEUE_JSON, "DATE_MODIFY"]
+    }, 5);
+
+    if(items && items[0]) return items[0];
+
+    const id = await bx("crm.deal.add", {
+      fields: {
+        CATEGORY_ID: CONFIG.QUEUE.CATEGORY_ID,
+        STAGE_ID: CONFIG.QUEUE.STAGE_ID,
+        TITLE: `${CONFIG.QUEUE.TITLE_KEY} FILA ATENDIMENTO`,
+        [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify({ v:1, order:[], hiddenUsers:[], updatedAt: Date.now() })
+      }
+    });
+    return bx("crm.deal.get", { id: String(id) });
+  }
+
+  function parseQueue(json){
+    try{
+      const o = JSON.parse(json || "{}");
+      const order = Array.isArray(o.order) ? o.order.map(String) : [];
+      const hiddenUsers = Array.isArray(o.hiddenUsers) ? o.hiddenUsers.map(String) : [];
+      const updatedAt = +o.updatedAt || 0;
+      return { order, hiddenUsers, updatedAt };
+    }catch(_){
+      return { order:[], hiddenUsers:[], updatedAt:0 };
+    }
+  }
+
+  let queueBusy = false;
+  async function withQueueLock(fn){
+    for(let i=0; i<20 && queueBusy; i++) await sleep(60);
+    queueBusy = true;
+    try{ return await fn(); }
+    finally{ queueBusy = false; }
+  }
+
+  async function fetchQueue(){
+    return withQueueLock(async ()=>{
+      let lastErr = null;
+      for(let attempt=0; attempt<3; attempt++){
+        try{
+          const deal = await ensureQueueDeal();
+          const raw = deal && deal[CONFIG.QUEUE.UF_QUEUE_JSON];
+          return { dealId: String(deal.ID), ...parseQueue(raw) };
+        }catch(err){
+          lastErr = err;
+          await sleep(200 + attempt*350);
+        }
+      }
+      throw lastErr || new Error("Falha ao carregar fila");
+    });
+  }
+
+  async function saveQueue(dealId, payload){
+    return withQueueLock(async ()=>{
+      const next = {
+        v: 1,
+        order: Array.isArray(payload.order) ? payload.order.map(String) : [],
+        hiddenUsers: Array.isArray(payload.hiddenUsers) ? payload.hiddenUsers.map(String) : [],
+        updatedAt: Date.now()
+      };
+
+      let lastErr = null;
+      for(let attempt=0; attempt<3; attempt++){
+        try{
+          await bx("crm.deal.update", {
+            id: String(dealId),
+            fields: { [CONFIG.QUEUE.UF_QUEUE_JSON]: JSON.stringify(next) }
+          });
+          return;
+        }catch(err){
+          lastErr = err;
+          await sleep(220 + attempt*420);
+        }
+      }
+      throw lastErr || new Error("Falha ao salvar fila");
+    });
+  }
+
+  // =========================
+  // Render queue sidebar
+  // =========================
+  function setStatus(txt){
+    const el = $("#statusLine");
+    if(el) el.textContent = txt;
+  }
+  function setLastServed(name){
+    state.lastServedUserName = name || "—";
+    const el = $("#lastServed");
+    if(el) el.textContent = state.lastServedUserName;
+  }
+
+  function renderQueueSidebar(){
+    const body = $("#queueBody");
+    if(!body) return;
+    body.innerHTML = "";
+
+    const order = (state.queue.order || []).map(String);
+    if(order.length === 0){
+      const d = document.createElement("div");
+      d.style.opacity = ".75";
+      d.style.fontWeight = "900";
+      d.textContent = "Fila vazia. Clique em Gerenciar para adicionar usuárias.";
+      body.appendChild(d);
+      return;
+    }
+
+    order.forEach((id, idx)=>{
+      const u = CONFIG.USERS.find(x=> String(x.id)===String(id));
+      const row = document.createElement("div");
+      row.className = "cgdQueueRowItem";
+      row.innerHTML = `
+        <div style="display:flex; gap:10px; align-items:center">
+          <div class="ord">#${idx+1}</div>
+          <div class="nm">${esc(u ? u.name : ("USER "+id))}</div>
+        </div>
+        <div class="cgdQueueArrows">
+          <button class="cgdMiniBtn" data-q-up="${esc(id)}">↑</button>
+          <button class="cgdMiniBtn" data-q-down="${esc(id)}">↓</button>
+        </div>
+      `;
+      body.appendChild(row);
+    });
+  }
+
+  function moveQueueLocal(userId, dir){
+    const id = String(userId);
+    const arr = (state.queue.order || []).map(String);
+    const i = arr.indexOf(id);
+    if(i < 0) return arr;
+    if(dir==="up" && i>0){
+      const t = arr[i-1]; arr[i-1]=arr[i]; arr[i]=t;
+    }
+    if(dir==="down" && i < arr.length-1){
+      const t = arr[i+1]; arr[i+1]=arr[i]; arr[i]=t;
+    }
+    return arr;
+  }
+
+  async function persistQueueOrder(nextOrder){
+    const q = state.queue.dealId ? state.queue : await fetchQueue();
+    state.queueLocalTouchTs = Date.now();
+    state.queue = { ...state.queue, ...q, order: nextOrder.slice() };
+    renderQueueSidebar();
+    enqueueOp("saveQueueOrder", async ()=>{ await saveQueue(q.dealId, { order: nextOrder, hiddenUsers: q.hiddenUsers||[] }); });
+    flushOps();
+  }
+
+  // =========================
+  // LEADS: fetch / actions
+  // =========================
+  function countFilterBase(startISO, endISO, userIdOrNull){
+    const f = {
+      "STATUS_ID": CONFIG.COUNT_STATUS.slice(),
+      [">=" + CONFIG.UF_DATA_PEGAR]: startISO,
+      ["<=" + CONFIG.UF_DATA_PEGAR]: endISO
+    };
+    if(userIdOrNull) f["ASSIGNED_BY_ID"] = String(userIdOrNull);
+    return f;
+  }
+
+  async function fetchNewLeadsAll(){
+    const items = await bxListAll("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      order: { ID: "DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, CONFIG.LIMIT_BATCH_MAX);
+    return items || [];
+  }
+
+  async function fetchNewLeadsCount(){
+    const data = await bxRaw("crm.lead.list", {
+      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 14000 });
+    const total = Number(data && data.total);
+    if(Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
+
+  // ✅ Contagens rápidas (TOTAL + POR USER) via BATCH
+  async function refreshCountsFast(){
+    const { startISO: dayS, endISO: dayE } = dayRange();
+    const { startISO: monS, endISO: monE } = monthRange();
+
+    const cmd = {};
+    cmd["T_DAY"]  = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(dayS, dayE, null), select:["ID"], start:0, order:{ID:"DESC"} });
+    cmd["T_MON"]  = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(monS, monE, null), select:["ID"], start:0, order:{ID:"DESC"} });
+
+    // chunk: 12 users -> 24 cmds (OK)
+    CONFIG.USERS.forEach(u=>{
+      const id = String(u.id);
+      cmd["U"+id+"_DAY"] = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(dayS, dayE, u.id), select:["ID"], start:0, order:{ID:"DESC"} });
+      cmd["U"+id+"_MON"] = "crm.lead.list?" + qsFromObj({ filter: countFilterBase(monS, monE, u.id), select:["ID"], start:0, order:{ID:"DESC"} });
+    });
+
+    const r = await bxBatch(cmd, { timeoutMs: 22000 });
+
+    const totals = r?.result_total || {};
+    const rr = r?.result || {};
+
+    const getTotal = (k)=>{
+      const t = Number(totals && totals[k]);
+      if(Number.isFinite(t)) return t;
+      const arr = rr && Array.isArray(rr[k]) ? rr[k] : [];
+      return arr.length;
+    };
+
+    state.stats = { day: getTotal("T_DAY"), month: getTotal("T_MON") };
+    renderStats(state.stats);
+
+    CONFIG.USERS.forEach(u=>{
+      const id = String(u.id);
+      const d = getTotal("U"+id+"_DAY");
+      const m = getTotal("U"+id+"_MON");
+      state.userStats[u.id] = { ...(state.userStats[u.id]||{}), pulledToday: d, pulledMonth: m };
+    });
+  }
+
+  function leadDisplayName(it){
+    const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
+    if(nm) return nm;
+    const t = String(it.TITLE||"").trim();
+    if(t && !/^Lead\s*#\d+$/i.test(t)) return t;
+    if(t) return t;
+    return `Lead #${it.ID}`;
+  }
+
+  function pickUF(it, key){
+    try{
+      return it && Object.prototype.hasOwnProperty.call(it, key) ? it[key] : (it ? it[key] : "");
+    }catch(_){ return ""; }
+  }
+
+  function bestPhone(it){
+    const uf = pickUF(it, CONFIG.UF_TELEFONE);
+    if(uf) return String(uf);
+    const p = it && it.PHONE;
+    if(Array.isArray(p) && p[0] && p[0].VALUE) return String(p[0].VALUE);
+    return "";
+  }
+
+  function operStyle(operRaw){
+    const op = String(operRaw||"").toUpperCase();
+    if(op.includes("LEVE")) return { bg:"#f5a23a", fg:"#111" };
+    if(op.includes("PREVENT")) return { bg:"#0b1f3a", fg:"#fff" }; // ✅ PREVENT azul escuro
+    if(op.includes("MEDSENIOR")) return { bg:"#63c454", fg:"#111" };
+    if(op.includes("AMIL")) return { bg:"#7db7ff", fg:"#111" };
+    if(op.includes("UNIMED")) return { bg:"#2f6f4f", fg:"#fff" };
+    if(op.includes("ALICE")) return { bg:"#ff7bb8", fg:"#111" };
+    return { bg:"rgba(255,255,255,.9)", fg:"rgba(18,26,40,.92)" };
+  }
+
+  function leadBadgesRich(it){
+    const b = [];
     const oper = pickUF(it, CONFIG.UF_OPERADORA);
     const idade = pickUF(it, CONFIG.UF_IDADE);
     const bairro= pickUF(it, CONFIG.UF_BAIRRO);
     const fonte = pickUF(it, CONFIG.UF_FONTE);
     const dtuf  = pickUF(it, CONFIG.UF_DT_LEAD);
-    const tel = bestPhone(it);
     const dt = dtuf ? fmtDateBRFromISO(dtuf) : "";
+    const tel = bestPhone(it);
 
-    if(oper) out.push(["OPERADORA", oper]);
-    if(idade) out.push(["IDADE", idade]);
-    if(tel) out.push(["TELEFONE", tel]);
-    if(bairro) out.push(["BAIRRO", bairro]);
-    if(fonte) out.push(["FONTE", fonte]);
-    if(dt) out.push(["DATA", dt]);
-    return out.slice(0,6);
+    if(oper)  b.push(["OPERADORA", oper]);
+    if(idade) b.push(["IDADE", idade]);
+    if(tel)   b.push(["TELEFONE", tel]);
+    if(bairro)b.push(["BAIRRO", bairro]);
+    if(fonte) b.push(["FONTE", fonte]);
+    if(dt)    b.push(["DATA", dt]);
+
+    if(b.length < 2){
+      if(it.SOURCE_ID) b.push(["FONTE", it.SOURCE_ID]);
+      if(it.DATE_CREATE) b.push(["CRIADO", String(it.DATE_CREATE).replace("T"," ").slice(0,16)]);
+    }
+    return b.slice(0, 6);
   }
 
-  function renderNewLeads(){
+  async function leadUpdate(id, fields){
+    return bx("crm.lead.update", { id: String(id), fields });
+  }
+  async function leadDelete(id){
+    return bx("crm.lead.delete", { id: String(id) });
+  }
+
+  async function actionPickLead(leadId, userId, rotateQueue){
+    state._lastLocalPickTs = Date.now(); // ✅ evita avião por remoção local
+
+    // UI otimista
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+    renderPendingCount(state.pendingCount - 1);
+
+    enqueueOp("pickLead", async ()=>{
+      await leadUpdate(leadId, {
+        ASSIGNED_BY_ID: String(userId),
+        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+        [CONFIG.UF_DATA_PEGAR]: new Date().toISOString() // ✅ grava Data PEGAR
+      });
+    });
+
+    if(rotateQueue){
+      enqueueOp("rotateQueueOnPick", async ()=>{
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const order = (q.order||[]).map(String);
+        const uid = String(userId);
+        const i = order.indexOf(uid);
+        if(i >= 0){
+          order.splice(i,1);
+          order.push(uid);
+          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+          state.queueLocalTouchTs = Date.now();
+          state.queue = { ...state.queue, ...q, order };
+        }
+      });
+    }
+
+    flushOps();
+  }
+
+  async function actionDiscardLead(leadId){
+    state._lastLocalPickTs = Date.now();
+
+    state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
+    state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+    renderNewLeads(state.newLeadsRender);
+    renderPendingCount(state.pendingCount - 1);
+
+    enqueueOp("discardLead", async ()=>{
+      await leadUpdate(leadId, { STATUS_ID: CONFIG.LEAD_STATUS.PERDIDO });
+    });
+    flushOps();
+  }
+
+  async function actionMoveLead(leadId, statusId){
+    enqueueOp("moveLead", async ()=>{
+      const fields = { STATUS_ID: statusId };
+      if(statusId === CONFIG.LEAD_STATUS.QUALIFICADO){
+        const lead = await bx("crm.lead.get", { id: String(leadId) });
+        const t = String(lead?.TITLE||"").trim();
+        if(!t.startsWith(CONFIG.HOT_EMOJI)){
+          fields.TITLE = `${CONFIG.HOT_EMOJI} ${t}`.trim();
+        }
+      }
+      await leadUpdate(leadId, fields);
+    });
+    flushOps();
+  }
+
+  async function actionTransferLead(leadId, toUserId){
+    enqueueOp("transferLead", async ()=>{
+      await leadUpdate(leadId, { ASSIGNED_BY_ID: String(toUserId) });
+    });
+    flushOps();
+  }
+
+  async function actionSetPrazo(leadId, iso){
+    enqueueOp("setPrazo", async ()=>{
+      await leadUpdate(leadId, { [CONFIG.UF_PRAZO]: iso });
+    });
+    flushOps();
+  }
+
+  async function createFollowUpDeal(userId, lead, iso){
+    const stage = CONFIG.FOLLOWUP_DEALS.STAGE_BY_USER[String(userId)];
+    const title = `FOLLOW-UP • ${leadDisplayName(lead)} • Lead #${lead.ID}`;
+    enqueueOp("createDealFollowUp", async ()=>{
+      await bx("crm.deal.add", {
+        fields: {
+          CATEGORY_ID: CONFIG.FOLLOWUP_DEALS.CATEGORY_ID,
+          STAGE_ID: stage || "C17:NEW",
+          ASSIGNED_BY_ID: String(userId),
+          TITLE: title,
+          COMMENTS: `Gerado pelo Painel de Leads • Referência: Lead #${lead.ID}`,
+          [CONFIG.UF_PRAZO]: iso || undefined
+        }
+      });
+    });
+    flushOps();
+  }
+
+  // =========================
+  // Render
+  // =========================
+  function renderPendingCount(n){
+    state.pendingCount = Math.max(0, Number(n||0));
+    const el = $("#pillPending");
+    if(el) el.textContent = `Pendentes: ${state.pendingCount}`;
+  }
+
+  function renderNewLeads(items){
     const list = $("#listNew");
     if(!list) return;
 
@@ -689,28 +1599,32 @@ body{ padding-bottom: 110px !important; }
     list.innerHTML = "";
     if(alert) list.appendChild(alert);
 
-    const has = state.newLeadsAll.length > 0;
+    const has = (items||[]).length > 0;
     if(alert){
       alert.style.display = has ? "flex" : "none";
       alert.classList.toggle("hot", has);
     }
 
+    const btnSoundOn = $("#btnSoundOn");
+    if(btnSoundOn) btnSoundOn.style.display = state.soundOn ? "none" : "inline-block";
+
     if(!has){
-      const d = document.createElement("div");
-      d.style.opacity = ".75";
-      d.style.fontWeight = "900";
-      d.textContent = "Nenhum lead em NOVO LEAD.";
-      list.appendChild(d);
+      const empty = document.createElement("div");
+      empty.style.opacity = ".75";
+      empty.style.fontWeight = "900";
+      empty.textContent = "Nenhum lead para mostrar.";
+      list.appendChild(empty);
       return;
     }
 
-    state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER).forEach(it=>{
+    (items||[]).forEach(it=>{
       const id = String(it.ID||"");
-      const nm = leadDisplayName(it);
-      const badges = leadBadges(it).map(([k,v])=>{
-        if(k==="OPERADORA"){
+      const title = leadDisplayName(it);
+
+      const badges = leadBadgesRich(it).map(([k,v])=>{
+        if(k === "OPERADORA"){
           const st = operStyle(v);
-          return `<span class="cgdBadge" style="border:0;background:${esc(st.bg)};color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>`;
+          return `<span class="cgdBadge oper" style="background:${esc(st.bg)}; color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>`;
         }
         return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
       }).join("");
@@ -718,14 +1632,39 @@ body{ padding-bottom: 110px !important; }
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
-        <div class="cgdRow">
-          <div class="cgdLeadName">${esc(nm)}</div>
-          <div class="cgdBadge">${esc(stageName(it.STATUS_ID))}</div>
+        <div class="cgdCardRow">
+          <div class="cgdLeadName">${esc(title)}</div>
         </div>
         <div class="cgdBadges">${badges}</div>
+        <div class="cgdActions">
+          <button class="cgdMiniBtn danger" data-discard="${esc(id)}">DESCARTAR</button>
+          <button class="cgdMiniBtn primary" data-grab="${esc(id)}">PEGAR</button>
+        </div>
       `;
       list.appendChild(card);
     });
+  }
+
+  function renderStats(stats){
+    $("#pillDay").textContent = `Leads do dia: ${stats.day||0}`;
+    $("#pillMonth").textContent = `Leads do mês: ${stats.month||0}`;
+  }
+
+  function computeUserOrder(){
+    const users = CONFIG.USERS.slice();
+    const hiddenSet = new Set((state.queue.hiddenUsers||[]).map(String));
+    const visible = users.filter(u => !hiddenSet.has(String(u.id)));
+
+    function lastTs(u){
+      const h = state.userStats[u.id];
+      const d = h?.lastTwo?.[0]?.DATE_MODIFY;
+      if(!d) return 0;
+      const t = Date.parse(String(d));
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    visible.sort((a,b)=> lastTs(b)-lastTs(a));
+    return visible;
   }
 
   function renderWho(){
@@ -733,66 +1672,542 @@ body{ padding-bottom: 110px !important; }
     if(!list) return;
     list.innerHTML = "";
 
-    CONFIG.USERS.forEach(u=>{
-      const st = state.userStats[String(u.id)] || { d:0, m:0 };
+    const ordered = computeUserOrder();
+    ordered.forEach(u=>{
+      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[] };
+      const l1 = us.lastTwo[0];
+      const l2 = us.lastTwo[1];
+
+      const last1 = l1 ? `Último: ${leadDisplayName(l1)}` : "Último: —";
+      const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
+
+      const imgUrl = state.userPhoto.get(String(u.id)) || BLANK_IMG;
+
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.innerHTML = `
         <div class="cgdUserLine">
-          <img class="cgdUserPic" src="${BLANK_IMG}" alt="${esc(u.name)}" />
+          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
           <div style="width:100%">
-            <div class="cgdRow">
+            <div class="cgdCardRow">
               <div style="font-weight:950">${esc(u.name)}</div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
-                <span class="cgdBadge">dia: ${esc(st.d||0)}</span>
-                <span class="cgdBadge">mês: ${esc(st.m||0)}</span>
-                <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">ABRIR</button>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+                <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
+                <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
+                <button class="cgdMiniBtn" data-open-user="${esc(u.id)}">Abrir</button>
               </div>
             </div>
-            <div style="margin-top:8px; font-weight:900; opacity:.75">—</div>
+            <div style="margin-top:8px; font-size:12px; font-weight:900; opacity:.85">${esc(last1)}</div>
+            <div style="margin-top:4px; font-size:12px; font-weight:900; opacity:.75">${esc(last2)}</div>
           </div>
         </div>
       `;
       list.appendChild(card);
     });
-  }
 
-  // ===== ABRIR (lista leve)
-  async function modalUserOpen(userId){
-    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
-    if(!u) return;
-
-    openModal(`ABRIR • ${u.name}`, `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
-    let list;
-    try{
-      list = await bxListAll("crm.lead.list", {
-        filter: { "ASSIGNED_BY_ID": String(u.id) },
-        order: { DATE_MODIFY: "DESC" },
-        select: ["ID","TITLE","NAME","SECOND_NAME","LAST_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY","DATE_CREATE","PHONE","UF_*"]
-      }, CONFIG.LIMIT_USER_OPEN);
-    }catch(_){
-      closeModal();
-      return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    if(ordered.length===0){
+      const empty = document.createElement("div");
+      empty.style.opacity=".75";
+      empty.style.fontWeight="900";
+      empty.textContent="Nenhuma usuária para mostrar (todas ocultas).";
+      list.appendChild(empty);
     }
 
+    setTimeout(async ()=>{
+      const imgs = $$("img[data-user-pic]");
+      const ids = imgs.map(img=>String(img.getAttribute("data-user-pic")));
+      await Promise.all(ids.map(id=>ensureUserPhoto(id)));
+      imgs.forEach(img=>{
+        const id = String(img.getAttribute("data-user-pic"));
+        const url = state.userPhoto.get(id) || "";
+        if(url && img.src !== url) img.src = url;
+      });
+    }, 500);
+  }
+
+  // =========================
+  // Histórico rápido: lastTwo em batch por chunk (e contagens separadas via refreshCountsFast)
+  // =========================
+  async function refreshUsersFast(){
+    try{
+      // 1) contagens rápidas (total + user) em batch único
+      await refreshCountsFast();
+
+      // 2) lastTwo por user (mais leve) em chunks com batch
+      const users = CONFIG.USERS.slice();
+      for(let i=0;i<users.length;i+=4){
+        const part = users.slice(i,i+4);
+        const cmd = {};
+        part.forEach(u=>{
+          const id = String(u.id);
+          cmd["LT_"+id] = "crm.lead.list?" + qsFromObj({
+            filter: { "ASSIGNED_BY_ID": id, "STATUS_ID": [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO, CONFIG.LEAD_STATUS.ATENDIDO] },
+            order: { DATE_MODIFY: "DESC" },
+            select: ["ID","TITLE","NAME","LAST_NAME","SECOND_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_MODIFY"],
+            start: 0
+          });
+        });
+
+        const r = await bxBatch(cmd, { timeoutMs: 20000 });
+        const rr = r?.result || {};
+        part.forEach(u=>{
+          const id = String(u.id);
+          const list = Array.isArray(rr["LT_"+id]) ? rr["LT_"+id] : [];
+          state.userStats[u.id] = {
+            ...(state.userStats[u.id]||{}),
+            lastTwo: (list||[]).slice(0,2)
+          };
+        });
+
+        renderWho();
+        await sleep(120);
+      }
+    }catch(err){
+      console.warn("user stats failed", err);
+    }
+  }
+
+  // =========================
+  // Modals
+  // =========================
+  async function modalHideUsers(){
+    openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
+    let q;
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("OCULTAR USUÁRIAS", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    const hiddenSet = new Set((q.hiddenUsers||[]).map(String));
+
     const body = `
-      <div style="font-weight:950;margin-bottom:10px">Lista leve (sem ações) • ${esc(list.length)} itens</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <input class="cgdInput" id="muSearch" placeholder="Filtrar..." style="min-width:260px" />
-        <select class="cgdSelect" id="muStage">
-          <option value="ALL">Todas as etapas</option>
-          ${["NEW","IN_PROCESS","UC_JT9G60","UC_0NFA3H","JUNK","CONVERTED"].map(st=>`<option value="${esc(st)}">${esc(stageName(st))}</option>`).join("")}
-        </select>
+      <div style="font-weight:950;margin-bottom:10px">Ocultar/mostrar cards de usuárias (sincroniza em todos os PCs)</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="huNone">Mostrar todas</button>
+        <button class="cgdBtn" id="huApply">Aplicar</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead><tr><th>Oculta</th><th>Usuária</th></tr></thead>
+        <tbody>
+          ${CONFIG.USERS.map(u=>{
+            const checked = hiddenSet.has(String(u.id)) ? "checked" : "";
+            return `<tr>
+              <td style="width:90px"><input type="checkbox" data-hu-user="${esc(u.id)}" ${checked} /></td>
+              <td><b>${esc(u.name)}</b></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    `;
+
+    openModal("OCULTAR USUÁRIAS", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+
+    $("#huNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-hu-user]').forEach(ch=> ch.checked = false);
+    });
+
+    $("#huApply")?.addEventListener("click", async ()=>{
+      const btn = $("#huApply");
+      try{
+        btn.disabled = true;
+        const hidden = $$('input[type=checkbox][data-hu-user]')
+          .filter(ch=> ch.checked)
+          .map(ch=> String(ch.getAttribute("data-hu-user")));
+
+        await saveQueue(q.dealId, { order: q.order||[], hiddenUsers: hidden });
+
+        const fresh = await fetchQueue();
+        state.queue = { ...state.queue, ...fresh };
+        renderQueueSidebar();
+        renderWho();
+        setStatus(`Atualizado: ${nowBRTime()}`);
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalQueueManage(){
+    openModal("FILA • GERENCIAR", `<div style="font-weight:900;opacity:.75">Carregando…</div>`);
+    let q;
+    try{
+      q = await fetchQueue();
+    }catch(_){
+      closeModal();
+      return openModal("FILA • GERENCIAR", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    state.queue = { ...state.queue, ...q };
+
+    const current = (q.order || []).map(String);
+    const currentSet = new Set(current);
+
+    const rows = CONFIG.USERS.map(u=>{
+      const checked = currentSet.has(String(u.id)) ? "checked" : "";
+      return `<tr data-u="${esc(u.id)}">
+        <td style="width:90px"><input type="checkbox" data-q-user="${esc(u.id)}" ${checked} /></td>
+        <td><b>${esc(u.name)}</b></td>
+      </tr>`;
+    }).join("");
+
+    const body = `
+      <div style="font-weight:950; margin-bottom:10px">Adicionar / retirar usuárias da fila</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="qAll">Selecionar todas</button>
+        <button class="cgdBtn" id="qNone">Limpar</button>
+        <button class="cgdBtn" id="qApply">Aplicar alterações</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead><tr><th>Na fila</th><th>Usuária</th></tr></thead>
+        <tbody id="qTbody">${rows}</tbody>
+      </table>
+    `;
+
+    openModal("FILA • GERENCIAR", body, `<button class="cgdBtn" data-close-modal>Fechar</button>`);
+
+    const tbody = $("#qTbody");
+    const getChecked = ()=> $$('input[type=checkbox][data-q-user]', tbody)
+      .filter(ch=>ch.checked)
+      .map(ch=> String(ch.getAttribute("data-q-user")));
+
+    $("#qAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = true);
+    });
+    $("#qNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-q-user]', tbody).forEach(ch => ch.checked = false);
+    });
+
+    $("#qApply")?.addEventListener("click", async ()=>{
+      const btn = $("#qApply");
+      try{
+        btn.disabled = true;
+
+        const checked = getChecked();
+        const keep = current.filter(id=> checked.includes(id));
+        const add = checked.filter(id=> !keep.includes(id));
+        const next = keep.concat(add);
+
+        await saveQueue(q.dealId, { order: next, hiddenUsers: q.hiddenUsers||[] });
+        const fresh = await fetchQueue();
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...fresh };
+        renderQueueSidebar();
+        setStatus(`Atualizado: ${nowBRTime()}`);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalPickLead(leadId){
+    const uops = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">PEGAR lead</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <button class="cgdBtn" id="pickFirst">PRIMEIRA DA FILA</button>
+      </div>
+
+      <div style="height:1px;background:rgba(30,40,70,.10);margin:10px 0"></div>
+
+      <div style="font-weight:950;margin-bottom:8px">Ou selecionar usuária:</div>
+      <div class="cgdRow">
+        <select class="cgdSelect" id="pickUser">${uops}</select>
+        <button class="cgdBtn" id="pickGo">Confirmar</button>
+      </div>
+      <div style="font-size:11px;font-weight:900;opacity:.75;margin-top:10px">
+        Ao confirmar: muda responsável e envia para <b>EM ATENDIMENTO</b>. A usuária vai para o final da fila.
+      </div>
+    `;
+    openModal("PEGAR LEAD", body, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
+
+    $("#pickFirst")?.addEventListener("click", async ()=>{
+      const btn = $("#pickFirst");
+      try{
+        btn.disabled = true;
+
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const order = (q.order||[]).map(String);
+        if(order.length === 0){
+          alert("Fila vazia. Clique em FILA > Gerenciar para adicionar usuárias.");
+          return;
+        }
+
+        const firstId = order.shift();
+        order.push(firstId);
+
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: order.slice() };
+        renderQueueSidebar();
+
+        const nm = userNameById(firstId);
+        setLastServed(nm);
+        setStatus(`Próxima: ${nm} • ${nowBRTime()}`);
+
+        enqueueOp("saveQueueRotate", async ()=>{
+          await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] });
+        });
+
+        await actionPickLead(leadId, firstId, false);
+        flushOps();
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+
+    $("#pickGo")?.addEventListener("click", async ()=>{
+      const btn = $("#pickGo");
+      try{
+        btn.disabled = true;
+        const uid = $("#pickUser").value;
+        await actionPickLead(leadId, uid, true);
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function modalBatchTransfer(){
+    openModal("TRANSFERIR EM LOTE", `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+      <div style="opacity:.75;font-weight:900">Carregando leads pendentes…</div>
+    `);
+
+    let all;
+    try{
+      all = state.newLeadsAll && state.newLeadsAll.length ? state.newLeadsAll.slice() : await fetchNewLeadsAll();
+    }catch(_){
+      closeModal();
+      return openModal("TRANSFERIR EM LOTE", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+
+    const opsUser = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+
+    function uniq(arr){
+      const s = new Set(arr.filter(Boolean).map(String));
+      return Array.from(s).sort((a,b)=> String(a).localeCompare(String(b)));
+    }
+
+    const operadoras = uniq(all.map(it=> pickUF(it, CONFIG.UF_OPERADORA)));
+    const opsOper = [`<option value="ALL">Todas</option>`].concat(
+      operadoras.map(o=> `<option value="${esc(o)}">${esc(o)}</option>`)
+    ).join("");
+
+    const body = `
+      <div style="font-weight:950;margin-bottom:10px">Transferir em lote</div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <label style="font-weight:950">Operadora:</label>
+        <select class="cgdSelect" id="btOper">${opsOper}</select>
+
+        <label style="font-weight:950">Data do Lead:</label>
+        <input class="cgdInput" type="date" id="btDate" />
+
+        <label style="font-weight:950">Transferir para:</label>
+        <select class="cgdSelect" id="btUser">${opsUser}</select>
+
+        <button class="cgdBtn" id="btApply">Aplicar filtro</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Leads listados: <b id="btCount">0</b></div>
+        <div class="cgdBadge">Pendentes total: <b>${esc(state.pendingCount||all.length)}</b></div>
       </div>
 
       <table class="cgdTable">
         <thead>
           <tr>
-            <th style="width:90px">ID</th>
+            <th style="width:80px">Sel.</th>
             <th>Lead</th>
-            <th style="width:190px">Etapa</th>
-            <th style="width:320px">Info</th>
-            <th style="width:170px">Atualizado</th>
+            <th style="width:280px">Info</th>
+          </tr>
+        </thead>
+        <tbody id="btTbody"></tbody>
+      </table>
+    `;
+
+    openModal("TRANSFERIR EM LOTE", body, `
+      <button class="cgdBtn" data-close-modal>Cancelar</button>
+      <button class="cgdBtn" id="btDo">Transferir selecionados</button>
+    `);
+
+    const tbody = $("#btTbody");
+    const countEl = $("#btCount");
+
+    function matchDate(it, yyyy_mm_dd){
+      if(!yyyy_mm_dd) return true;
+      const dtuf = pickUF(it, CONFIG.UF_DT_LEAD);
+      const t = Date.parse(String(dtuf||""));
+      if(!Number.isFinite(t)) return false;
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const da= String(d.getDate()).padStart(2,"0");
+      return `${y}-${m}-${da}` === yyyy_mm_dd;
+    }
+
+    function filtered(){
+      const op = $("#btOper").value;
+      const date = $("#btDate").value;
+      return all.filter(it=>{
+        const oper = String(pickUF(it, CONFIG.UF_OPERADORA)||"");
+        if(op!=="ALL" && oper!==op) return false;
+        if(!matchDate(it, date)) return false;
+        return true;
+      });
+    }
+
+    function draw(list){
+      countEl.textContent = String(list.length);
+      tbody.innerHTML = list.length ? list.map(it=>{
+        const info = leadBadgesRich(it);
+        const infoHtml = info.map(([k,v])=> `<div style="font-weight:900;opacity:.85">${esc(k)}: ${esc(v)}</div>`).join("");
+        return `
+          <tr>
+            <td><input type="checkbox" data-bt-id="${esc(it.ID)}" checked /></td>
+            <td>
+              <b>${esc(leadDisplayName(it))}</b>
+              <div style="opacity:.7;font-weight:900;font-size:11px">STATUS: ${esc(stageName(it.STATUS_ID))}</div>
+            </td>
+            <td>${infoHtml}</td>
+          </tr>
+        `;
+      }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
+    }
+
+    draw(filtered());
+    $("#btApply")?.addEventListener("click", ()=> draw(filtered()));
+
+    $("#btDo")?.addEventListener("click", async ()=>{
+      const btn = $("#btDo");
+      const toId = $("#btUser").value;
+      const ids = $$("input[type=checkbox][data-bt-id]", tbody)
+        .filter(x=>x.checked)
+        .map(x=> x.getAttribute("data-bt-id"));
+
+      if(ids.length === 0) return alert("Selecione pelo menos 1 lead.");
+      try{
+        btn.disabled = true;
+
+        state._lastLocalPickTs = Date.now();
+        ids.forEach(id=>{
+          state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(id));
+        });
+        state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+        renderNewLeads(state.newLeadsRender);
+
+        for(const id of ids){
+          await actionPickLead(id, toId, true);
+          await sleep(60);
+        }
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ABRIR (mais leve visualmente, mas mantém ferramentas)
+  async function modalUserOpen(userId){
+    const u = CONFIG.USERS.find(x=> String(x.id)===String(userId));
+    if(!u) return;
+
+    openModal(`ABRIR • ${u.name}`, `
+      <div style="font-weight:950;margin-bottom:10px">Carregando leads…</div>
+      <div style="opacity:.75;font-weight:900">Isso pode levar alguns segundos dependendo da conexão.</div>
+    `);
+
+    // deixa modal mais largo (somente aqui)
+    try{ document.querySelector(".cgdModal")?.classList.add("cgdModalWide"); }catch(_){}
+
+    let list = null;
+    // ✅ 2 tentativas para reduzir erro intermitente
+    for(let attempt=0; attempt<2; attempt++){
+      try{
+        list = await bxListAll("crm.lead.list", {
+          filter: { "ASSIGNED_BY_ID": String(u.id) },
+          order: { DATE_MODIFY: "DESC" },
+          select: CONFIG.LEAD_SELECT
+        }, CONFIG.LIMIT_USER_LAST);
+        break;
+      }catch(err){
+        if(attempt===0){ await sleep(380); continue; }
+        closeModal();
+        return openModal(`ABRIR • ${u.name}`, `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      }
+    }
+
+    // stats já estão no state (refreshUsersFast), mas garante preenchimento
+    const pulledToday = Number(state.userStats[u.id]?.pulledToday||0);
+    const pulledMonth = Number(state.userStats[u.id]?.pulledMonth||0);
+
+    state.userStats[u.id] = {
+      ...(state.userStats[u.id]||{}),
+      pulledToday, pulledMonth,
+      list: list || []
+    };
+    renderWho();
+
+    const body = `
+      <div class="cgdRow" style="justify-content:space-between; margin-bottom:10px">
+        <div style="font-weight:950">LEADS DA USUÁRIA • buscar / mover / follow-up</div>
+        <button class="cgdBtn" id="muRefresh">Atualizar</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:10px">
+        <div class="cgdBadge">Puxados (dia): <b>${esc(pulledToday)}</b></div>
+        <div class="cgdBadge">Puxados (mês): <b>${esc(pulledMonth)}</b></div>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" id="muSearch" placeholder="Filtrar na lista (rápido)..." style="min-width:280px" />
+        <select class="cgdSelect" id="muStage">
+          <option value="ALL">Todas as etapas</option>
+          ${Object.values(CONFIG.LEAD_STATUS).map(st=>`<option value="${esc(st)}">${esc(stageName(st))}</option>`).join("")}
+        </select>
+        <button class="cgdBtn" id="muAll">Marcar todos</button>
+        <button class="cgdBtn" id="muNone">Desmarcar</button>
+      </div>
+
+      <div class="cgdRow" style="margin-bottom:12px">
+        <input class="cgdInput" type="datetime-local" id="muBulkDate" />
+        <button class="cgdBtn" id="muBulkPrazo">FOLLOW-UP em lote</button>
+
+        <select class="cgdSelect" id="muMoveTo">
+          <option value="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Mover p/ QUALIFICADO (🔥)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.JUNK_SYS)}">Mover p/ DESCARTADO (sistema)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.CONVERTED_SYS)}">Mover p/ CONVERTIDO (sistema)</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Mover p/ ATENDIDO</option>
+          <option value="${esc(CONFIG.LEAD_STATUS.EM_ATENDIMENTO)}">Mover p/ EM ATENDIMENTO</option>
+        </select>
+        <button class="cgdBtn" id="muBulkMove">Mover em lote</button>
+      </div>
+
+      <table class="cgdTable">
+        <thead>
+          <tr>
+            <th style="width:70px">Sel.</th>
+            <th>Lead / Informações</th>
+            <th style="width:520px">Ações</th>
           </tr>
         </thead>
         <tbody id="muTbody"></tbody>
@@ -800,208 +2215,636 @@ body{ padding-bottom: 110px !important; }
     `;
 
     openModal(`ABRIR • ${u.name}`, body);
+    try{ document.querySelector(".cgdModal")?.classList.add("cgdModalWide"); }catch(_){}
 
     const tbody = $("#muTbody");
     const search = $("#muSearch");
     const stageSel = $("#muStage");
 
-    function infoHtml(it){
-      const info = leadBadges(it);
-      return info.map(([k,v])=>{
-        if(k==="OPERADORA"){
-          const st = operStyle(v);
-          return `<span class="cgdBadge" style="border:0;background:${esc(st.bg)};color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>`;
-        }
-        return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
-      }).join(" ");
-    }
-
-    function filtered(){
+    function listFiltered(){
       const q = (search.value||"").trim().toLowerCase();
       const st = (stageSel.value||"ALL");
       return (list||[]).filter(it=>{
-        const nm = leadDisplayName(it).toLowerCase();
-        if(q && !nm.includes(q)) return false;
+        const title = leadDisplayName(it).toLowerCase();
+        const rawT = String(it.TITLE||"").toLowerCase();
+        if(q && !(title.includes(q) || rawT.includes(q))) return false;
         if(st!=="ALL" && String(it.STATUS_ID)!==String(st)) return false;
         return true;
       });
     }
 
+    function infoLines(it){
+      const pairs = leadBadgesRich(it);
+      return pairs.map(([k,v])=>{
+        if(k==="OPERADORA"){
+          const st = operStyle(v);
+          return `<span class="cgdBadge oper" style="background:${esc(st.bg)}; color:${esc(st.fg)}">${esc(k)}: ${esc(v)}</span>`;
+        }
+        return `<span class="cgdBadge">${esc(k)}: ${esc(v)}</span>`;
+      }).join(" ");
+    }
+
     function renderRows(){
-      const rows = filtered();
-      tbody.innerHTML = rows.length ? rows.map(it=>{
-        const dm = it.DATE_MODIFY ? String(it.DATE_MODIFY).replace("T"," ").slice(0,19) : "—";
+      const lst = listFiltered();
+      tbody.innerHTML = lst.length ? lst.map(it=>{
+        const id = String(it.ID);
+        const name = leadDisplayName(it);
+        const st = String(it.STATUS_ID||"—");
+        const hot = String(it.TITLE||"").trim().startsWith(CONFIG.HOT_EMOJI) ? (CONFIG.HOT_EMOJI+" ") : "";
         return `<tr>
-          <td><b>${esc(it.ID)}</b></td>
-          <td><b>${esc(leadDisplayName(it))}</b></td>
-          <td>${esc(stageName(it.STATUS_ID))}</td>
-          <td>${infoHtml(it) || "—"}</td>
-          <td>${esc(dm)}</td>
+          <td><input type="checkbox" data-sel="${esc(id)}" /></td>
+          <td>
+            <div style="font-weight:950">${esc(hot + name)}</div>
+            <div style="opacity:.75;font-weight:900;font-size:11px">STAGE: ${esc(stageName(st))}</div>
+            <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">${infoLines(it)}</div>
+          </td>
+          <td>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start">
+              <div style="min-width: 240px">
+                <div style="font-weight:950; margin-bottom:6px">FOLLOW-UP</div>
+                <div class="cgdRow">
+                  <input class="cgdInput" type="datetime-local" data-prazo="${esc(id)}" />
+                  <button class="cgdBtn" data-save-prazo="${esc(id)}">Salvar</button>
+                  <button class="cgdBtn" data-save-fupdeal="${esc(id)}">Salvar + Criar CARD</button>
+                </div>
+              </div>
+              <div style="flex:1; min-width: 240px">
+                <div style="font-weight:950; margin-bottom:6px">Mover</div>
+                <div class="cgdRow">
+                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.QUALIFICADO)}">Qualificado</button>
+                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.ATENDIDO)}">Atendido</button>
+                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.JUNK_SYS)}">Descartado</button>
+                  <button class="cgdBtn" data-move="${esc(id)}" data-to="${esc(CONFIG.LEAD_STATUS.CONVERTED_SYS)}">Convertido</button>
+                </div>
+              </div>
+            </div>
+          </td>
         </tr>`;
-      }).join("") : `<tr><td colspan="5" style="opacity:.75;font-weight:900">Nenhum item.</td></tr>`;
+      }).join("") : `<tr><td colspan="3" style="opacity:.75;font-weight:900">Nenhum lead para mostrar.</td></tr>`;
     }
 
     renderRows();
-    search.addEventListener("input", renderRows);
-    stageSel.addEventListener("change", renderRows);
+
+    $("#muRefresh")?.addEventListener("click", async ()=>{
+      closeModal();
+      await modalUserOpen(userId);
+    });
+
+    search?.addEventListener("input", renderRows);
+    stageSel?.addEventListener("change", renderRows);
+
+    $("#muAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = true);
+    });
+    $("#muNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel]').forEach(ch=> ch.checked = false);
+    });
+
+    function selectedIds(){
+      return $$('input[type=checkbox][data-sel]')
+        .filter(ch=> ch.checked)
+        .map(ch=> ch.getAttribute("data-sel"));
+    }
+
+    $("#muBulkPrazo")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const iso = isoFromLocalInput($("#muBulkDate")?.value || "");
+      if(!iso) return alert("Preencha a data/hora do FOLLOW-UP.");
+      for(const id of ids){
+        await actionSetPrazo(id, iso);
+        await sleep(60);
+      }
+      alert("FOLLOW-UP em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+    });
+
+    $("#muBulkMove")?.addEventListener("click", async ()=>{
+      const ids = selectedIds();
+      if(!ids.length) return alert("Selecione pelo menos 1 lead.");
+      const to = $("#muMoveTo")?.value;
+      for(const id of ids){
+        await actionMoveLead(id, to);
+        await sleep(60);
+      }
+      alert("Movimento em lote enfileirado ✅ (sincroniza quando a conexão normalizar)");
+    });
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const sp = e.target.closest("[data-save-prazo]");
+      const sd = e.target.closest("[data-save-fupdeal]");
+      const mv = e.target.closest("[data-move]");
+
+      if(sp){
+        const leadId = sp.getAttribute("data-save-prazo");
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(!iso) return alert("Preencha data/hora corretamente.");
+        await actionSetPrazo(leadId, iso);
+        alert("FOLLOW-UP salvo ✅ (sincroniza quando normalizar a conexão)");
+      }
+
+      if(sd){
+        const leadId = sd.getAttribute("data-save-fupdeal");
+        const lead = (list||[]).find(x=> String(x.ID)===String(leadId));
+        const inp = $(`input[data-prazo="${CSS.escape(String(leadId))}"]`, $(".cgdModalBody"));
+        const iso = isoFromLocalInput(inp?.value || "");
+        if(iso) await actionSetPrazo(leadId, iso);
+        if(lead) await createFollowUpDeal(u.id, lead, iso || "");
+        alert("FOLLOW-UP + CARD enfileirados ✅ (sincroniza quando normalizar a conexão)");
+      }
+
+      if(mv){
+        const leadId = mv.getAttribute("data-move");
+        const to = mv.getAttribute("data-to");
+        await actionMoveLead(leadId, to);
+        alert("Movimento enfileirado ✅ (sincroniza quando normalizar a conexão)");
+      }
+    });
   }
 
-  // ===== Contagens rápidas via batch (total e por user)
-  function buildListCmd(filterObj){
-    const qs = [];
-    const add = (k,v)=> qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
-
-    Object.keys(filterObj||{}).forEach(k=>{
-      const v = filterObj[k];
-      if(Array.isArray(v)) v.forEach(x=> add(`filter[${k}][]`, x));
-      else add(`filter[${k}]`, v);
+  // =========================
+  // Busca global no Bitrix por nome
+  // + RESPONSÁVEL + TRANSFERIR + EXCLUIR (1 ou vários)
+  // =========================
+  function uniqById(list){
+    const m = new Map();
+    (list||[]).forEach(x=>{
+      const id = String(x.ID||"");
+      if(id) m.set(id, x);
     });
-
-    add("select[]","ID");
-    add("start",0);
-    add("order[ID]","DESC");
-    return `crm.lead.list?${qs.join("&")}`;
+    return Array.from(m.values());
   }
 
-  function safeTotal(res, key){
-    const t = Number(res?.result_total?.[key]);
-    if(Number.isFinite(t)) return t;
-    const arr = res?.result_result?.[key];
-    return Array.isArray(arr) ? arr.length : 0;
+  async function searchLeadsByName(term, assignedIdOrAll){
+    const t = String(term||"").trim();
+    if(!t) return [];
+
+    const baseFilter = {};
+    if(assignedIdOrAll && assignedIdOrAll !== "ALL"){
+      baseFilter["ASSIGNED_BY_ID"] = String(assignedIdOrAll);
+    }
+
+    const a = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%TITLE": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const b = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%NAME": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const c = await bxListAll("crm.lead.list", {
+      filter: { ...baseFilter, "%LAST_NAME": t },
+      order: { DATE_MODIFY:"DESC" },
+      select: CONFIG.LEAD_SELECT
+    }, 60).catch(()=>[]);
+
+    const merged = uniqById([...(a||[]), ...(b||[]), ...(c||[])]);
+    return merged.slice(0, 60);
   }
 
-  async function refreshCounts(){
-    const { startISO: dS, endISO: dE } = dayRangeBitrix();
-    const { startISO: mS, endISO: mE } = monthRangeBitrix();
-
-    const cmd = {};
-    cmd.tDay = buildListCmd({
-      "STATUS_ID": CONFIG.COUNT_STATUS,
-      [">=" + CONFIG.UF_DATA_PEGAR]: dS,
-      ["<"  + CONFIG.UF_DATA_PEGAR]: dE
+  function modalTransferOne(leadId){
+    const opts = CONFIG.USERS.map(u=> `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+    openModal("TRANSFERIR LEAD", `
+      <div style="font-weight:950;margin-bottom:10px">Transferir Lead #${esc(leadId)}</div>
+      <div class="cgdRow">
+        <select class="cgdSelect" id="trUser">${opts}</select>
+        <button class="cgdBtn" id="trGo">Transferir</button>
+      </div>
+      <div style="opacity:.75;font-weight:900;margin-top:10px">Apenas muda o RESPONSÁVEL (não altera etapa).</div>
+    `, `<button class="cgdBtn" data-close-modal>Cancelar</button>`);
+    $("#trGo")?.addEventListener("click", async ()=>{
+      const btn = $("#trGo");
+      try{
+        btn.disabled = true;
+        const uid = $("#trUser").value;
+        await actionTransferLead(leadId, uid);
+        alert("Transferência enfileirada ✅");
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }finally{
+        btn.disabled = false;
+      }
     });
-    cmd.tMon = buildListCmd({
-      "STATUS_ID": CONFIG.COUNT_STATUS,
-      [">=" + CONFIG.UF_DATA_PEGAR]: mS,
-      ["<"  + CONFIG.UF_DATA_PEGAR]: mE
-    });
-
-    CONFIG.USERS.forEach(u=>{
-      const id = String(u.id);
-      cmd["d"+id] = buildListCmd({
-        "ASSIGNED_BY_ID": id,
-        "STATUS_ID": CONFIG.COUNT_STATUS,
-        [">=" + CONFIG.UF_DATA_PEGAR]: dS,
-        ["<"  + CONFIG.UF_DATA_PEGAR]: dE
-      });
-      cmd["m"+id] = buildListCmd({
-        "ASSIGNED_BY_ID": id,
-        "STATUS_ID": CONFIG.COUNT_STATUS,
-        [">=" + CONFIG.UF_DATA_PEGAR]: mS,
-        ["<"  + CONFIG.UF_DATA_PEGAR]: mE
-      });
-    });
-
-    const res = await bxBatch(cmd, 19000);
-
-    state.totals.d = safeTotal(res, "tDay");
-    state.totals.m = safeTotal(res, "tMon");
-    renderTotals();
-
-    CONFIG.USERS.forEach(u=>{
-      const id = String(u.id);
-      state.userStats[id] = {
-        d: safeTotal(res, "d"+id),
-        m: safeTotal(res, "m"+id)
-      };
-    });
-
-    renderWho();
   }
 
+  function modalSearchResults(term, results){
+    const rows = (results||[]).map(it=>{
+      const name = leadDisplayName(it);
+      const st = stageName(it.STATUS_ID);
+      const respId = String(it.ASSIGNED_BY_ID||"");
+      const respNm = userNameById(respId);
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+      return `
+        <tr>
+          <td style="width:70px"><input type="checkbox" data-sel-del="${esc(it.ID)}" /></td>
+          <td>
+            <b>${esc(name)}</b>
+            <div style="opacity:.7;font-weight:900;font-size:11px">STAGE: ${esc(st)} • RESPONSÁVEL: <b>${esc(respNm)}</b></div>
+          </td>
+          <td style="width:360px">
+            <div style="font-weight:900;opacity:.9">OPERADORA: ${esc(oper||"—")}</div>
+            <div style="font-weight:900;opacity:.9">IDADE: ${esc(idade||"—")}</div>
+            <div style="font-weight:900;opacity:.9">TELEFONE: ${esc(tel||"—")}</div>
+            <div style="font-weight:900;opacity:.9">BAIRRO: ${esc(bairro||"—")}</div>
+            <div style="font-weight:900;opacity:.9">FONTE: ${esc(fonte||"—")}</div>
+            <div style="font-weight:900;opacity:.9">DATA/HORA: ${esc(dt||"—")}</div>
+          </td>
+          <td style="width:240px;text-align:right">
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+              <button class="cgdBtn" data-open-lead="${esc(it.ID)}">Abrir</button>
+              <button class="cgdBtn" data-transfer-lead="${esc(it.ID)}">Transferir</button>
+              <button class="cgdBtn" data-del-one="${esc(it.ID)}">Excluir</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    openModal(`BUSCA • ${term}`, `
+      <div class="cgdRow" style="justify-content:space-between;margin-bottom:10px">
+        <div style="font-weight:950">Resultados: <b>${esc((results||[]).length)}</b></div>
+        <div class="cgdRow">
+          <button class="cgdBtn" id="sdAll">Marcar todos</button>
+          <button class="cgdBtn" id="sdNone">Desmarcar</button>
+          <button class="cgdBtn" id="sdDel">Excluir selecionados</button>
+        </div>
+      </div>
+      <table class="cgdTable">
+        <thead><tr><th>Sel.</th><th>Lead</th><th>Dados</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" style="opacity:.75;font-weight:900">Nenhum lead encontrado.</td></tr>`}</tbody>
+      </table>
+    `);
+
+    $("#sdAll")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel-del]').forEach(ch=> ch.checked = true);
+    });
+    $("#sdNone")?.addEventListener("click", ()=>{
+      $$('input[type=checkbox][data-sel-del]').forEach(ch=> ch.checked = false);
+    });
+
+    $("#sdDel")?.addEventListener("click", async ()=>{
+      const ids = $$('input[type=checkbox][data-sel-del]').filter(ch=>ch.checked).map(ch=>ch.getAttribute("data-sel-del"));
+      if(!ids.length) return alert("Selecione pelo menos 1 lead para excluir.");
+      if(!confirm(`Excluir ${ids.length} lead(s)?`)) return;
+      try{
+        for(const id of ids){
+          enqueueOp("deleteLead", async ()=>{ await leadDelete(id); });
+          await sleep(40);
+        }
+        flushOps();
+        alert("Exclusões enfileiradas ✅");
+        closeModal();
+      }catch(err){
+        console.error(err);
+      }
+    });
+
+    $(".cgdModalBody")?.addEventListener("click", async (e)=>{
+      const b = e.target.closest("[data-open-lead]");
+      const t = e.target.closest("[data-transfer-lead]");
+      const d = e.target.closest("[data-del-one]");
+
+      if(b){
+        const id = b.getAttribute("data-open-lead");
+        await modalLeadDetails(id);
+      }
+      if(t){
+        const id = t.getAttribute("data-transfer-lead");
+        modalTransferOne(id);
+      }
+      if(d){
+        const id = d.getAttribute("data-del-one");
+        if(!confirm(`Excluir Lead #${id}?`)) return;
+        enqueueOp("deleteLeadOne", async ()=>{ await leadDelete(id); });
+        flushOps();
+        alert("Exclusão enfileirada ✅");
+      }
+    });
+  }
+
+  async function modalLeadDetails(leadId){
+    openModal("LEAD", `<div style="opacity:.75;font-weight:900">Carregando…</div>`);
+    try{
+      const it = await bx("crm.lead.get", { id: String(leadId) });
+      const name = leadDisplayName(it);
+      const st = stageName(it.STATUS_ID);
+
+      const respId = String(it.ASSIGNED_BY_ID||"");
+      const respNm = userNameById(respId);
+
+      const oper = pickUF(it, CONFIG.UF_OPERADORA);
+      const idade = pickUF(it, CONFIG.UF_IDADE);
+      const tel = bestPhone(it);
+      const bairro = pickUF(it, CONFIG.UF_BAIRRO);
+      const fonte = pickUF(it, CONFIG.UF_FONTE);
+      const dt = fmtDateBRFromISO(pickUF(it, CONFIG.UF_DT_LEAD));
+
+      openModal(`LEAD • ${name}`, `
+        <div class="cgdRow" style="margin-bottom:10px">
+          <div class="cgdBadge">STAGE: <b>${esc(st)}</b></div>
+          <div class="cgdBadge">RESPONSÁVEL: <b>${esc(respNm)}</b></div>
+          <div class="cgdBadge">ID: <b>${esc(it.ID)}</b></div>
+        </div>
+        <div style="font-weight:900;opacity:.9;line-height:1.4">
+          <div>OPERADORA: <b>${esc(oper||"—")}</b></div>
+          <div>IDADE: <b>${esc(idade||"—")}</b></div>
+          <div>TELEFONE: <b>${esc(tel||"—")}</b></div>
+          <div>BAIRRO: <b>${esc(bairro||"—")}</b></div>
+          <div>FONTE: <b>${esc(fonte||"—")}</b></div>
+          <div>DATA/HORA: <b>${esc(dt||"—")}</b></div>
+        </div>
+      `);
+    }catch(_){
+      closeModal();
+      openModal("LEAD", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+    }
+  }
+
+  // =========================
+  // Refresh orchestration
+  // =========================
   async function refreshNewLeads(){
-    const items = await bxListAll("crm.lead.list", {
-      filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO },
-      order: { ID:"DESC" },
-      select: ["ID","TITLE","NAME","SECOND_NAME","LAST_NAME","STATUS_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY","PHONE","UF_*"]
-    }, 600);
+    try{
+      const items = await fetchNewLeadsAll();
+      state.newLeadsAll = items || [];
+      state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
+      renderNewLeads(state.newLeadsRender);
 
-    const newIds = new Set((items||[]).map(x=>String(x.ID)));
-    let newArrival = false;
+      const newest = items && items[0] ? String(items[0].ID) : null;
+      const countNow = items ? items.length : 0;
 
-    if(!state.firstNewLoad){
-      state.firstNewLoad = true;
-      state.newLeadIds = newIds;
-    }else{
-      for(const id of newIds){ if(!state.newLeadIds.has(id)){ newArrival = true; break; } }
-      state.newLeadIds = newIds;
-    }
+      // primeira carga
+      if(!state._newLeadFirstLoadDone){
+        state._newLeadFirstLoadDone = true;
+        state.lastNewLeadId = newest;
+        state._lastNewCount = countNow;
+        return;
+      }
 
-    state.newLeadsAll = items || [];
-    setPending(state.newLeadsAll.length);
-    renderNewLeads();
+      // ✅ avião SOMENTE quando entra lead novo (não quando alguém pega/descarta)
+      const prevCount = Number(state._lastNewCount ?? countNow);
+      const localPickRecent = (Date.now() - (state._lastLocalPickTs||0)) < 6000;
 
-    if(newArrival && state.newLeadsAll.length && Date.now() > state.planeCooldownUntil){
-      state.planeCooldownUntil = Date.now() + 1800;
-      flyPlaneYellow();
-      if(state.soundOn) tripleBeep();
+      const grew = (countNow > prevCount);
+      const changedNewest = (newest && newest !== state.lastNewLeadId);
+
+      if((grew || (changedNewest && !localPickRecent && countNow >= prevCount))){
+        state.lastNewLeadId = newest;
+        flyPlaneYellow();
+        if(state.soundOn) tripleBeep();
+      }else{
+        state.lastNewLeadId = newest;
+      }
+
+      state._lastNewCount = countNow;
+    }catch(err){
+      console.warn("new leads fetch failed", err);
     }
   }
 
-  // ===== Events
+  async function refreshPendingCount(){
+    try{
+      const n = await fetchNewLeadsCount();
+      renderPendingCount(n);
+    }catch(err){
+      console.warn("pending count failed", err);
+    }
+  }
+
+  async function refreshStats(){
+    try{
+      await refreshCountsFast(); // ✅ usa batch + filtros corretos (UF_DATA_PEGAR + STATUS)
+    }catch(err){
+      console.warn("stats failed", err);
+    }
+  }
+
+  async function refreshQueue(){
+    try{
+      if(Date.now() - state.queueLocalTouchTs < 1400) return;
+      const q = await fetchQueue();
+      state.queue = { ...state.queue, ...q };
+      renderQueueSidebar();
+    }catch(err){
+      console.warn("queue failed", err);
+      renderQueueSidebar();
+    }
+  }
+
+  async function hardRefreshAll(){
+    setStatus(`Atualizando… (${nowBRTime()})`);
+    await Promise.allSettled([
+      refreshNewLeads(),
+      refreshPendingCount(),
+      refreshStats(),
+      refreshQueue()
+    ]);
+    await refreshUsersFast();
+    setStatus(`Atualizado: ${nowBRTime()}`);
+  }
+
+  // =========================
+  // Events / UI
+  // =========================
+  function updateSoundUI(){
+    $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
+    const so = $("#btnSoundOn");
+    if(so) so.style.display = state.soundOn ? "none" : "inline-block";
+  }
+
+  function applyDark(){
+    document.body.classList.toggle("cgdDark", !!state.dark);
+    const b = $("#btnDark");
+    if(b) b.textContent = `Modo: ${state.dark ? "Escuro" : "Claro"}`;
+  }
+
   function wire(){
-    $("#btnSound").addEventListener("click", ()=>{
+    $("#btnSound")?.addEventListener("click", ()=>{
       state.soundOn = !state.soundOn;
-      $("#btnSound").textContent = `Som: ${state.soundOn ? "ON" : "OFF"}`;
+      updateSoundUI();
     });
-    $("#btnSilence").addEventListener("click", ()=>{
+
+    $("#btnSilence")?.addEventListener("click", ()=>{
       state.soundOn = false;
-      $("#btnSound").textContent = `Som: OFF`;
+      updateSoundUI();
     });
 
-    $("#btnRefresh").addEventListener("click", async ()=>{
-      setStatus(`Atualizando… ${nowBR()}`);
-      await Promise.allSettled([refreshNewLeads(), refreshCounts()]);
-      setStatus(`Atualizado: ${nowBR()}`);
+    $("#btnSoundOn")?.addEventListener("click", ()=>{
+      state.soundOn = true;
+      updateSoundUI();
+      if((state.newLeadsAll||[]).length > 0) tripleBeep();
     });
 
-    $("#btnRefreshNew").addEventListener("click", async ()=>{
-      setStatus(`Atualizando novos… ${nowBR()}`);
-      await Promise.allSettled([refreshNewLeads()]);
-      setStatus(`Atualizado: ${nowBR()}`);
+    $("#btnDark")?.addEventListener("click", ()=>{
+      state.dark = !state.dark;
+      applyDark();
     });
 
-    $("#btnRefreshWho").addEventListener("click", async ()=>{
-      setStatus(`Atualizando contagens… ${nowBR()}`);
-      await Promise.allSettled([refreshCounts()]);
-      setStatus(`Atualizado: ${nowBR()}`);
+    $("#btnRefresh")?.addEventListener("click", hardRefreshAll);
+    $("#btnRefreshNew")?.addEventListener("click", refreshNewLeads);
+    $("#btnRefreshWho")?.addEventListener("click", refreshUsersFast);
+
+    $("#btnBatch")?.addEventListener("click", modalBatchTransfer);
+    $("#btnHideUsers")?.addEventListener("click", modalHideUsers);
+
+    $("#btnGET")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.GET, "_blank", "noopener");
+    });
+    $("#btnVendas")?.addEventListener("click", ()=>{
+      window.open(CONFIG.LINKS.VENDAS, "_blank", "noopener");
     });
 
+    // FILA
+    $("#btnQueueManage")?.addEventListener("click", modalQueueManage);
+
+    $("#queueBody")?.addEventListener("click", async (e)=>{
+      const up = e.target.closest("[data-q-up]");
+      const dn = e.target.closest("[data-q-down]");
+      if(!up && !dn) return;
+
+      try{
+        const id = up ? up.getAttribute("data-q-up") : dn.getAttribute("data-q-down");
+        const dir = up ? "up" : "down";
+        const next = moveQueueLocal(id, dir);
+
+        state.queueLocalTouchTs = Date.now();
+        state.queue.order = next.slice();
+        renderQueueSidebar();
+        setStatus(`Fila ajustada • ${nowBRTime()}`);
+
+        await persistQueueOrder(next);
+      }catch(err){
+        console.error(err);
+      }
+    });
+
+    $("#btnQueueWalk")?.addEventListener("click", async ()=>{
+      try{
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        const order = (q.order||[]).map(String);
+        if(order.length===0){
+          alert("Fila vazia. Clique em Gerenciar para adicionar usuárias.");
+          return;
+        }
+        const nextId = order.shift();
+        order.push(nextId);
+
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: order.slice() };
+        renderQueueSidebar();
+
+        const nm = userNameById(nextId);
+        setLastServed(nm);
+        setStatus(`Andou fila: ${nm} • ${nowBRTime()}`);
+
+        enqueueOp("queueWalk", async ()=>{ await saveQueue(q.dealId, { order, hiddenUsers: q.hiddenUsers||[] }); });
+        flushOps();
+      }catch(err){
+        console.error(err);
+      }
+    });
+
+    $("#btnQueueReset")?.addEventListener("click", async ()=>{
+      try{
+        const q = state.queue.dealId ? state.queue : await fetchQueue();
+        state.queueLocalTouchTs = Date.now();
+        state.queue = { ...state.queue, ...q, order: [] };
+        renderQueueSidebar();
+        enqueueOp("queueReset", async ()=>{ await saveQueue(q.dealId, { order: [], hiddenUsers: q.hiddenUsers||[] }); });
+        flushOps();
+      }catch(err){
+        console.error(err);
+      }
+    });
+
+    // Busca global
+    $("#btnSearch")?.addEventListener("click", async ()=>{
+      const term = ($("#searchBox").value||"").trim();
+      if(!term) return;
+      const scope = ($("#searchScope").value||"ALL");
+      openModal("BUSCA", `<div style="opacity:.75;font-weight:900">Buscando no Bitrix…</div>`);
+      try{
+        const res = await searchLeadsByName(term, scope);
+        modalSearchResults(term, res);
+      }catch(err){
+        console.error(err);
+        closeModal();
+        openModal("BUSCA", `<div style="font-weight:900;color:#a00">Sem conexão no momento. Tente novamente.</div>`);
+      }
+    });
+
+    $("#searchBox")?.addEventListener("keydown", (e)=>{
+      if(e.key==="Enter") $("#btnSearch")?.click();
+    });
+
+    // Delegação cards
     document.addEventListener("click", (e)=>{
+      const g = e.target.closest("[data-grab]");
+      const d = e.target.closest("[data-discard]");
       const ou = e.target.closest("[data-open-user]");
-      if(ou) modalUserOpen(ou.getAttribute("data-open-user"));
+
+      if(g){
+        const id = g.getAttribute("data-grab");
+        modalPickLead(id);
+      }
+      if(d){
+        const id = d.getAttribute("data-discard");
+        actionDiscardLead(id);
+      }
+      if(ou){
+        const uid = ou.getAttribute("data-open-user");
+        modalUserOpen(uid);
+      }
     });
   }
 
-  // ===== Start
+  // =========================
+  // Start
+  // =========================
   async function start(){
     if(!CONFIG.WEBHOOK){
-      console.error("CONFIG.WEBHOOK vazio");
+      const sentinel = document.getElementById("cgd-sentinel");
+      if(sentinel) sentinel.textContent = "⚠️ CONFIG.WEBHOOK vazio";
       return;
     }
+
     injectCSS();
     mount();
     wire();
+    updateSoundUI();
+    applyDark();
 
-    setStatus(`Atualizando… ${nowBR()}`);
-    renderWho(); // ✅ garante cards sempre
-    await Promise.allSettled([refreshNewLeads(), refreshCounts()]);
-    setStatus(`Atualizado: ${nowBR()}`);
+    // aquece fotos em background
+    warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
-    setInterval(()=>{ refreshNewLeads().catch(()=>{}); }, CONFIG.REFRESH_NEW_MS);
-    setInterval(()=>{ refreshCounts().catch(()=>{}); }, CONFIG.REFRESH_COUNT_MS);
+    await hardRefreshAll();
+    renderBossPics();
+
+    // refreshes
+    setInterval(refreshNewLeads, CONFIG.REFRESH_NEW_LEADS_MS);
+    setInterval(refreshPendingCount, Math.max(9000, CONFIG.REFRESH_NEW_LEADS_MS*2));
+    setInterval(refreshStats, CONFIG.REFRESH_STATS_MS);
+    setInterval(refreshQueue, CONFIG.REFRESH_QUEUE_MS);
+    setInterval(refreshUsersFast, CONFIG.REFRESH_WHO_MS);
+
+    // offline flush
+    setInterval(flushOps, 2500);
   }
 
-  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
-  else start();
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", start);
+  }else{
+    start();
+  }
+
 })();
