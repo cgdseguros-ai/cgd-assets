@@ -1,1340 +1,1160 @@
-(function(){
-  // ========= CONFIG =========
-  // ⚠️ Preencha seu webhook (com barra no final)
-  // Ex.: https://b24-xxxx.bitrix24.com.br/rest/1/SEU_TOKEN/
-  const WEBHOOK_BASE = "COLE_AQUI_SEU_WEBHOOK_COM_BARRA_NO_FINAL";
+(function () {
+  "use strict";
 
-  const PIPELINE_FIN = 27;   // financeiro
-  const PIPELINE_REM = 17;   // lembretes
-  const REMINDER_USER_ID = 813; // Manuela (coluna MANUELA)
+  var WORKER_BASE = "https://financeiro199702.cgdseguros.workers.dev";
+  var API_BASE = WORKER_BASE.replace(/\/$/, "") + "/api";
 
-  // Stage IDs (pipeline 27)
-  const STAGES = {
-    EXP_PAY: "C27:NEW",                 // DESPESA - A PAGAR
-    EXP_PAID: "C27:PREPARATION",        // DESPESA - PAGA
-    REV_REC: "C27:UC_EQAFD7",           // RECEITA - A RECEBER
-    REV_GOT: "C27:PREPAYMENT_INVOIC",   // RECEITA RECEBIDA
-    CANCELED: "C27:EXECUTING",          // CANCELADO
-    DONE: "C27:UC_LP2NSK",              // CONCLUÍDO (oculto default)
+  var CFG = {
+    DEAL_CATEGORY_ID: 27,
+    REMINDER_CATEGORY_ID: 17,
+    REMINDER_ASSIGNED_ID: 813,
+
+    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w",
+
+    FOOTER: {
+      addressTitle: "Endereço",
+      addressText: "Av Ayrton Senna, 2500, SS109, Barra da Tijuca",
+      credits: "System created by GRUPO CGD",
+      companies: [
+        { name: "CGD CORRETORA", meta: "CNPJ 01.654.471/0001-86 • SUSEP 202031791" },
+        { name: "CGD BARRA", meta: "CNPJ 53.013.848/0001-11 • SUSEP 242158650" }
+      ],
+      partnersUserIds: [1, 27, 15]
+    },
+
+    F: {
+      TIPO_FIN: "UF_CRM_1771208061",
+      COMPETENCIA: "UF_CRM_1771163661",
+      VALOR_PREV: "UF_CRM_1770769991",
+      VALOR_REAL: "UF_CRM_1770770017",
+      DATA_REAL: "UF_CRM_1770771170",
+      FAVORECIDO: "UF_CRM_1770775760",
+      OBS: "UF_CRM_691385BE7D33D",
+      CATEGORIA: "UF_CRM_1770770570",
+      DATA_PREV: "UF_CRM_1770769767",
+      STATUS_FIN: "UF_CRM_1770770088",
+      CONTA: "UF_CRM_1770770758",
+      CENTRO_CUSTO: "UF_CRM_1771801157"
+    },
+
+    STAGES: {
+      DESP_A_PAGAR: "C27:NEW",
+      DESP_PAGA: "C27:PREPARATION",
+      REC_A_RECEBER: "C27:UC_EQAFD7",
+      REC_RECEBIDA: "C27:PREPAYMENT_INVOIC",
+      CANCELADO: "C27:EXECUTING",
+      CONCLUIDO: "C27:UC_LP2NSK"
+    },
+
+    PAGE_SIZE: 300,
+    REL_PREFIX: "REL_P17:"
   };
 
-  // Stage (pipeline 17) - coluna MANUELA
-  const STAGE_REM_MANUELA = "C17:PREPARATION";
+  var root = document.getElementById("fin-root") || document.body;
 
-  // UF fields (deals)
-  const UF = {
-    TIPO: "UF_CRM_1771208061",
-    COMP: "UF_CRM_1771163661",
-    VAL_PREV: "UF_CRM_1770769991",
-    VAL_REAL: "UF_CRM_1770770017",
-    DATA_REAL: "UF_CRM_1770771170",
-    FAV: "UF_CRM_1770775760",
-    FORMA: "UF_CRM_1769351652",
-    OBS: "UF_CRM_691385BE7D33D",
-    CAT: "UF_CRM_1770770570",
-    DATA_PREV: "UF_CRM_1770769767",
-    STATUS: "UF_CRM_1770770088",
-    CONTA: "UF_CRM_1770770758",
-    CC: "UF_CRM_1771801157",
-  };
-
-  // UI constants
-  const LOGO_URL = "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w";
-
-  // Footer content
-  const FOOT = {
-    endereco: "Av Ayrton Senna, 2500, SS109, Barra da Tijuca",
-    center: "System created by GRUPO CGD",
-    rightA: "CGD CORRETORA",
-    rightA2: "CNPJ 01.654.471/0001-86 • SUSEP 202031791",
-    rightB: "CGD BARRA",
-    rightB2: "CNPJ 53.013.848/0001-11 • SUSEP 242158650",
-    users: [1,27,15],
-  };
-
-  // ========= HELPERS =========
-  const $ = (sel, root=document)=> root.querySelector(sel);
-  const $$ = (sel, root=document)=> Array.from(root.querySelectorAll(sel));
-  const esc = (s)=> String(s ?? "").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
-  const money = (n)=>{
-    const v = Number(String(n||"").replace(",", "."));
-    if (!isFinite(v)) return "";
-    return v.toLocaleString("pt-BR", { style:"currency", currency:"BRL" });
-  };
-  const toNum = (s)=>{
-    if (s==null) return null;
-    const t = String(s).trim();
-    if (!t) return null;
-    const v = Number(t.replace(/\./g,"").replace(",", "."));
-    return isFinite(v) ? v : null;
-  };
-  const ymd = (d)=>{
-    if(!d) return "";
-    // accepts yyyy-mm-dd already
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-    // accepts dd/mm/yyyy
-    const m = String(d).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if(m) return `${m[3]}-${m[2]}-${m[1]}`;
-    return "";
-  };
-  const fmtDMY = (iso)=>{
-    const m = String(iso||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if(!m) return "";
-    return `${m[3]}/${m[2]}/${m[1]}`;
-  };
-
-  function assertConfig(){
-    if(!WEBHOOK_BASE || WEBHOOK_BASE.includes("COLE_AQUI")){
-      throw new Error("Configure WEBHOOK_BASE no financeiro.js (com barra no final).");
-    }
+  function esc(s) {
+    s = String(s == null ? "" : s);
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
+  function parseJson(t) { try { return JSON.parse(t); } catch (_) { return null; } }
+  function el(q) { return root.querySelector(q); }
 
-  async function bx(method, params={}){
-    assertConfig();
-    const base = WEBHOOK_BASE.endsWith("/") ? WEBHOOK_BASE : (WEBHOOK_BASE + "/");
-    const url = base + method + ".json";
-    const r = await fetch(url, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(params || {})
-    });
-    const t = await r.text();
-    let j;
-    try{ j = JSON.parse(t); }catch(e){ throw new Error("Resposta não-JSON do Bitrix: " + t.slice(0,200)); }
-    if(!r.ok || j.error){
-      throw new Error((j.error_description || j.error || ("HTTP "+r.status)) + " @ " + method);
-    }
-    return j;
-  }
+  function apiCall(method, payload) {
+    var body = JSON.stringify(payload || {});
+    var headers = { "content-type": "application/json" };
 
-  function mount(){
-    const root = document.getElementById("fin-root") || document.body;
-    root.innerHTML = `
-      <div class="fin-shell">
-        <header class="fin-header">
-          <div class="left">
-            <img class="fin-logo" alt="CGD" src="${esc(LOGO_URL)}"/>
-            <div>
-              <div class="fin-title">Financeiro CGD</div>
-              <div class="fin-subtitle">PIPELINE 27 • Deals</div>
-            </div>
-          </div>
-
-          <div class="center">
-            <button class="fin-tab active" data-tab="geral">Visão Geral</button>
-            <button class="fin-tab" data-tab="despesas">A Pagar / Pagas</button>
-            <button class="fin-tab" data-tab="receitas">A Receber / Recebidas</button>
-            <button class="fin-tab" data-tab="lanc">Lançamentos</button>
-          </div>
-
-          <div class="right">
-            <div class="fin-search">
-              <span aria-hidden="true">🔎</span>
-              <input id="fin-q" placeholder="Buscar por favorecido, categoria, valor..." />
-            </div>
-            <button class="fin-btn" id="fin-new">NOVO</button>
-            <button class="fin-btn" id="fin-lote-exp">LOTE DESPESAS</button>
-            <button class="fin-btn" id="fin-lote-rev">LOTE RECEITAS</button>
-            <button class="fin-btn" id="fin-cards">CARTÕES</button>
-          </div>
-        </header>
-
-        <div class="fin-body">
-          <aside class="fin-sidebar">
-            <div class="fin-side-title">CENTROS DE CUSTO</div>
-            <div class="fin-side-list" id="fin-cc-list"></div>
-
-            <div style="height:12px"></div>
-
-            <div class="fin-side-title">AÇÕES</div>
-            <div class="fin-side-list">
-              <div class="fin-side-item" id="fin-transfer">
-                <span>Transferir entre Centros</span>
-                <span class="fin-side-meta">➜</span>
-              </div>
-              <div class="fin-side-item" id="fin-saldo">
-                <span>Saldo inicial / ajuste</span>
-                <span class="fin-side-meta">➜</span>
-              </div>
-              <div class="fin-side-item" id="fin-reserva">
-                <span>Fundo de Reserva</span>
-                <span class="fin-side-meta">➜</span>
-              </div>
-            </div>
-
-            <div class="fin-note" style="margin-top:10px; opacity:.9">
-              * Menu não mostra cartões (por pedido). Cartões ficam no botão “CARTÕES”.
-            </div>
-          </aside>
-
-          <main class="fin-main">
-            <section class="fin-panel">
-              <div class="fin-panel-inner">
-
-                <div class="fin-filters">
-                  <div class="fin-field">
-                    <label>Mês</label>
-                    <select id="fin-month"></select>
-                  </div>
-                  <div class="fin-field">
-                    <label>Categoria</label>
-                    <select id="fin-cat">
-                      <option value="">Todas</option>
-                    </select>
-                  </div>
-                  <div class="fin-field">
-                    <label>Status</label>
-                    <select id="fin-status">
-                      <option value="">Todos</option>
-                      <option value="open">Pendente</option>
-                      <option value="done">Pago/Recebido</option>
-                      <option value="canceled">Cancelado</option>
-                    </select>
-                  </div>
-
-                  <div class="fin-spacer"></div>
-
-                  <button class="fin-mini" id="fin-refresh">Atualizar</button>
-                </div>
-
-                <!-- CHECKBOXES -->
-                <div class="fin-checkblocks">
-                  <div class="fin-checkcard">
-                    <h3>DESPESAS</h3>
-                    <div id="fin-exp-list"></div>
-                    <div class="fin-muted" style="margin-top:8px">
-                      Marque para mover “A PAGAR → PAGA” (vai pedir data/valor).
-                    </div>
-                  </div>
-
-                  <div class="fin-checkcard">
-                    <h3>RECEITAS</h3>
-                    <div id="fin-rev-list"></div>
-                    <div class="fin-muted" style="margin-top:8px">
-                      Marque para mover “A RECEBER → RECEBIDA” (vai pedir data/valor).
-                    </div>
-                  </div>
-                </div>
-
-                <!-- GRÁFICOS (abaixo do checkbox) -->
-                <div class="fin-graphs">
-                  <div class="fin-card">
-                    <h3>Despesas por Categoria (mock visual)</h3>
-                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-                      <div class="fin-donut">
-                        <div class="fin-donut-center" id="fin-donut-center">—</div>
-                      </div>
-                      <div style="flex:1; min-width:240px;">
-                        <div class="fin-muted">* Neste momento é mock (visual). Depois eu ligo no real.</div>
-                        <div class="fin-muted" id="fin-donut-legend" style="margin-top:8px"></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="fin-card">
-                    <h3>Evolução (mock visual)</h3>
-                    <div class="fin-linechart" aria-label="Gráfico (mock)">
-                      <svg viewBox="0 0 600 200" preserveAspectRatio="none">
-                        <path class="a" d="M10,130 C120,90 180,110 240,70 C300,40 360,85 420,60 C480,45 540,50 590,30"/>
-                        <path class="b" d="M10,150 C120,130 180,140 240,120 C300,95 360,125 420,105 C480,110 540,105 590,95"/>
-                      </svg>
-                    </div>
-                    <div class="fin-muted" style="margin-top:8px">Receitas (verde) • Despesas (vermelho)</div>
-                  </div>
-                </div>
-
-                <!-- LISTAGEM -->
-                <div class="fin-tablewrap">
-                  <table class="fin-table">
-                    <thead>
-                      <tr>
-                        <th>Data</th>
-                        <th>Tipo</th>
-                        <th>Valor</th>
-                        <th>Centro de Custo</th>
-                        <th>Favorecido</th>
-                        <th>Categoria</th>
-                        <th>Status</th>
-                        <th style="text-align:right">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody id="fin-tbody"></tbody>
-                  </table>
-                </div>
-
-              </div>
-            </section>
-          </main>
-        </div>
-
-        <footer class="fin-footer">
-          <div class="fin-foot-inner">
-            <div class="fin-foot-left">
-              <div class="fin-avatars" id="fin-avatars"></div>
-              <div style="font-weight:900; font-size:12px; line-height:1.2">
-                <div style="opacity:.95">Endereço</div>
-                <div style="opacity:.85">${esc(FOOT.endereco)}</div>
-              </div>
-            </div>
-            <div class="fin-foot-center">${esc(FOOT.center)}</div>
-            <div class="fin-foot-right">
-              <div>
-                <div>${esc(FOOT.rightA)}</div>
-                <div class="muted">${esc(FOOT.rightA2)}</div>
-              </div>
-              <div>
-                <div>${esc(FOOT.rightB)}</div>
-                <div class="muted">${esc(FOOT.rightB2)}</div>
-              </div>
-            </div>
-          </div>
-        </footer>
-      </div>
-    `;
-  }
-
-  // ========= STATE =========
-  const S = {
-    fields: null,
-    ccOptions: [],       // {id, name}
-    catOptions: [],      // from deal fields
-    monthOptions: [],    // from competence list
-    selectedCC: "",      // centro de custo
-    tab: "geral",
-    deals: [],
-  };
-
-  function setSentinelHidden(){
-    const s = document.getElementById("fin-sentinel");
-    if(s) s.style.display = "none"; // pedido: ocultar “JS iniciou ✅”
-  }
-
-  function bindUI(){
-    // Tabs
-    $$(".fin-tab").forEach(b=>{
-      b.addEventListener("click", ()=>{
-        $$(".fin-tab").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active");
-        S.tab = b.dataset.tab || "geral";
-        renderTable();
-      });
-    });
-
-    $("#fin-refresh").addEventListener("click", ()=> refresh());
-
-    $("#fin-q").addEventListener("input", ()=> renderTable());
-    $("#fin-month").addEventListener("change", ()=> refresh());
-    $("#fin-cat").addEventListener("change", ()=> renderTable());
-    $("#fin-status").addEventListener("change", ()=> renderTable());
-
-    $("#fin-new").addEventListener("click", ()=> openNewModal());
-    $("#fin-lote-exp").addEventListener("click", ()=> openLoteModal("DESPESA"));
-    $("#fin-lote-rev").addEventListener("click", ()=> openLoteModal("RECEITA"));
-    $("#fin-cards").addEventListener("click", ()=> openCardsModal());
-
-    $("#fin-transfer").addEventListener("click", ()=> openTransferModal());
-    $("#fin-saldo").addEventListener("click", ()=> openSaldoModal());
-    $("#fin-reserva").addEventListener("click", ()=> openReservaModal());
-  }
-
-  // ========= LOAD METADATA =========
-  async function loadFields(){
-    // fields + lists
-    const j = await bx("crm.deal.fields", {});
-    S.fields = j.result || {};
-
-    // categorias (lista)
-    const cat = S.fields[UF.CAT];
-    if (cat && cat.items) {
-      S.catOptions = cat.items.map(i=>({ id:i.ID, name:i.VALUE })).filter(x=>x.name && x.name !== "__QUEUE__CGD__ FILA ATENDIMENTO");
+    function req(url) {
+      return fetch(url, { method: "POST", headers: headers, body: body })
+        .then(function (r) {
+          return r.text().then(function (txt) {
+            var j = parseJson(txt);
+            if (!r.ok) throw new Error((j && (j.error_description || j.error)) || txt || ("HTTP " + r.status));
+            if (j && j.error) throw new Error(j.error_description || j.error);
+            return { json: j || {}, mode: (url.indexOf("?method=") > -1 ? "query" : "path") };
+          });
+        });
     }
 
-    // centros de custo (lista)
-    const cc = S.fields[UF.CC];
-    if (cc && cc.items) {
-      S.ccOptions = cc.items.map(i=>({ id:i.ID, name:i.VALUE })).filter(x=>x.name && !x.name.includes("__QUEUE__"));
+    return req(API_BASE + "/" + method)
+      .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
+      .then(function (res) { S.apiMode = res.mode; return res.json; });
+  }
+
+  function nowBR() {
+    var dt = new Date();
+    var dd = String(dt.getDate()); if (dd.length < 2) dd = "0" + dd;
+    var mo = String(dt.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
+    var yy = dt.getFullYear();
+    var hh = String(dt.getHours()); if (hh.length < 2) hh = "0" + hh;
+    var mm = String(dt.getMinutes()); if (mm.length < 2) mm = "0" + mm;
+    return dd + "/" + mo + "/" + yy + " " + hh + ":" + mm;
+  }
+
+  function toISODate(d) {
+    var s = String(d == null ? "" : d).trim();
+    if (!s) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return m[3] + "-" + m[2] + "-" + m[1];
+    return s;
+  }
+
+  function parseMoneyBR(s) {
+    var t = String(s == null ? "" : s).trim();
+    if (!t) return 0;
+    t = t.replace(/[^\d,.-]/g, "");
+    t = t.replace(/\./g, "");
+    t = t.replace(",", ".");
+    var n = Number(t);
+    return isFinite(n) ? n : 0;
+  }
+
+  function moneyBR(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return "R$ 0,00";
+    var fixed = n.toFixed(2);
+    var parts = fixed.split(".");
+    var a = parts[0];
+    var b = parts[1] || "00";
+    a = a.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    return "R$ " + a + "," + b;
+  }
+
+  function addDaysISO(iso, days) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setDate(d.getDate() + days);
+    var y = d.getFullYear();
+    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
+    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
+    return y + "-" + mo + "-" + da;
+  }
+
+  function addMonthsISO(iso, months, forceDay) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var y = Number(m[1]), mo = Number(m[2]) - 1, da = Number(m[3]);
+    var d = new Date(y, mo, da);
+    d.setMonth(d.getMonth() + months);
+
+    if (forceDay != null) {
+      var fd = Math.max(1, Math.min(31, Number(forceDay) || 1));
+      var tryD = new Date(d.getFullYear(), d.getMonth(), fd);
+      if (tryD.getMonth() === d.getMonth()) d = tryD;
+      else d = new Date(d.getFullYear(), d.getMonth() + 1, 0); // último dia do mês
     }
 
-    // competencia (mês) (lista)
-    const comp = S.fields[UF.COMP];
-    if (comp && comp.items) {
-      S.monthOptions = comp.items.map(i=>({ id:i.ID, name:i.VALUE }));
-    } else {
-      // fallback: últimos 12 meses
-      const now = new Date();
-      const arr=[];
-      for(let k=0;k<12;k++){
-        const d = new Date(now.getFullYear(), now.getMonth()-k, 1);
-        const name = d.toLocaleDateString("pt-BR",{month:"long", year:"numeric"});
-        arr.push({ id: name, name });
+    var yy = d.getFullYear();
+    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
+    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
+    return yy + "-" + mm + "-" + dd;
+  }
+
+  function addYearsISO(iso, years, forceMonth, forceDay) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var y = Number(m[1]) + years;
+    var mo = (forceMonth != null) ? (Math.max(1, Math.min(12, Number(forceMonth)||1)) - 1) : (Number(m[2]) - 1);
+    var da = (forceDay != null) ? Math.max(1, Math.min(31, Number(forceDay)||1)) : Number(m[3]);
+
+    var d = new Date(y, mo, da);
+    if (d.getMonth() !== mo) d = new Date(y, mo + 1, 0); // último dia do mês se inválido
+    var yy = d.getFullYear();
+    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
+    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
+    return yy + "-" + mm + "-" + dd;
+  }
+
+  function toast(msg, type) {
+    type = type || "ok";
+    var host = el("#fin-toast-host");
+    if (!host) { alert(msg); return; }
+    var t = document.createElement("div");
+    t.className = "fin-toast fin-toast--" + type;
+    t.textContent = msg;
+    host.appendChild(t);
+    setTimeout(function () { t.classList.add("fin-toast--show"); }, 10);
+    setTimeout(function () {
+      t.classList.remove("fin-toast--show");
+      setTimeout(function () { if (t && t.parentNode) t.parentNode.removeChild(t); }, 200);
+    }, 3200);
+  }
+
+  function modal(html) {
+    var wrap = document.createElement("div");
+    wrap.className = "fin-modal-wrap";
+    wrap.innerHTML =
+      '<div class="fin-modal-backdrop" data-close="1"></div>' +
+      '<div class="fin-modal">' + html + "</div>";
+    document.body.appendChild(wrap);
+
+    wrap.addEventListener("click", function (e) {
+      var t = e.target;
+      if (t && t.getAttribute && t.getAttribute("data-close") === "1") {
+        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
       }
-      S.monthOptions = arr;
-    }
-  }
-
-  function fillSelects(){
-    // month
-    const mSel = $("#fin-month");
-    mSel.innerHTML = S.monthOptions.map(o=>`<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("");
-    // cat
-    const cSel = $("#fin-cat");
-    cSel.innerHTML = `<option value="">Todas</option>` + S.catOptions.map(o=>`<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("");
-
-    // sidebar cc list
-    const ccList = $("#fin-cc-list");
-    ccList.innerHTML = `
-      <div class="fin-side-item ${S.selectedCC===""?"active":""}" data-cc="">
-        <span>TODOS</span><span class="fin-side-meta">•</span>
-      </div>
-      ${S.ccOptions.map(o=>`
-        <div class="fin-side-item ${S.selectedCC===String(o.id)?"active":""}" data-cc="${esc(o.id)}">
-          <span>${esc(o.name)}</span><span class="fin-side-meta">➜</span>
-        </div>
-      `).join("")}
-    `;
-    $$(".fin-side-item[data-cc]", ccList).forEach(el=>{
-      el.addEventListener("click", ()=>{
-        S.selectedCC = el.dataset.cc || "";
-        fillSelects();
-        renderTable();
-        renderChecklists();
-      });
     });
-  }
 
-  // ========= DEALS =========
-  function stageIsAllowed(stageId){
-    // bloquear QUEUE_JSON e outros stages fora da lista permitida
-    return [STAGES.EXP_PAY, STAGES.EXP_PAID, STAGES.REV_REC, STAGES.REV_GOT, STAGES.CANCELED, STAGES.DONE].includes(stageId);
-  }
-
-  async function loadDeals(){
-    // lista básica (poderíamos paginar depois)
-    const month = $("#fin-month").value || "";
-    const filter = {
-      "CATEGORY_ID": PIPELINE_FIN,
-      // ocultar CONCLUÍDO por padrão: não filtra aqui; filtra na renderização (para manter no filtro)
+    return {
+      node: wrap,
+      close: function () { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); },
+      q: function (s) { return wrap.querySelector(s); }
     };
+  }
 
-    // competência: você perguntou. Aqui:
-    // - Para recorrentes, você pode deixar competência vazia.
-    // - Para a visão mensal, a gente filtra se existir competência.
-    // Vou filtrar pelo mês SOMENTE se o usuário escolheu um mês.
-    if (month) filter[UF.COMP] = month;
+  function setLoading(v) {
+    S.loading = !!v;
+    var badge = el("#fin-loading");
+    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
+    var btns = root.querySelectorAll("[data-busylock='1']");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = S.loading;
+  }
 
-    const j = await bx("crm.deal.list", {
-      order: { "ID":"DESC" },
-      filter,
-      select: ["ID","TITLE","STAGE_ID",UF.TIPO,UF.VAL_PREV,UF.VAL_REAL,UF.DATA_PREV,UF.DATA_REAL,UF.FAV,UF.CAT,UF.CC,UF.OBS,UF.CONTA,UF.COMP]
+  var S = {
+    enums: {},
+    stages: [],
+    deals: [],
+    filtered: [],
+    partners: [],
+    lastSyncAt: null,
+    loading: false,
+    apiMode: null,
+
+    filters: {
+      q: "",
+      centro: "",
+      competencia: "",
+      tipo: "",
+      conta: "",
+      statusFin: "",
+      stageId: "",
+      showPayables: true,
+      showReceivables: true
+    },
+
+    reserve: { balance: 0 }
+  };
+
+  function loadReserve() {
+    try {
+      var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
+      S.reserve.balance = raw ? Number(raw) : 0;
+      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
+    } catch (_) { S.reserve.balance = 0; }
+  }
+  function saveReserve() { try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {} }
+
+  function buildOptions(items, includeBlank, blankText) {
+    if (includeBlank !== false) includeBlank = true;
+    blankText = blankText || "— Todos —";
+    var arr = Array.isArray(items) ? items : [];
+    var out = [];
+    if (includeBlank) out.push('<option value="">' + esc(blankText) + "</option>");
+    for (var i = 0; i < arr.length; i++) out.push('<option value="' + esc(arr[i].ID) + '">' + esc(arr[i].VALUE) + "</option>");
+    return out.join("");
+  }
+
+  function enumName(fieldId, enumId) {
+    if (!enumId) return "";
+    var list = (S.enums && S.enums[fieldId]) ? S.enums[fieldId] : [];
+    for (var i = 0; i < list.length; i++) if (String(list[i].ID) === String(enumId)) return list[i].VALUE;
+    return String(enumId);
+  }
+
+  function stageName(stageId) {
+    for (var i = 0; i < S.stages.length; i++) if (String(S.stages[i].STATUS_ID) === String(stageId)) return S.stages[i].NAME;
+    return String(stageId || "");
+  }
+
+  function isBadFav(fav) {
+    var s = String(fav || "").trim().toUpperCase();
+    if (!s) return false;
+    if (s.indexOf("__QUEUE__") === 0) return true;
+    if (s.indexOf("FILA ATENDIMENTO") > -1) return true;
+    return false;
+  }
+
+  function updateDeal(id, fields) { return apiCall("crm.deal.update", { id: String(id), fields: fields || {} }); }
+  function createDeal(fields) { return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) { return r && r.result ? r.result : null; }); }
+  function deleteDeal(id) { return apiCall("crm.deal.delete", { id: String(id) }); }
+
+  function loadMeta() {
+    return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
+      var fields = (fieldsRes && fieldsRes.result) ? fieldsRes.result : {};
+      S.enums = {};
+      for (var k in fields) {
+        if (!fields.hasOwnProperty(k)) continue;
+        var v = fields[k];
+        if (v && Array.isArray(v.items)) {
+          S.enums[k] = v.items.map(function (it) { return { ID: String(it.ID), VALUE: String(it.VALUE) }; });
+        }
+      }
+      return apiCall("crm.status.list", { filter: { ENTITY_ID: "DEAL_STAGE_" + CFG.DEAL_CATEGORY_ID } });
+    }).then(function (st) {
+      var allowed = {};
+      for (var a in CFG.STAGES) allowed[String(CFG.STAGES[a])] = true;
+
+      var raw = (st && st.result) ? st.result : [];
+      var out = [];
+      for (var i = 0; i < raw.length; i++) {
+        var sid = String(raw[i].STATUS_ID || raw[i].ID || "");
+        if (!allowed[sid]) continue;
+        out.push({ STATUS_ID: sid, NAME: String(raw[i].NAME || ""), SORT: Number(raw[i].SORT || 0) });
+      }
+      out.sort(function (x, y) { return x.SORT - y.SORT; });
+      S.stages = out;
     });
-
-    const list = (j.result || []).filter(d => stageIsAllowed(d.STAGE_ID));
-    // limpar “__QUEUE__...” em favorecido
-    list.forEach(d=>{
-      if (String(d[UF.FAV]||"").includes("__QUEUE__")) d[UF.FAV] = "";
-    });
-    S.deals = list;
   }
 
-  function dealTypeLabel(d){
-    const t = String(d[UF.TIPO]||"").toUpperCase();
-    if (t.includes("RECE")) return "Receita";
-    if (t.includes("DESP")) return "Despesa";
-    // fallback por stage
-    if ([STAGES.REV_REC, STAGES.REV_GOT].includes(d.STAGE_ID)) return "Receita";
-    return "Despesa";
+  function listDealsAll() {
+    var out = [];
+    var start = 0;
+    var stageArr = [
+      CFG.STAGES.DESP_A_PAGAR,
+      CFG.STAGES.DESP_PAGA,
+      CFG.STAGES.REC_A_RECEBER,
+      CFG.STAGES.REC_RECEBIDA,
+      CFG.STAGES.CANCELADO,
+      CFG.STAGES.CONCLUIDO
+    ];
+
+    function loop() {
+      return apiCall("crm.deal.list", {
+        select: [
+          "ID", "TITLE", "STAGE_ID", "CATEGORY_ID",
+          CFG.F.TIPO_FIN, CFG.F.COMPETENCIA, CFG.F.VALOR_PREV, CFG.F.VALOR_REAL,
+          CFG.F.DATA_REAL, CFG.F.FAVORECIDO, CFG.F.OBS, CFG.F.CATEGORIA,
+          CFG.F.DATA_PREV, CFG.F.STATUS_FIN, CFG.F.CONTA, CFG.F.CENTRO_CUSTO
+        ],
+        filter: { CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID), STAGE_ID: stageArr },
+        order: { ID: "DESC" },
+        start: start
+      }).then(function (res) {
+        var chunk = (res && res.result) ? res.result : [];
+        for (var i = 0; i < chunk.length; i++) out.push(chunk[i]);
+        if (res && res.next != null) { start = res.next; return loop(); }
+        return out;
+      });
+    }
+    return loop();
   }
 
-  function dealStatusLabel(d){
-    if (d.STAGE_ID === STAGES.EXP_PAY) return "A pagar";
-    if (d.STAGE_ID === STAGES.EXP_PAID) return "Paga";
-    if (d.STAGE_ID === STAGES.REV_REC) return "A receber";
-    if (d.STAGE_ID === STAGES.REV_GOT) return "Recebida";
-    if (d.STAGE_ID === STAGES.CANCELED) return "Cancelado";
-    if (d.STAGE_ID === STAGES.DONE) return "Concluído";
-    return d.STAGE_ID || "";
+  function initialsFromName(name) {
+    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    var a = parts[0] ? parts[0].charAt(0) : "";
+    var b = parts[1] ? parts[1].charAt(0) : "";
+    var out = (a + b).toUpperCase();
+    return out || "CG";
   }
 
-  function shouldShowDeal(d){
-    const q = ($("#fin-q").value || "").trim().toLowerCase();
-    const cat = $("#fin-cat").value || "";
-    const status = $("#fin-status").value || "";
+  function resolveUserPhotoUrl(user) {
+    var raw = user && (user.PERSONAL_PHOTO_URL || user.PERSONAL_PHOTO || user.PHOTO || "");
+    if (!raw) return "";
+    if (typeof raw === "string" && raw.indexOf("http") === 0) return raw;
+    return "";
+  }
 
-    // sidebar CC filter
-    if (S.selectedCC && String(d[UF.CC]||"") !== String(S.selectedCC)) return false;
+  function loadPartners() {
+    return apiCall("user.get", { ID: CFG.FOOTER.partnersUserIds })
+      .then(function (r) { S.partners = (r && r.result) ? r.result : []; })
+      .catch(function () { S.partners = []; });
+  }
 
-    // default hide CONCLUÍDO, mas acessível no filtro:
-    // regra: se status estiver vazio, não mostra concluído
-    if (!status && d.STAGE_ID === STAGES.DONE) return false;
+  function renderPartnersAvatars() {
+    var host = el("#fin-avatars");
+    if (!host) return;
 
-    if (cat && String(d[UF.CAT]||"") !== String(cat)) return false;
+    var byId = {};
+    for (var i = 0; i < S.partners.length; i++) byId[String(S.partners[i].ID)] = S.partners[i];
 
-    if (status === "open") {
-      if (![STAGES.EXP_PAY, STAGES.REV_REC].includes(d.STAGE_ID)) return false;
-    } else if (status === "done") {
-      if (![STAGES.EXP_PAID, STAGES.REV_GOT, STAGES.DONE].includes(d.STAGE_ID)) return false;
-    } else if (status === "canceled") {
-      if (d.STAGE_ID !== STAGES.CANCELED) return false;
+    var html = [];
+    for (var j = 0; j < CFG.FOOTER.partnersUserIds.length; j++) {
+      var id = CFG.FOOTER.partnersUserIds[j];
+      var u = byId[String(id)] || {};
+      var name = ((u.NAME || "") + " " + (u.LAST_NAME || "")).trim() || ("User " + id);
+      var url = resolveUserPhotoUrl(u);
+
+      if (url) html.push('<div class="fin-avatar" title="' + esc(name) + '"><img src="' + esc(url) + '" alt="' + esc(name) + '"></div>');
+      else html.push('<div class="fin-avatar" title="' + esc(name) + '">' + esc(initialsFromName(name)) + "</div>");
+    }
+    host.innerHTML = html.join("");
+  }
+
+  function renderSidebarCenters() {
+    var host = el("#fin-side-centers");
+    if (!host) return;
+
+    var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
+    var sel = String(S.filters.centro || "");
+
+    function btn(id, label, active) {
+      return (
+        '<button class="fin-side-item ' + (active ? "is-active" : "") + '" data-centro="' + esc(id) + '">' +
+          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" +
+        "</button>"
+      );
     }
 
-    if (q) {
-      const hay = [
-        d.TITLE, d[UF.FAV], d[UF.OBS],
-        getNameById(S.catOptions, d[UF.CAT]),
-        getNameById(S.ccOptions, d[UF.CC]),
-        String(d[UF.VAL_PREV]||""), String(d[UF.VAL_REAL]||"")
-      ].join(" ").toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
+    var html = btn("", "Todos os centros", !sel);
+    for (var i = 0; i < items.length; i++) html += btn(String(items[i].ID), String(items[i].VALUE), sel === String(items[i].ID));
 
-    return true;
+    host.innerHTML = html;
+
+    var bs = host.querySelectorAll("[data-centro]");
+    for (var k = 0; k < bs.length; k++) {
+      bs[k].addEventListener("click", function () {
+        S.filters.centro = this.getAttribute("data-centro") || "";
+        renderSidebarCenters();
+        applyFilters();
+      });
+    }
   }
 
-  function renderTable(){
-    const tb = $("#fin-tbody");
-    const list = S.deals.filter(shouldShowDeal);
+  function renderTotals() {
+    var list = S.filtered || [];
+    var prev = 0, real = 0;
 
-    // Tab filter
-    const tab = S.tab;
-    const filtered = list.filter(d=>{
-      if (tab === "despesas") return ["Despesa"].includes(dealTypeLabel(d));
-      if (tab === "receitas") return ["Receita"].includes(dealTypeLabel(d));
-      if (tab === "lanc") return true;
+    for (var i = 0; i < list.length; i++) {
+      prev += Number(list[i][CFG.F.VALOR_PREV] || 0) || 0;
+      real += Number(list[i][CFG.F.VALOR_REAL] || 0) || 0;
+    }
+
+    if (el("#tot-prev")) el("#tot-prev").textContent = moneyBR(prev);
+    if (el("#tot-real")) el("#tot-real").textContent = moneyBR(real);
+    if (el("#reserve-balance")) el("#reserve-balance").textContent = moneyBR(S.reserve.balance || 0);
+    if (el("#tot-count")) el("#tot-count").textContent = String(list.length);
+
+    if (S.lastSyncAt && el("#fin-lastsync")) {
+      el("#fin-lastsync").textContent = "Atualizado em " + S.lastSyncAt + " • API: " + (S.apiMode || "?");
+    }
+  }
+
+  function renderChartsPlaceholders() {
+    var a = el("#chart-cat");
+    var b = el("#chart-evo");
+    if (a) a.innerHTML = '<div class="fin-chart-box">Pizza: Despesas por Categorias (próximo passo)</div>';
+    if (b) b.innerHTML = '<div class="fin-chart-box">Linha: Evolução Receitas x Despesas (próximo passo)</div>';
+  }
+
+  function applyFilters() {
+    var q = String(S.filters.q || "").trim().toLowerCase();
+
+    S.filtered = (S.deals || []).filter(function (d) {
+      if (isBadFav(d[CFG.F.FAVORECIDO])) return false;
+
+      if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
+      if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
+      if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
+      if (S.filters.conta && String(d[CFG.F.CONTA] || "") !== String(S.filters.conta)) return false;
+      if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
+
+      if (S.filters.stageId) {
+        if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
+      } else {
+        if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
+      }
+
+      var st = String(d.STAGE_ID || "");
+      var isExp = (st === CFG.STAGES.DESP_A_PAGAR || st === CFG.STAGES.DESP_PAGA);
+      var isRec = (st === CFG.STAGES.REC_A_RECEBER || st === CFG.STAGES.REC_RECEBIDA);
+
+      if (!S.filters.showPayables && isExp) return false;
+      if (!S.filters.showReceivables && isRec) return false;
+
+      if (q) {
+        var hay = [
+          d.ID, d.TITLE,
+          d[CFG.F.FAVORECIDO],
+          d[CFG.F.OBS],
+          enumName(CFG.F.CONTA, d[CFG.F.CONTA]),
+          enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]),
+          enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA])
+        ].join(" ").toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
       return true;
     });
 
-    tb.innerHTML = filtered.map(d=>{
-      const tipo = dealTypeLabel(d);
-      const dt = fmtDMY(d[UF.DATA_PREV] || d[UF.DATA_REAL] || "");
-      const val = money(d[UF.VAL_PREV] || d[UF.VAL_REAL] || "");
-      const cc = getNameById(S.ccOptions, d[UF.CC]);
-      const fav = d[UF.FAV] || d.TITLE || "";
-      const cat = getNameById(S.catOptions, d[UF.CAT]);
-      const st = dealStatusLabel(d);
-
-      return `
-        <tr data-id="${esc(d.ID)}">
-          <td>${esc(dt)}</td>
-          <td>${esc(tipo)}</td>
-          <td>${esc(val)}</td>
-          <td>${esc(cc)}</td>
-          <td>${esc(fav)}</td>
-          <td>${esc(cat)}</td>
-          <td>${esc(st)}</td>
-          <td>
-            <div class="fin-row-actions">
-              <button class="fin-mini" data-act="view">Ver</button>
-              <button class="fin-mini" data-act="edit">Editar</button>
-              <button class="fin-mini fin-danger" data-act="del">Excluir</button>
-            </div>
-          </td>
-        </tr>
-      `;
-    }).join("") || `<tr><td colspan="8" style="padding:14px; color:var(--muted); font-weight:900">Sem itens para os filtros atuais.</td></tr>`;
-
-    // bind row actions
-    $$("button[data-act]", tb).forEach(b=>{
-      b.addEventListener("click", ()=>{
-        const tr = b.closest("tr");
-        const id = tr?.dataset?.id;
-        const act = b.dataset.act;
-        const d = S.deals.find(x=>String(x.ID)===String(id));
-        if(!d) return;
-        if(act==="view") openViewModal(d);
-        if(act==="edit") openEditModal(d);
-        if(act==="del") confirmDelete(d);
-      });
-    });
-
-    renderDonutMock(list);
-  }
-
-  function renderChecklists(){
-    const expBox = $("#fin-exp-list");
-    const revBox = $("#fin-rev-list");
-
-    const list = S.deals.filter(d=>{
-      if (!S.selectedCC) return true;
-      return String(d[UF.CC]||"") === String(S.selectedCC);
-    });
-
-    const exps = list.filter(d=> d.STAGE_ID === STAGES.EXP_PAY).slice(0, 8);
-    const revs = list.filter(d=> d.STAGE_ID === STAGES.REV_REC).slice(0, 8);
-
-    expBox.innerHTML = exps.map(d=> checkboxRow(d, "EXP") ).join("") || `<div class="fin-muted">Nada em “A PAGAR”.</div>`;
-    revBox.innerHTML = revs.map(d=> checkboxRow(d, "REV") ).join("") || `<div class="fin-muted">Nada em “A RECEBER”.</div>`;
-
-    $$("input[type=checkbox][data-move]", expBox).forEach(cb=>{
-      cb.addEventListener("change", async ()=>{
-        cb.checked = false;
-        const id = cb.dataset.id;
-        const deal = S.deals.find(x=>String(x.ID)===String(id));
-        if(!deal) return;
-        await openMarkDoneModal(deal, "EXP");
-      });
-    });
-
-    $$("input[type=checkbox][data-move]", revBox).forEach(cb=>{
-      cb.addEventListener("change", async ()=>{
-        cb.checked = false;
-        const id = cb.dataset.id;
-        const deal = S.deals.find(x=>String(x.ID)===String(id));
-        if(!deal) return;
-        await openMarkDoneModal(deal, "REV");
-      });
-    });
-  }
-
-  function checkboxRow(d, kind){
-    const dt = fmtDMY(d[UF.DATA_PREV] || "");
-    const val = money(d[UF.VAL_PREV] || "");
-    const name = d[UF.FAV] || d.TITLE || "(sem favorecido)";
-    const cc = getNameById(S.ccOptions, d[UF.CC]);
-    return `
-      <div class="fin-checkrow">
-        <div class="left">
-          <input type="checkbox" data-move="1" data-kind="${esc(kind)}" data-id="${esc(d.ID)}"/>
-          <div>
-            <div class="name">${esc(name)}</div>
-            <div class="meta">${esc(dt)} • ${esc(cc)}</div>
-          </div>
-        </div>
-        <div class="amt">${esc(val)}</div>
-      </div>
-    `;
-  }
-
-  function getNameById(arr, id){
-    const it = arr.find(x=>String(x.id)===String(id));
-    return it ? it.name : "";
-  }
-
-  // ========= MODALS =========
-  function openModal({title, full=false, bodyHTML="", footerHTML="", onMount}){
-    const bd = document.createElement("div");
-    bd.className = "fin-modal-backdrop";
-    bd.innerHTML = `
-      <div class="fin-modal ${full?"full":""}">
-        <div class="fin-modal-head">
-          <div class="fin-modal-title">${esc(title)}</div>
-          <div style="display:flex; gap:8px; align-items:center">
-            <button class="fin-mini" data-close>Voltar</button>
-          </div>
-        </div>
-        <div class="fin-modal-body">${bodyHTML}</div>
-        ${footerHTML ? `<div class="fin-modal-foot">${footerHTML}</div>` : ``}
-      </div>
-    `;
-    bd.addEventListener("click", (e)=>{
-      if(e.target === bd) bd.remove();
-    });
-    $("[data-close]", bd).addEventListener("click", ()=> bd.remove());
-    document.body.appendChild(bd);
-    onMount && onMount(bd);
-    return bd;
-  }
-
-  function openViewModal(d){
-    openModal({
-      title: `Ver • #${d.ID}`,
-      bodyHTML: `
-        <div class="fin-gridform">
-          ${fieldRO("Favorecido", d[UF.FAV] || d.TITLE || "")}
-          ${fieldRO("Tipo", dealTypeLabel(d))}
-          ${fieldRO("Status", dealStatusLabel(d))}
-          ${fieldRO("Centro de Custo", getNameById(S.ccOptions, d[UF.CC]))}
-          ${fieldRO("Categoria", getNameById(S.catOptions, d[UF.CAT]))}
-          ${fieldRO("Valor previsto", money(d[UF.VAL_PREV]))}
-          ${fieldRO("Data prevista", fmtDMY(d[UF.DATA_PREV]))}
-          ${fieldRO("Valor realizado", money(d[UF.VAL_REAL]))}
-          ${fieldRO("Data realizada", fmtDMY(d[UF.DATA_REAL]))}
-          ${fieldRO("Conta", d[UF.CONTA] || "")}
-          ${fieldRO("Obs", d[UF.OBS] || "")}
-        </div>
-      `
-    });
-  }
-
-  function fieldRO(label, value){
-    return `
-      <div class="fin-field" style="width:100%">
-        <label>${esc(label)}</label>
-        <input value="${esc(value||"")}" readonly/>
-      </div>
-    `;
-  }
-
-  function openEditModal(d){
-    openModal({
-      title: `Editar • #${d.ID}`,
-      bodyHTML: `
-        <div class="fin-gridform">
-          ${fieldInp("Favorecido", "fav", d[UF.FAV] || "")}
-          ${selectInp("Tipo", "tipo", [
-            {id:"RECEITA", name:"RECEITA"},
-            {id:"DESPESA", name:"DESPESA"}
-          ], String(d[UF.TIPO]||""))}
-          ${selectInp("Categoria", "cat", S.catOptions, String(d[UF.CAT]||""))}
-          ${selectInp("Centro de Custo", "cc", S.ccOptions, String(d[UF.CC]||""))}
-          ${fieldInp("Valor previsto", "vp", String(d[UF.VAL_PREV]||""))}
-          ${fieldInp("Data prevista", "dp", fmtDMY(d[UF.DATA_PREV]||""), "date")}
-          ${fieldInp("Conta (opcional)", "conta", String(d[UF.CONTA]||""))}
-          ${fieldInp("Obs (opcional)", "obs", String(d[UF.OBS]||""))}
-        </div>
-        <div class="fin-note" style="margin-top:10px">
-          * Valor/Data realizados são preenchidos no ato de pagar/receber (checkbox).
-        </div>
-      `,
-      footerHTML: `
-        <button class="fin-mini" data-save>Salvar</button>
-      `,
-      onMount: (bd)=>{
-        $("[data-save]", bd).addEventListener("click", async ()=>{
-          const body = {
-            id: d.ID,
-            fields: {
-              [UF.FAV]: $("#m-fav", bd).value.trim(),
-              [UF.TIPO]: $("#m-tipo", bd).value,
-              [UF.CAT]: $("#m-cat", bd).value || null,
-              [UF.CC]: $("#m-cc", bd).value || null,
-              [UF.VAL_PREV]: toNum($("#m-vp", bd).value),
-              [UF.DATA_PREV]: ymd($("#m-dp", bd).value),
-              [UF.CONTA]: $("#m-conta", bd).value.trim(),
-              [UF.OBS]: $("#m-obs", bd).value.trim(),
-            }
-          };
-          await bx("crm.deal.update", body);
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  function fieldInp(label, id, value="", type="text"){
-    return `
-      <div class="fin-field" style="width:100%">
-        <label>${esc(label)}</label>
-        <input id="m-${esc(id)}" type="${esc(type)}" value="${esc(value||"")}" />
-      </div>
-    `;
-  }
-  function selectInp(label, id, arr, cur=""){
-    return `
-      <div class="fin-field" style="width:100%">
-        <label>${esc(label)}</label>
-        <select id="m-${esc(id)}">
-          <option value=""></option>
-          ${arr.map(o=>`<option value="${esc(o.id)}" ${String(cur)===String(o.id)?"selected":""}>${esc(o.name)}</option>`).join("")}
-        </select>
-      </div>
-    `;
-  }
-
-  async function confirmDelete(d){
-    const bd = openModal({
-      title: "Excluir lançamento",
-      bodyHTML: `
-        <div style="font-weight:950; margin-bottom:8px">Tem certeza que quer excluir?</div>
-        <div class="fin-note">ID #${esc(d.ID)} • ${esc(d[UF.FAV]||d.TITLE||"")}</div>
-      `,
-      footerHTML: `
-        <button class="fin-mini" data-ok>Sim, excluir</button>
-        <button class="fin-mini" data-no>Cancelar</button>
-      `,
-      onMount: (bd)=>{
-        $("[data-no]", bd).addEventListener("click", ()=> bd.remove());
-        $("[data-ok]", bd).addEventListener("click", async ()=>{
-          await bx("crm.deal.delete", { id: d.ID });
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  async function openMarkDoneModal(d, kind){
-    const isExp = kind === "EXP";
-    const title = isExp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
-    const today = new Date().toISOString().slice(0,10);
-
-    const bd = openModal({
-      title,
-      bodyHTML: `
-        <div class="fin-gridform">
-          ${fieldInp("Data realizada", "realdate", today, "date")}
-          ${fieldInp("Valor realizado", "realval", String(d[UF.VAL_PREV]||""), "text")}
-          ${fieldInp("Obs (opcional)", "realobs", String(d[UF.OBS]||""))}
-        </div>
-        <div class="fin-note" style="margin-top:10px">
-          * Vai mover a etapa automaticamente e preencher Valor/Data realizados.
-        </div>
-      `,
-      footerHTML: `
-        <button class="fin-mini" data-ok>Confirmar</button>
-      `,
-      onMount: (bd)=>{
-        $("[data-ok]", bd).addEventListener("click", async ()=>{
-          const realDate = ymd($("#m-realdate", bd).value);
-          const realVal = toNum($("#m-realval", bd).value);
-          const realObs = $("#m-realobs", bd).value.trim();
-
-          const stageTo = isExp ? STAGES.EXP_PAID : STAGES.REV_GOT;
-
-          await bx("crm.deal.update", {
-            id: d.ID,
-            fields: {
-              STAGE_ID: stageTo,
-              [UF.DATA_REAL]: realDate || null,
-              [UF.VAL_REAL]: (realVal==null ? null : realVal),
-              [UF.OBS]: realObs,
-            }
-          });
-
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  function openNewModal(){
-    openModal({
-      title: "Novo lançamento",
-      bodyHTML: `
-        <div class="fin-gridform">
-          ${selectInp("Tipo", "ntipo", [{id:"DESPESA",name:"DESPESA"},{id:"RECEITA",name:"RECEITA"}], "DESPESA")}
-          ${selectInp("Centro de Custo", "ncc", S.ccOptions, S.selectedCC||"")}
-          ${selectInp("Categoria", "ncat", S.catOptions, "")}
-          ${fieldInp("Favorecido", "nfav", "")}
-          ${fieldInp("Valor", "nval", "")}
-          ${fieldInp("Data prevista", "ndp", new Date().toISOString().slice(0,10), "date")}
-          ${fieldInp("Conta (opcional)", "nconta", "")}
-          ${fieldInp("Obs (opcional)", "nobs", "")}
-
-          <div class="fin-field" style="width:100%">
-            <label>Recorrência</label>
-            <select id="m-nrec">
-              <option value="AVULSO">Avulso</option>
-              <option value="SEMANAL">Semanal</option>
-              <option value="MENSAL">Mensal</option>
-              <option value="ANUAL">Anual</option>
-            </select>
-          </div>
-
-          <div class="fin-field" style="width:100%" id="rec-week-wrap" style="display:none">
-            <label>Dia da semana</label>
-            <select id="m-nweekday">
-              <option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option>
-              <option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option>
-            </select>
-          </div>
-
-          <div class="fin-field" style="width:100%" id="rec-month-wrap" style="display:none">
-            <label>Dia do mês</label>
-            <input id="m-nmonthday" type="number" min="1" max="31" value="1"/>
-          </div>
-
-          <div class="fin-field" style="width:100%" id="rec-year-wrap" style="display:none">
-            <label>Dia/Mês</label>
-            <input id="m-nyearmd" placeholder="ex: 15/04"/>
-          </div>
-        </div>
-
-        <div class="fin-note" style="margin-top:10px">
-          Competência: você pode deixar vazio em recorrências. A visão mensal usa Competência quando existir.
-        </div>
-      `,
-      footerHTML: `
-        <button class="fin-mini" data-save>Salvar</button>
-      `,
-      onMount: (bd)=>{
-        const recSel = $("#m-nrec", bd);
-        const wk = $("#rec-week-wrap", bd);
-        const mo = $("#rec-month-wrap", bd);
-        const yr = $("#rec-year-wrap", bd);
-
-        function recUI(){
-          const v = recSel.value;
-          wk.style.display = (v==="SEMANAL") ? "" : "none";
-          mo.style.display = (v==="MENSAL") ? "" : "none";
-          yr.style.display = (v==="ANUAL") ? "" : "none";
-        }
-        recSel.addEventListener("change", recUI);
-        recUI();
-
-        $("[data-save]", bd).addEventListener("click", async ()=>{
-          const tipo = $("#m-ntipo", bd).value;
-          const cc = $("#m-ncc", bd).value || null;
-          const cat = $("#m-ncat", bd).value || null;
-          const fav = $("#m-nfav", bd).value.trim();
-          const val = toNum($("#m-nval", bd).value);
-          const dp = ymd($("#m-ndp", bd).value);
-          const conta = $("#m-nconta", bd).value.trim();
-          const obs = $("#m-nobs", bd).value.trim();
-
-          const stage = (tipo==="RECEITA") ? STAGES.REV_REC : STAGES.EXP_PAY;
-
-          const created = await bx("crm.deal.add", {
-            fields: {
-              TITLE: fav || (tipo==="RECEITA" ? "Receita" : "Despesa"),
-              CATEGORY_ID: PIPELINE_FIN,
-              STAGE_ID: stage,
-              [UF.TIPO]: tipo,
-              [UF.CC]: cc,
-              [UF.CAT]: cat,
-              [UF.FAV]: fav,
-              [UF.VAL_PREV]: val,
-              [UF.DATA_PREV]: dp || null,
-              [UF.CONTA]: conta,
-              [UF.OBS]: obs,
-            }
-          });
-
-          // Recorrência: neste momento eu só salvo o “modelo” no deal (sem automatizar criação futura),
-          // porque automatizar geração periódica sem Worker/automation server não roda sozinho.
-          // MAS: se você quiser, eu deixo “criar X ocorrências” agora (ex.: próximos 12 meses) — dá pra fazer só no JS.
-          // Como você pediu “negócio recorrente com lembretes na pipeline 17”, isso exige criar deals na 17 no ato.
-          // Então: se NÃO for avulso, eu crio um lembrete AGORA na pipeline 17 (coluna Manuela).
-          const rec = $("#m-nrec", bd).value;
-          if(rec !== "AVULSO"){
-            await createReminderForManuela({
-              baseDealId: created.result,
-              tipo, fav, val, dp,
-              rec,
-              weekday: $("#m-nweekday", bd)?.value,
-              monthday: $("#m-nmonthday", bd)?.value,
-              yearmd: $("#m-nyearmd", bd)?.value,
-            });
-          }
-
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  async function createReminderForManuela(info){
-    const title = `LEMBRETE FINANCEIRO (${info.rec}) • ${info.tipo} • ${info.fav || "Sem favorecido"}`;
-    const desc = [
-      `Origem: Painel Financeiro`,
-      `Deal Financeiro: ${info.baseDealId}`,
-      `Tipo: ${info.tipo}`,
-      `Favorecido: ${info.fav || ""}`,
-      `Valor: ${info.val!=null ? money(info.val) : ""}`,
-      `Data prevista: ${info.dp ? fmtDMY(info.dp) : ""}`,
-      `Recorrência: ${info.rec}`,
-      info.rec==="SEMANAL" ? `Dia da semana: ${info.weekday}` : "",
-      info.rec==="MENSAL" ? `Dia do mês: ${info.monthday}` : "",
-      info.rec==="ANUAL" ? `Dia/Mês: ${info.yearmd}` : "",
-    ].filter(Boolean).join("\n");
-
-    await bx("crm.deal.add", {
-      fields: {
-        TITLE: title,
-        CATEGORY_ID: PIPELINE_REM,
-        STAGE_ID: STAGE_REM_MANUELA,
-        ASSIGNED_BY_ID: REMINDER_USER_ID,
-        COMMENTS: desc,
-      }
-    });
-  }
-
-  function openLoteModal(tipo){
-    const isRec = (tipo==="RECEITA");
-    const title = isRec ? "LOTE RECEITAS" : "LOTE DESPESAS";
-
-    const rows = 15;
-    const bd = openModal({
-      title,
-      full:true,
-      bodyHTML: `
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">
-          <button class="fin-mini" data-add>+ linha</button>
-          <button class="fin-mini" data-clean>Limpar linhas vazias</button>
-          ${isRec ? `<button class="fin-mini" data-csv>Importar CSV (Favorecido, Valor, Data)</button>` : ``}
-          <div class="fin-note">CONTA e OBS são opcionais.</div>
-        </div>
-
-        <table class="fin-lote-table">
-          <thead>
-            <tr>
-              <th>Centro de Custo</th>
-              <th>Conta (opcional)</th>
-              <th>Categoria</th>
-              <th>Favorecido</th>
-              <th>Valor</th>
-              <th>Data Prevista</th>
-              <th>Obs (opcional)</th>
-              <th>Recorrência</th>
-              <th>Dia</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="lote-body"></tbody>
-        </table>
-
-        <input type="file" id="lote-file" accept=".csv" style="display:none"/>
-      `,
-      footerHTML: `
-        <button class="fin-mini" data-save>Criar lançamentos</button>
-      `,
-      onMount: (bd)=>{
-        const tb = $("#lote-body", bd);
-
-        function rowTemplate(){
-          const ccSel = optSelect("cc", S.ccOptions, S.selectedCC||"");
-          const catSel = optSelect("cat", S.catOptions, "");
-          const recSel = `
-            <select data-k="rec">
-              <option value="AVULSO">Avulso</option>
-              <option value="SEMANAL">Semanal</option>
-              <option value="MENSAL">Mensal</option>
-              <option value="ANUAL">Anual</option>
-            </select>
-          `;
-          const dayField = `<input data-k="day" placeholder="ex: 2 (sem), 15 (mês), 15/04 (anual)"/>`;
-          return `
-            <tr>
-              <td>${ccSel}</td>
-              <td><input data-k="conta" placeholder="Conta"/></td>
-              <td>${catSel}</td>
-              <td><input data-k="fav" placeholder="Favorecido"/></td>
-              <td><input data-k="val" placeholder="0,00"/></td>
-              <td><input data-k="dp" type="date"/></td>
-              <td><input data-k="obs" placeholder="Obs"/></td>
-              <td>${recSel}</td>
-              <td>${dayField}</td>
-              <td><button class="fin-mini fin-danger" data-del>✕</button></td>
-            </tr>
-          `;
-        }
-
-        function addRow(n=1){
-          for(let i=0;i<n;i++){
-            const tr = document.createElement("tbody");
-            tr.innerHTML = rowTemplate();
-            const row = tr.firstElementChild;
-            tb.appendChild(row);
-
-            $("[data-del]", row).addEventListener("click", ()=>{
-              row.remove();
-            });
-
-            // rec enable guide
-            const rec = $("[data-k=rec]", row);
-            const day = $("[data-k=day]", row);
-            function hint(){
-              const v = rec.value;
-              day.disabled = (v==="AVULSO");
-              day.placeholder =
-                v==="SEMANAL" ? "0-6 (dom=0)" :
-                v==="MENSAL" ? "1-31" :
-                v==="ANUAL" ? "dd/mm (ex 15/04)" :
-                "—";
-            }
-            rec.addEventListener("change", hint);
-            hint();
-          }
-        }
-
-        addRow(rows);
-
-        $("[data-add]", bd).addEventListener("click", ()=> addRow(1));
-        $("[data-clean]", bd).addEventListener("click", ()=>{
-          $$("#lote-body tr", bd).forEach(tr=>{
-            const fav = ($("[data-k=fav]", tr)?.value||"").trim();
-            const val = ($("[data-k=val]", tr)?.value||"").trim();
-            const dp = ($("[data-k=dp]", tr)?.value||"").trim();
-            const cat = ($("[data-k=cat]", tr)?.value||"").trim();
-            if(!fav && !val && !dp && !cat) tr.remove();
-          });
-        });
-
-        if(isRec){
-          $("[data-csv]", bd).addEventListener("click", ()=> $("#lote-file", bd).click());
-          $("#lote-file", bd).addEventListener("change", async (e)=>{
-            const f = e.target.files?.[0];
-            if(!f) return;
-            const text = await f.text();
-            const lines = text.split(/\r?\n/).filter(Boolean);
-            // assume header
-            const rows = lines.slice(1).map(l=> l.split(";").length>1 ? l.split(";") : l.split(","));
-            // each: Favorecido, Valor, Data
-            // preenche nas primeiras linhas existentes
-            rows.slice(0, 60).forEach((cols, idx)=>{
-              const fav = (cols[0]||"").trim();
-              const val = (cols[1]||"").trim();
-              const dt = (cols[2]||"").trim();
-              let tr = $$("#lote-body tr", bd)[idx];
-              if(!tr){
-                addRow(1);
-                tr = $$("#lote-body tr", bd)[idx];
-              }
-              $("[data-k=fav]", tr).value = fav;
-              $("[data-k=val]", tr).value = val;
-              const iso = ymd(dt);
-              if(iso) $("[data-k=dp]", tr).value = iso;
-            });
-          });
-        }
-
-        $("[data-save]", bd).addEventListener("click", async ()=>{
-          const trs = $$("#lote-body tr", bd);
-          const tasks = [];
-          for(const tr of trs){
-            const cc = $("[data-k=cc]", tr).value || null;
-            const conta = $("[data-k=conta]", tr).value.trim();
-            const cat = $("[data-k=cat]", tr).value || null;
-            const fav = $("[data-k=fav]", tr).value.trim();
-            const val = toNum($("[data-k=val]", tr).value);
-            const dp = ymd($("[data-k=dp]", tr).value);
-            const obs = $("[data-k=obs]", tr).value.trim();
-            const rec = $("[data-k=rec]", tr).value;
-            const day = $("[data-k=day]", tr).value.trim();
-
-            // linha vazia
-            if(!fav && val==null && !dp && !cat) continue;
-
-            const stage = isRec ? STAGES.REV_REC : STAGES.EXP_PAY;
-            const tipoUF = isRec ? "RECEITA" : "DESPESA";
-
-            tasks.push(async ()=>{
-              const created = await bx("crm.deal.add", {
-                fields: {
-                  TITLE: fav || (isRec ? "Receita" : "Despesa"),
-                  CATEGORY_ID: PIPELINE_FIN,
-                  STAGE_ID: stage,
-                  [UF.TIPO]: tipoUF,
-                  [UF.CC]: cc,
-                  [UF.CONTA]: conta, // opcional
-                  [UF.CAT]: cat,
-                  [UF.FAV]: fav,
-                  [UF.VAL_PREV]: val,
-                  [UF.DATA_PREV]: dp || null,
-                  [UF.OBS]: obs, // opcional
-                }
-              });
-
-              if(rec !== "AVULSO"){
-                await createReminderForManuela({
-                  baseDealId: created.result,
-                  tipo: tipoUF, fav, val, dp,
-                  rec,
-                  weekday: day,
-                  monthday: day,
-                  yearmd: day,
-                });
-              }
-            });
-          }
-
-          // executa em série para não estourar limite
-          for(const fn of tasks) await fn();
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  function optSelect(key, arr, cur){
-    return `
-      <select data-k="${esc(key)}">
-        <option value=""></option>
-        ${arr.map(o=>`<option value="${esc(o.id)}" ${String(cur)===String(o.id)?"selected":""}>${esc(o.name)}</option>`).join("")}
-      </select>
-    `;
-  }
-
-  function openCardsModal(){
-    openModal({
-      title: "Cartões de Crédito",
-      bodyHTML: `
-        <div class="fin-note" style="margin-bottom:10px">
-          Aqui é o módulo de cartões (você pediu fora do menu lateral).  
-          Eu preciso que você me diga **onde os lançamentos de cartão ficam**:
-          - ficam também na PIPELINE 27 com algum campo “Forma de pagamento” = cartão?
-          - ou existe outro lugar?
-          <br><br>
-          (Sem isso, eu monto só o modal visual e não tenho como listar/filtrar certo.)
-        </div>
-        <div class="fin-card">
-          <h3>CT ITAÚ PJ</h3>
-          <div class="fin-muted">Venc: 02 • Melhor dia: 21</div>
-          <button class="fin-mini" style="margin-top:8px">Abrir</button>
-        </div>
-        <div class="fin-card" style="margin-top:10px">
-          <h3>CT PORTO PF</h3>
-          <div class="fin-muted">Venc: 10 • Melhor dia: 04</div>
-          <button class="fin-mini" style="margin-top:8px">Abrir</button>
-        </div>
-      `
-    });
-  }
-
-  function openTransferModal(){
-    openModal({
-      title: "Transferir entre Centros de Custo",
-      bodyHTML: `
-        <div class="fin-gridform">
-          ${selectInp("De (Centro)", "tfrom", S.ccOptions, S.selectedCC||"")}
-          ${selectInp("Para (Centro)", "tto", S.ccOptions, "")}
-          ${fieldInp("Valor", "tval", "")}
-          ${fieldInp("Data", "tdp", new Date().toISOString().slice(0,10), "date")}
-          ${fieldInp("Obs (opcional)", "tobs", "Transferência entre centros")}
-        </div>
-        <div class="fin-note" style="margin-top:10px">
-          Isso cria 2 lançamentos: 1 despesa no “De” e 1 receita no “Para”.
-        </div>
-      `,
-      footerHTML: `<button class="fin-mini" data-ok>Transferir</button>`,
-      onMount:(bd)=>{
-        $("[data-ok]", bd).addEventListener("click", async ()=>{
-          const from = $("#m-tfrom", bd).value || null;
-          const to = $("#m-tto", bd).value || null;
-          const val = toNum($("#m-tval", bd).value);
-          const dp = ymd($("#m-tdp", bd).value);
-          const obs = $("#m-tobs", bd).value.trim();
-
-          if(!from || !to || from===to || val==null){
-            alert("Preencha centros diferentes e valor.");
-            return;
-          }
-
-          // despesa
-          await bx("crm.deal.add", {
-            fields:{
-              TITLE:"Transferência (Saída)",
-              CATEGORY_ID: PIPELINE_FIN,
-              STAGE_ID: STAGES.EXP_PAY,
-              [UF.TIPO]:"DESPESA",
-              [UF.CC]: from,
-              [UF.FAV]:"Transferência entre centros",
-              [UF.VAL_PREV]: val,
-              [UF.DATA_PREV]: dp||null,
-              [UF.OBS]: obs,
-            }
-          });
-
-          // receita
-          await bx("crm.deal.add", {
-            fields:{
-              TITLE:"Transferência (Entrada)",
-              CATEGORY_ID: PIPELINE_FIN,
-              STAGE_ID: STAGES.REV_REC,
-              [UF.TIPO]:"RECEITA",
-              [UF.CC]: to,
-              [UF.FAV]:"Transferência entre centros",
-              [UF.VAL_PREV]: val,
-              [UF.DATA_PREV]: dp||null,
-              [UF.OBS]: obs,
-            }
-          });
-
-          bd.remove();
-          await refresh();
-        });
-      }
-    });
-  }
-
-  function openSaldoModal(){
-    openModal({
-      title:"Saldo inicial / ajuste (manual)",
-      bodyHTML: `
-        <div class="fin-note">
-          Você pediu: “saldo inicial manual e poder ajustar depois”.
-          <br><br>
-          Para funcionar de verdade, a gente precisa decidir onde armazenar:
-          <b>Opção A</b> (mais simples): criar um DEAL de “SALDO INICIAL” por centro de custo na pipeline 27.
-          <br><br>
-          Eu já posso fazer isso aqui com 1 clique, mas preciso saber:
-          vai ser Receita ou um tipo especial?
-        </div>
-      `
-    });
-  }
-
-  function openReservaModal(){
-    openModal({
-      title:"Fundo de Reserva",
-      bodyHTML: `
-        <div class="fin-note">
-          Você pediu inserir “Fundo de Reserva”.  
-          Pra isso ficar certo, eu trato como um “Centro de Custo” específico (recomendado) ou como um campo separado.  
-          <br><br>
-          Se você me disser qual Centro de Custo representa a Reserva (ou se quer criar um novo), eu ligo os cálculos.
-        </div>
-      `
-    });
-  }
-
-  // ========= DONUT MOCK =========
-  function renderDonutMock(list){
-    // só mostra total despesas visíveis
-    const exp = list.filter(d=>["Despesa"].includes(dealTypeLabel(d)) && d.STAGE_ID !== STAGES.CANCELED);
-    const total = exp.reduce((a,d)=> a + (toNum(d[UF.VAL_PREV]) || toNum(d[UF.VAL_REAL]) || 0), 0);
-    $("#fin-donut-center").textContent = total ? money(total) : "—";
-    $("#fin-donut-legend").textContent = "Depois eu conecto por categoria (real).";
-  }
-
-  // ========= AVATARS =========
-  async function loadUsersFooter(){
-    const wrap = $("#fin-avatars");
-    wrap.innerHTML = "";
-    // sem user.get você não consegue foto; então deixo fallback
-    FOOT.users.forEach(id=>{
-      const img = document.createElement("img");
-      img.className = "fin-avatar";
-      img.alt = "User " + id;
-      // fallback (placeholder)
-      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`
-        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-          <rect width="64" height="64" fill="#ffffff"/>
-          <circle cx="32" cy="26" r="12" fill="#d1d5db"/>
-          <rect x="14" y="42" width="36" height="16" rx="8" fill="#d1d5db"/>
-          <text x="32" y="60" text-anchor="middle" font-family="Arial" font-size="10" fill="#6b7280">#${id}</text>
-        </svg>
-      `);
-      wrap.appendChild(img);
-    });
-  }
-
-  // ========= REFRESH =========
-  async function refresh(){
-    await loadDeals();
-    renderChecklists();
     renderTable();
+    renderTotals();
+    renderChartsPlaceholders();
   }
 
-  // ========= INIT =========
-  function showFatal(err){
-    const r = document.getElementById("fin-root") || document.body;
-    r.innerHTML = `
-      <div style="padding:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial">
-        <div style="font-weight:950;font-size:14px;margin-bottom:8px">Falha ao carregar o painel</div>
-        <pre style="white-space:pre-wrap;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:12px;padding:12px;max-width:1100px;overflow:auto">${esc(err && (err.stack||err.message||err) || err)}</pre>
-        <div style="font-size:12px;opacity:.75;margin-top:8px">Dica: confira WEBHOOK_BASE no financeiro.js.</div>
-      </div>
-    `;
+  function nextStageByCurrent(stageId) {
+    stageId = String(stageId || "");
+    if (stageId === CFG.STAGES.DESP_A_PAGAR) return CFG.STAGES.DESP_PAGA;
+    if (stageId === CFG.STAGES.REC_A_RECEBER) return CFG.STAGES.REC_RECEBIDA;
+    return "";
   }
 
-  window.addEventListener("error", (e)=> showFatal(e.error || e.message || e));
-  window.addEventListener("unhandledrejection", (e)=> showFatal(e.reason || e));
-
-  (async function init(){
-    try{
-      mount();
-      setSentinelHidden();
-      bindUI();
-      await loadUsersFooter();
-      await loadFields();
-      fillSelects();
-      await refresh();
-    }catch(err){
-      showFatal(err);
+  function openPayReceiveModal(deal) {
+    var stageTo = nextStageByCurrent(deal.STAGE_ID);
+    if (!stageTo) {
+      toast("Este item não está em A PAGAR / A RECEBER.", "err");
+      return;
     }
-  })();
+
+    var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
+    var title = isDesp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(title) + '</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Valor pago/recebido</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+        '</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="pr-save" data-busylock="1">Salvar</button>' +
+        '</div>' +
+      '</div>'
+    );
+
+    m.q("#pr-save").addEventListener("click", function () {
+      setLoading(true);
+
+      var v = parseMoneyBR(m.q("#pr-val").value || "");
+      var dt = toISODate(m.q("#pr-date").value || "");
+
+      var fields = {};
+      fields[CFG.F.VALOR_REAL] = v;
+      fields[CFG.F.DATA_REAL] = dt;
+      fields.STAGE_ID = stageTo;
+
+      updateDeal(deal.ID, fields)
+        .then(function () { toast("Atualizado ✅"); m.close(); return refresh(); })
+        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
+        .finally(function () { setLoading(false); });
+    });
+  }
+
+  function confirmDelete(deal) {
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Excluir lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div style="font-weight:900">Tem certeza que deseja EXCLUIR o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
+        '</div>' +
+      '</div>'
+    );
+
+    m.q("#del-ok").addEventListener("click", function () {
+      setLoading(true);
+      deleteDeal(deal.ID)
+        .then(function () { toast("Excluído ✅"); m.close(); return refresh(); })
+        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
+        .finally(function () { setLoading(false); });
+    });
+  }
+
+  /* ===== Competência =====
+     - Para recorrentes: NÃO é obrigatória (a não ser que seu campo no Bitrix esteja marcado como obrigatório).
+     - Se não preencher, tentamos achar um enum compatível pelo mês/ano da Data inicial.
+  */
+  function guessCompetenciaIdFromISO(iso) {
+    iso = toISODate(iso);
+    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return "";
+    var yy = m[1], mm = m[2];
+
+    var list = S.enums[CFG.F.COMPETENCIA] || [];
+    var candidates = [];
+    for (var i = 0; i < list.length; i++) {
+      var v = String(list[i].VALUE || "").toLowerCase();
+      if (v.indexOf(yy) > -1) candidates.push(list[i]);
+    }
+    // tenta achar pelo mês como "02" ou "fev"
+    var mmNum = String(Number(mm)); // 2
+    var map = {
+      "01":["jan","janeiro","01"],
+      "02":["fev","fevereiro","02"],
+      "03":["mar","março","03"],
+      "04":["abr","abril","04"],
+      "05":["mai","maio","05"],
+      "06":["jun","junho","06"],
+      "07":["jul","julho","07"],
+      "08":["ago","agosto","08"],
+      "09":["set","setembro","09"],
+      "10":["out","outubro","10"],
+      "11":["nov","novembro","11"],
+      "12":["dez","dezembro","12"]
+    };
+    var keys = map[mm] || [mm, mmNum];
+    for (var j = 0; j < candidates.length; j++) {
+      var t = String(candidates[j].VALUE || "").toLowerCase();
+      for (var k = 0; k < keys.length; k++) {
+        if (t.indexOf(keys[k]) > -1) return String(candidates[j].ID);
+      }
+    }
+    // fallback: procura no list inteiro
+    for (var a = 0; a < list.length; a++) {
+      var tt = String(list[a].VALUE || "").toLowerCase();
+      for (var kk = 0; kk < keys.length; kk++) {
+        if (tt.indexOf(keys[kk]) > -1 && tt.indexOf(yy) > -1) return String(list[a].ID);
+      }
+    }
+    return "";
+  }
+
+  /* ========= LOTE (Tabela) ========= */
+  function openBatchTableModal() {
+    // linhas
+    var rows = [
+      mkRow()
+    ];
+
+    function mkRow() {
+      return {
+        centro: "",
+        conta: "",
+        categoria: "",
+        favorecido: "",
+        valor: "",
+        obs: "",
+        // tipo do lançamento (despesa/receita)
+        kind: "DESPESA",
+        // recorrência
+        freq: "once",          // once | weekly | monthly | yearly
+        // parâmetros
+        start: "",
+        count: "1",
+        weekday: "1",          // 1..7 (seg..dom)
+        monthday: "1",         // 1..31
+        month: "1"             // 1..12 (anual)
+      };
+    }
+
+    function weekdayLabel(v){
+      var m = { "1":"Seg", "2":"Ter", "3":"Qua", "4":"Qui", "5":"Sex", "6":"Sáb", "7":"Dom" };
+      return m[String(v)] || v;
+    }
+
+    function calcDate(baseISO, row, idx) {
+      baseISO = toISODate(baseISO);
+      if (!baseISO) return "";
+
+      if (row.freq === "once") return baseISO;
+
+      if (row.freq === "weekly") {
+        // se escolher "dia da semana", ajusta a primeira ocorrência pro próximo dia
+        var wd = Number(row.weekday || 1); // 1..7
+        var d = new Date(baseISO + "T12:00:00");
+        var jswd = d.getDay(); // 0..6 (dom..sab)
+        var cur = (jswd === 0 ? 7 : jswd); // 1..7
+        var delta = wd - cur;
+        if (delta < 0) delta += 7;
+        var first = addDaysISO(baseISO, delta);
+        return addDaysISO(first, idx * 7);
+      }
+
+      if (row.freq === "monthly") {
+        var day = Number(row.monthday || 1);
+        return addMonthsISO(baseISO, idx, day);
+      }
+
+      if (row.freq === "yearly") {
+        var mo = Number(row.month || 1);
+        var dayy = Number(row.monthday || 1);
+        // primeiro ano usa a data base como referência (mas aplica mês/dia escolhidos)
+        var baseY = String(baseISO).slice(0,4);
+        var first = baseY + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
+        // se first < baseISO, joga pro próximo ano
+        if (first < baseISO) first = String(Number(baseY)+1) + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
+        return addYearsISO(first, idx, mo, dayy);
+      }
+
+      return baseISO;
+    }
+
+    function tipoEnumForKind(kind) {
+      var items = S.enums[CFG.F.TIPO_FIN] || [];
+      for (var i = 0; i < items.length; i++) {
+        var t = String(items[i].VALUE || "").toUpperCase();
+        if (kind === "DESPESA" && t.indexOf("DESP") > -1) return String(items[i].ID);
+        if (kind === "RECEITA" && t.indexOf("REC") > -1) return String(items[i].ID);
+      }
+      return "";
+    }
+
+    function stageForKind(kind) {
+      return (kind === "RECEITA") ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
+    }
+
+    function renderTable(host) {
+      var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—");
+      var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "—");
+      var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—");
+
+      var html =
+        '<div class="fin-muted" style="margin-bottom:10px;font-weight:900">' +
+          'LOTE em modo lista/tabela. Preencha as linhas e clique em <b>Criar</b>.' +
+          '<br>Competência é opcional: se não preencher, o sistema tenta derivar pela Data inicial.' +
+        '</div>' +
+
+        '<div style="overflow:auto;max-height:60vh">' +
+          '<table class="fin-batch-table">' +
+            '<thead><tr>' +
+              '<th style="min-width:120px">CENTRO DE CUSTO</th>' +
+              '<th style="min-width:120px">CONTA</th>' +
+              '<th style="min-width:120px">CATEGORIA</th>' +
+              '<th style="min-width:180px">FAVORECIDO</th>' +
+              '<th style="min-width:110px">VALOR</th>' +
+              '<th style="min-width:220px">OBS</th>' +
+              '<th style="min-width:100px">TIPO</th>' +
+              '<th style="min-width:120px">RECORRÊNCIA</th>' +
+              '<th style="min-width:120px">DIA SEMANA</th>' +
+              '<th style="min-width:120px">DIA MÊS</th>' +
+              '<th style="min-width:140px">MÊS (ANUAL)</th>' +
+              '<th style="min-width:140px">DATA INICIAL</th>' +
+              '<th style="min-width:90px">QTD</th>' +
+              '<th style="min-width:90px"></th>' +
+            '</tr></thead><tbody>';
+
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var showWeek = (r.freq === "weekly");
+        var showMonthDay = (r.freq === "monthly" || r.freq === "yearly");
+        var showMonth = (r.freq === "yearly");
+
+        html += '<tr data-i="'+i+'">' +
+          '<td><select class="fin-batch-sel" data-k="centro">' + ccOpts.replace('value="'+esc(r.centro)+'"', 'value="'+esc(r.centro)+'" selected') + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="conta">' + contaOpts.replace('value="'+esc(r.conta)+'"', 'value="'+esc(r.conta)+'" selected') + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts.replace('value="'+esc(r.categoria)+'"', 'value="'+esc(r.categoria)+'" selected') + '</select></td>' +
+          '<td><input class="fin-batch-inp" data-k="favorecido" value="'+esc(r.favorecido)+'" placeholder="Ex.: Light, Cliente..."></td>' +
+          '<td><input class="fin-batch-inp" data-k="valor" value="'+esc(r.valor)+'" placeholder="1500,00"></td>' +
+          '<td><textarea class="fin-batch-txt" data-k="obs" placeholder="Observações...">'+esc(r.obs)+'</textarea></td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="kind">' +
+              '<option value="DESPESA" '+(r.kind==="DESPESA"?"selected":"")+'>DESPESA</option>' +
+              '<option value="RECEITA" '+(r.kind==="RECEITA"?"selected":"")+'>RECEITA</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="freq">' +
+              '<option value="once" '+(r.freq==="once"?"selected":"")+'>Avulsa</option>' +
+              '<option value="weekly" '+(r.freq==="weekly"?"selected":"")+'>Semanal</option>' +
+              '<option value="monthly" '+(r.freq==="monthly"?"selected":"")+'>Mensal</option>' +
+              '<option value="yearly" '+(r.freq==="yearly"?"selected":"")+'>Anual</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="weekday" '+(showWeek?'':'disabled')+'>' +
+              '<option value="1" '+(r.weekday==="1"?"selected":"")+'>Seg</option>' +
+              '<option value="2" '+(r.weekday==="2"?"selected":"")+'>Ter</option>' +
+              '<option value="3" '+(r.weekday==="3"?"selected":"")+'>Qua</option>' +
+              '<option value="4" '+(r.weekday==="4"?"selected":"")+'>Qui</option>' +
+              '<option value="5" '+(r.weekday==="5"?"selected":"")+'>Sex</option>' +
+              '<option value="6" '+(r.weekday==="6"?"selected":"")+'>Sáb</option>' +
+              '<option value="7" '+(r.weekday==="7"?"selected":"")+'>Dom</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td><input class="fin-batch-inp" data-k="monthday" value="'+esc(r.monthday)+'" '+(showMonthDay?'':'disabled')+' placeholder="1..31"></td>' +
+          '<td><input class="fin-batch-inp" data-k="month" value="'+esc(r.month)+'" '+(showMonth?'':'disabled')+' placeholder="1..12"></td>' +
+
+          '<td><input class="fin-batch-inp" data-k="start" value="'+esc(r.start)+'" placeholder="YYYY-MM-DD"></td>' +
+          '<td><input class="fin-batch-inp" data-k="count" value="'+esc(r.count)+'" placeholder="1"></td>' +
+
+          '<td><button class="fin-btn fin-btn--danger" data-del="1" style="width:100%">Remover</button></td>' +
+        '</tr>';
+      }
+
+      html += '</tbody></table></div>' +
+        '<div class="fin-row" style="margin-top:10px;justify-content:space-between;flex-wrap:wrap">' +
+          '<button class="fin-btn" id="b-add">+ Linha</button>' +
+          '<div class="fin-row fin-row--right" style="gap:8px;flex-wrap:wrap">' +
+            '<div class="fin-field" style="min-width:260px"><label>Competência (opcional)</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || [], true, "Automático") + '</select></div>' +
+            '<button class="fin-btn fin-btn--primary" id="b-create" data-busylock="1">Criar</button>' +
+          '</div>' +
+        '</div>';
+
+      host.innerHTML = html;
+
+      host.querySelector("#b-add").addEventListener("click", function(){
+        rows.push(mkRow());
+        renderTable(host);
+      });
+
+      host.querySelector("#b-create").addEventListener("click", function(){
+        createBatch(host.querySelector("#b-comp").value || "");
+      });
+
+      // listeners de edição
+      var tbody = host.querySelector("tbody");
+      tbody.addEventListener("input", function(e){
+        var tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        var i = Number(tr.getAttribute("data-i"));
+        var k = e.target.getAttribute("data-k");
+        if (!k) return;
+        rows[i][k] = e.target.value;
+      });
+      tbody.addEventListener("change", function(e){
+        var tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        var i = Number(tr.getAttribute("data-i"));
+        var k = e.target.getAttribute("data-k");
+        if (!k) return;
+        rows[i][k] = e.target.value;
+
+        // se mudou frequência, re-render pra habilitar/desabilitar campos (semana/mês/ano)
+        if (k === "freq") renderTable(host);
+      });
+
+      tbody.addEventListener("click", function(e){
+        var btn = e.target.closest("[data-del]");
+        if (!btn) return;
+        var tr = btn.closest("tr[data-i]");
+        var i = Number(tr.getAttribute("data-i"));
+        rows.splice(i, 1);
+        if (!rows.length) rows.push(mkRow());
+        renderTable(host);
+      });
+    }
+
+    function createBatch(compOverride) {
+      setLoading(true);
+
+      try {
+        // valida e cria
+        var ops = Promise.resolve();
+        var created = 0;
+
+        for (var i = 0; i < rows.length; i++) (function(r){
+          ops = ops.then(function(){
+            var fav = String(r.favorecido || "").trim();
+            if (!fav) throw new Error("Linha sem Favorecido.");
+            if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
+
+            var vprev = parseMoneyBR(r.valor || "");
+            var start = toISODate(r.start || "");
+            if (!start) throw new Error("Linha sem Data inicial (YYYY-MM-DD).");
+
+            var cc = r.centro || "";
+            var conta = r.conta || "";
+            var cat = r.categoria || "";
+            var obs = String(r.obs || "").trim();
+
+            var kind = (r.kind === "RECEITA") ? "RECEITA" : "DESPESA";
+            var tipoEnum = tipoEnumForKind(kind);
+            if (!tipoEnum) throw new Error("Não encontrei enum de Tipo Financeiro para " + kind + ". (Precisa existir um item DESPESA/RECEITA no seu campo Tipo.)");
+
+            var stage = stageForKind(kind);
+
+            var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
+
+            // competência: usa override do topo; se vazio, tenta derivar pela data
+            var comp = compOverride || "";
+            if (!comp) comp = guessCompetenciaIdFromISO(start);
+
+            var p = Promise.resolve();
+            for (var k = 0; k < count; k++) (function(idx){
+              p = p.then(function(){
+                var dt = calcDate(start, r, idx);
+
+                var fields = {};
+                fields.TITLE = "FIN • " + kind + " • " + fav;
+                fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
+                fields.STAGE_ID = stage;
+
+                fields[CFG.F.TIPO_FIN] = tipoEnum;
+                if (comp) fields[CFG.F.COMPETENCIA] = comp; // opcional
+                if (cc) fields[CFG.F.CENTRO_CUSTO] = cc;
+                if (conta) fields[CFG.F.CONTA] = conta;
+                if (cat) fields[CFG.F.CATEGORIA] = cat;
+
+                fields[CFG.F.DATA_PREV] = dt;
+                fields[CFG.F.VALOR_PREV] = vprev;
+                fields[CFG.F.FAVORECIDO] = fav;
+                if (obs) fields[CFG.F.OBS] = obs;
+
+                return createDeal(fields).then(function(){ created++; });
+              });
+            })(k);
+
+            return p;
+          });
+        })(rows[i]);
+
+        ops.then(function(){
+          toast("Lote criado ✅ (" + created + " itens)");
+          m.close();
+          return refresh();
+        }).catch(function(e){
+          toast("Falha no lote: " + (e.message || String(e)), "err");
+        }).finally(function(){
+          setLoading(false);
+        });
+
+      } catch(err) {
+        toast(err.message || String(err), "err");
+        setLoading(false);
+      }
+    }
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">LOTE — Lançar várias despesas/receitas</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body"><div id="batch-host"></div></div>'
+    );
+
+    renderTable(m.q("#batch-host"));
+  }
+
+  function openReserveModal() {
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Fundo de Reserva</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-field"><label>Saldo atual</label><input id="rv" value="' + esc(String(S.reserve.balance || 0).replace(".", ",")) + '" placeholder="Ex.: 5000,00"></div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="rsave" data-busylock="1">Salvar</button>' +
+        '</div>' +
+      '</div>'
+    );
+    m.q("#rsave").addEventListener("click", function () {
+      var val = parseMoneyBR(m.q("#rv").value || "");
+      S.reserve.balance = val;
+      saveReserve();
+      toast("Reserva atualizada ✅");
+      m.close();
+      renderTotals();
+    });
+  }
+
+  function renderTable() {
+    var tb = el("#fin-tbody");
+    if (!tb) return;
+
+    var list = S.filtered || [];
+    if (!list.length) {
+      tb.innerHTML = '<tr><td colspan="11" class="fin-muted">Nenhum item encontrado.</td></tr>';
+      return;
+    }
+
+    var rows = [];
+    for (var i = 0; i < list.length && i < CFG.PAGE_SIZE; i++) {
+      var d = list[i];
+      var fav = d[CFG.F.FAVORECIDO] || d.TITLE || "";
+
+      var st = String(d.STAGE_ID || "");
+      var canCheck = (st === CFG.STAGES.DESP_A_PAGAR) || (st === CFG.STAGES.REC_A_RECEBER);
+      var chkLabel = (st === CFG.STAGES.DESP_A_PAGAR) ? "Pagar" : ((st === CFG.STAGES.REC_A_RECEBER) ? "Receber" : "");
+      var chk = canCheck
+        ? '<span class="fin-rowchk"><input type="checkbox" data-act="chk" data-id="' + esc(d.ID) + '"><span>' + esc(chkLabel) + '</span></span>'
+        : '<span class="fin-muted">—</span>';
+
+      rows.push(
+        "<tr>" +
+          '<td class="fin-mono">#' + esc(d.ID) + "</td>" +
+          "<td><div class=\"fin-strong\">" + esc(fav) + "</div><div class=\"fin-small fin-muted\">" + esc(enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA]) || "") + "</div></td>" +
+          "<td>" + esc(enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]) || "") + "</td>" +
+          "<td>" + esc(enumName(CFG.F.CONTA, d[CFG.F.CONTA]) || "") + "</td>" +
+          "<td>" + esc(enumName(CFG.F.TIPO_FIN, d[CFG.F.TIPO_FIN]) || "") + "</td>" +
+          "<td>" + esc(enumName(CFG.F.COMPETENCIA, d[CFG.F.COMPETENCIA]) || "") + "</td>" +
+          '<td class="fin-mono">' + esc(toISODate(d[CFG.F.DATA_PREV] || "")) + "</td>" +
+          '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_PREV])) + "</td>" +
+          '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_REAL])) + "</td>" +
+          "<td>" + esc(stageName(d.STAGE_ID)) + "</td>" +
+          "<td>" +
+            '<div class="fin-actions-row">' +
+              chk +
+              '<button class="fin-mini fin-mini--danger" data-act="del" data-id="' + esc(d.ID) + '">Excluir</button>' +
+            "</div>" +
+          "</td>" +
+        "</tr>"
+      );
+    }
+
+    tb.innerHTML = rows.join("");
+
+    var btns = tb.querySelectorAll("[data-act]");
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].addEventListener("click", function () {
+        var id = this.getAttribute("data-id");
+        var act = this.getAttribute("data-act");
+        var deal = null;
+        for (var x = 0; x < S.deals.length; x++) if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
+        if (!deal) return;
+
+        if (act === "del") return confirmDelete(deal);
+        if (act === "chk") {
+          try { this.checked = false; } catch(_) {}
+          return openPayReceiveModal(deal);
+        }
+      });
+    }
+  }
+
+  function render() {
+    root.innerHTML =
+      '<div class="fin-page">' +
+
+        '<header class="fin-topbar">' +
+          '<div class="fin-top-left">' +
+            '<img class="fin-top-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
+            '<div>' +
+              '<div class="fin-top-title">Financeiro CGD</div>' +
+              '<div class="fin-top-sub"><span id="fin-lastsync">—</span> <span id="fin-loading" class="fin-loading" style="display:none">Carregando…</span></div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="fin-top-actions">' +
+            '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
+            '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
+            '<button class="fin-btn fin-btn--primary" id="btn-batch" data-busylock="1">LOTE</button>' +
+            '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
+          '</div>' +
+        '</header>' +
+
+        '<div class="fin-shell">' +
+          '<div class="fin-body">' +
+            '<aside class="fin-side">' +
+              '<div class="fin-side-brand">' + /* ✅ sem logo duplicada */
+                '<div class="fin-brand-title">Financeiro CGD</div>' +
+                '<div class="fin-brand-sub">Deals • Pipeline 27</div>' +
+              '</div>' +
+              '<div class="fin-side-block">' +
+                '<div class="fin-side-h">Centro de custo</div>' +
+                '<div id="fin-side-centers" class="fin-side-list"></div>' +
+              '</div>' +
+            '</aside>' +
+
+            '<main>' +
+              '<section class="fin-panel"><div class="fin-panel-inner">' +
+
+                '<div class="fin-kpis">' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
+                '</div>' +
+
+                '<div class="fin-filters">' +
+                  '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+                  '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+                  '<div style="flex-basis:100%; height:0"></div>' +
+
+                  '<div class="fin-toggles">' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas</span></label>' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas</span></label>' +
+                    '<div class="fin-check" style="margin-left:auto"><span class="fin-muted">Qtd. Itens:</span> <span id="tot-count" class="fin-strong">0</span></div>' +
+                  '</div>' +
+
+                  '<div class="fin-charts" style="flex-basis:100%">' +
+                    '<div id="chart-cat"></div>' +
+                    '<div id="chart-evo"></div>' +
+                  '</div>' +
+                '</div>' +
+
+                '<div class="fin-table-wrap" style="margin-top:12px">' +
+                  '<table class="fin-table">' +
+                    '<thead><tr>' +
+                      '<th style="width:76px">ID</th>' +
+                      '<th>Favorecido</th>' +
+                      '<th style="width:170px">Centro</th>' +
+                      '<th style="width:170px">Conta</th>' +
+                      '<th style="width:140px">Tipo</th>' +
+                      '<th style="width:130px">Competência</th>' +
+                      '<th style="width:120px">Data Prev.</th>' +
+                      '<th style="width:140px">Previsto</th>' +
+                      '<th style="width:140px">Realizado</th>' +
+                      '<th style="width:160px">Etapa</th>' +
+                      '<th style="width:320px">Ações</th>' +
+                    '</tr></thead>' +
+                    '<tbody id="fin-tbody"><tr><td colspan="11" class="fin-muted">Carregando…</td></tr></tbody>' +
+                  '</table>' +
+                '</div>' +
+
+                '<div id="fin-toast-host" class="fin-toast-host"></div>' +
+
+              '</div></section>' +
+            '</main>' +
+          '</div>' +
+        '</div>' +
+
+        /* ✅ Rodapé CGD (agora é DIV, não some) */
+        '<div class="fin-footerbar">' +
+          '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + '</div></div>' +
+          '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + '</div>' +
+          '<div class="fin-footer-right">' +
+            CFG.FOOTER.companies.map(function (c) {
+              return '<div class="fin-footer-box"><div class="t">' + esc(c.name) + '</div><div class="s">' + esc(c.meta) + '</div></div>';
+            }).join("") +
+          '</div>' +
+          '<div class="fin-footer-avatars" id="fin-avatars"></div>' +
+        '</div>' +
+
+      '</div>';
+
+    // handlers
+    el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
+
+    // ✅ LOTE agora abre SEM FALHA
+    el("#btn-batch").addEventListener("click", function () { openBatchTableModal(); });
+
+    el("#btn-refresh").addEventListener("click", function () { refresh(); });
+
+    el("#f-q").addEventListener("input", function (e) { S.filters.q = e.target.value || ""; applyFilters(); });
+    el("#f-comp").addEventListener("change", function () { S.filters.competencia = el("#f-comp").value || ""; applyFilters(); });
+    el("#f-conta").addEventListener("change", function () { S.filters.conta = el("#f-conta").value || ""; applyFilters(); });
+
+    el("#tog-exp").addEventListener("change", function () { S.filters.showPayables = !!el("#tog-exp").checked; applyFilters(); });
+    el("#tog-rec").addEventListener("change", function () { S.filters.showReceivables = !!el("#tog-rec").checked; applyFilters(); });
+
+    renderSidebarCenters();
+    renderChartsPlaceholders();
+  }
+
+  function refresh() {
+    setLoading(true);
+    return listDealsAll()
+      .then(function (deals) {
+        S.deals = deals || [];
+        S.lastSyncAt = nowBR();
+        applyFilters();
+      })
+      .catch(function (e) {
+        toast("Falha ao carregar: " + (e.message || String(e)), "err");
+        var tb = el("#fin-tbody");
+        if (tb) tb.innerHTML = '<tr><td colspan="11" class="fin-muted">Erro: ' + esc(e.message || String(e)) + '</td></tr>';
+      })
+      .finally(function () { setLoading(false); });
+  }
+
+  // Promise.finally fallback
+  if (!Promise.prototype.finally) {
+    Promise.prototype.finally = function (cb) {
+      var P = this.constructor;
+      return this.then(
+        function (v) { return P.resolve(cb()).then(function () { return v; }); },
+        function (e) { return P.resolve(cb()).then(function () { throw e; }); }
+      );
+    };
+  }
+
+  function boot() {
+    loadReserve();
+    return loadMeta()
+      .then(function () {
+        render();
+        return loadPartners();
+      })
+      .then(function () {
+        renderPartnersAvatars();
+        return refresh();
+      })
+      .catch(function (e) {
+        toast("Erro ao iniciar: " + (e.message || String(e)), "err");
+        root.innerHTML = '<div style="padding:16px">Falha ao iniciar. Veja console.</div>';
+      });
+  }
+
+  boot();
 })();
