@@ -9,6 +9,10 @@
     REMINDER_CATEGORY_ID: 17,
     REMINDER_ASSIGNED_ID: 813,
 
+    // ⚠️ AJUSTE SE SUA "coluna Manuela" tiver outro STAGE_ID:
+    // Se você não souber, me mande o STAGE_ID da coluna da Manuela na pipeline 17.
+    REMINDER_STAGE_ID: "C17:PREPARATION",
+
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w",
 
     FOOTER: {
@@ -60,24 +64,45 @@
   function parseJson(t) { try { return JSON.parse(t); } catch (_) { return null; } }
   function el(q) { return root.querySelector(q); }
 
+  // ===== PATCH CRÍTICO: API CALL sem preflight =====
+  // 1) tenta GET simples (evita CORS/preflight)
+  // 2) fallback: GET path
+  // 3) fallback: POST query
+  // 4) fallback: POST path
   function apiCall(method, payload) {
-    var body = JSON.stringify(payload || {});
-    var headers = { "content-type": "application/json" };
+    payload = payload || {};
+    var body = JSON.stringify(payload);
+    var headersPost = { "content-type": "application/json" };
 
-    function req(url) {
-      return fetch(url, { method: "POST", headers: headers, body: body })
-        .then(function (r) {
-          return r.text().then(function (txt) {
-            var j = parseJson(txt);
-            if (!r.ok) throw new Error((j && (j.error_description || j.error)) || txt || ("HTTP " + r.status));
-            if (j && j.error) throw new Error(j.error_description || j.error);
-            return { json: j || {}, mode: (url.indexOf("?method=") > -1 ? "query" : "path") };
-          });
-        });
+    function parseResp(r, url, mode) {
+      return r.text().then(function (txt) {
+        var j = parseJson(txt);
+        if (!r.ok) throw new Error("HTTP " + r.status + " @ " + url + " :: " + (txt || ""));
+        if (j && j.error) throw new Error((j.error_description || j.error) + " @ " + method);
+        return { json: j || {}, mode: mode };
+      });
     }
 
-    return req(API_BASE + "/" + method)
-      .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
+    function reqGET(url, mode) {
+      // GET simples: sem headers custom, sem body
+      var u = url;
+      var qs = encodeURIComponent(JSON.stringify(payload));
+      u += (u.indexOf("?") >= 0 ? "&" : "?") + "p=" + qs;
+      return fetch(u, { method: "GET" }).then(function (r) { return parseResp(r, u, mode); });
+    }
+
+    function reqPOST(url, mode) {
+      return fetch(url, { method: "POST", headers: headersPost, body: body })
+        .then(function (r) { return parseResp(r, url, mode); });
+    }
+
+    var uQuery = API_BASE + "?method=" + encodeURIComponent(method);
+    var uPath = API_BASE + "/" + method;
+
+    return reqGET(uQuery, "get-query")
+      .catch(function(){ return reqGET(uPath, "get-path"); })
+      .catch(function(){ return reqPOST(uQuery, "post-query"); })
+      .catch(function(){ return reqPOST(uPath, "post-path"); })
       .then(function (res) { S.apiMode = res.mode; return res.json; });
   }
 
@@ -143,7 +168,7 @@
       var fd = Math.max(1, Math.min(31, Number(forceDay) || 1));
       var tryD = new Date(d.getFullYear(), d.getMonth(), fd);
       if (tryD.getMonth() === d.getMonth()) d = tryD;
-      else d = new Date(d.getFullYear(), d.getMonth() + 1, 0); // último dia do mês
+      else d = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     }
 
     var yy = d.getFullYear();
@@ -160,7 +185,7 @@
     var da = (forceDay != null) ? Math.max(1, Math.min(31, Number(forceDay)||1)) : Number(m[3]);
 
     var d = new Date(y, mo, da);
-    if (d.getMonth() !== mo) d = new Date(y, mo + 1, 0); // último dia do mês se inválido
+    if (d.getMonth() !== mo) d = new Date(y, mo + 1, 0);
     var yy = d.getFullYear();
     var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
     var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
@@ -182,12 +207,13 @@
     }, 3200);
   }
 
-  function modal(html) {
+  function modal(html, opts) {
+    opts = opts || {};
     var wrap = document.createElement("div");
     wrap.className = "fin-modal-wrap";
     wrap.innerHTML =
       '<div class="fin-modal-backdrop" data-close="1"></div>' +
-      '<div class="fin-modal">' + html + "</div>";
+      '<div class="fin-modal ' + (opts.full ? 'is-full' : '') + '">' + html + "</div>";
     document.body.appendChild(wrap);
 
     wrap.addEventListener("click", function (e) {
@@ -279,6 +305,28 @@
   function updateDeal(id, fields) { return apiCall("crm.deal.update", { id: String(id), fields: fields || {} }); }
   function createDeal(fields) { return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) { return r && r.result ? r.result : null; }); }
   function deleteDeal(id) { return apiCall("crm.deal.delete", { id: String(id) }); }
+
+  // ===== LEMBRETE PIPELINE 17 (MANUELA) =====
+  function createReminderDeal(finDealId, kind, fav, vprev, dateISO, freqLabel) {
+    var title = "LEMBRETE FIN • " + kind + " • " + (fav || ("#" + finDealId));
+    var desc = [
+      "Origem: Financeiro (Pipeline 27)",
+      "Deal Financeiro: " + finDealId,
+      "Tipo: " + kind,
+      "Favorecido: " + (fav || ""),
+      "Valor: " + moneyBR(vprev || 0),
+      "Data inicial: " + (dateISO || ""),
+      "Recorrência: " + freqLabel
+    ].join("\n");
+
+    return createDeal({
+      TITLE: title,
+      CATEGORY_ID: String(CFG.REMINDER_CATEGORY_ID),
+      STAGE_ID: String(CFG.REMINDER_STAGE_ID),
+      ASSIGNED_BY_ID: String(CFG.REMINDER_ASSIGNED_ID),
+      COMMENTS: desc
+    });
+  }
 
   function loadMeta() {
     return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
@@ -382,17 +430,46 @@
     host.innerHTML = html.join("");
   }
 
+  // ===== SALDO POR CENTRO =====
+  function calcCenterBalances() {
+    var map = {};
+    var list = S.deals || [];
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (String(d.CATEGORY_ID) !== String(CFG.DEAL_CATEGORY_ID)) continue;
+
+      var centro = String(d[CFG.F.CENTRO_CUSTO] || "");
+      if (!centro) centro = "__SEM__";
+
+      var st = String(d.STAGE_ID || "");
+      var isRec = (st === CFG.STAGES.REC_A_RECEBER || st === CFG.STAGES.REC_RECEBIDA);
+      var isExp = (st === CFG.STAGES.DESP_A_PAGAR || st === CFG.STAGES.DESP_PAGA);
+
+      if (!isRec && !isExp) continue;
+
+      // saldo: usa REAL se tiver, senão PREV
+      var val = Number(d[CFG.F.VALOR_REAL] || 0) || Number(d[CFG.F.VALOR_PREV] || 0) || 0;
+
+      if (!map[centro]) map[centro] = 0;
+      map[centro] += (isRec ? val : -val);
+    }
+    return map;
+  }
+
   function renderSidebarCenters() {
     var host = el("#fin-side-centers");
     if (!host) return;
 
     var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
     var sel = String(S.filters.centro || "");
+    var bal = calcCenterBalances();
 
     function btn(id, label, active) {
+      var b = (id ? (bal[id] || 0) : 0);
+      var right = id ? ('<span class="fin-muted" style="margin-left:auto">' + esc(moneyBR(b)) + "</span>") : "";
       return (
         '<button class="fin-side-item ' + (active ? "is-active" : "") + '" data-centro="' + esc(id) + '">' +
-          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" +
+          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" + right +
         "</button>"
       );
     }
@@ -480,6 +557,7 @@
     renderTable();
     renderTotals();
     renderChartsPlaceholders();
+    renderSidebarCenters(); // saldo atualizado
   }
 
   function nextStageByCurrent(stageId) {
@@ -507,7 +585,7 @@
           '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
         '</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
           '<button class="fin-btn fin-btn--primary" id="pr-save" data-busylock="1">Salvar</button>' +
         '</div>' +
       '</div>'
@@ -537,7 +615,7 @@
       '<div class="fin-modal-body">' +
         '<div style="font-weight:900">Tem certeza que deseja EXCLUIR o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
           '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
         '</div>' +
       '</div>'
@@ -552,10 +630,6 @@
     });
   }
 
-  /* ===== Competência =====
-     - Para recorrentes: NÃO é obrigatória (a não ser que seu campo no Bitrix esteja marcado como obrigatório).
-     - Se não preencher, tentamos achar um enum compatível pelo mês/ano da Data inicial.
-  */
   function guessCompetenciaIdFromISO(iso) {
     iso = toISODate(iso);
     var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -568,8 +642,6 @@
       var v = String(list[i].VALUE || "").toLowerCase();
       if (v.indexOf(yy) > -1) candidates.push(list[i]);
     }
-    // tenta achar pelo mês como "02" ou "fev"
-    var mmNum = String(Number(mm)); // 2
     var map = {
       "01":["jan","janeiro","01"],
       "02":["fev","fevereiro","02"],
@@ -584,14 +656,13 @@
       "11":["nov","novembro","11"],
       "12":["dez","dezembro","12"]
     };
-    var keys = map[mm] || [mm, mmNum];
+    var keys = map[mm] || [mm, String(Number(mm))];
     for (var j = 0; j < candidates.length; j++) {
       var t = String(candidates[j].VALUE || "").toLowerCase();
       for (var k = 0; k < keys.length; k++) {
         if (t.indexOf(keys[k]) > -1) return String(candidates[j].ID);
       }
     }
-    // fallback: procura no list inteiro
     for (var a = 0; a < list.length; a++) {
       var tt = String(list[a].VALUE || "").toLowerCase();
       for (var kk = 0; kk < keys.length; kk++) {
@@ -601,51 +672,120 @@
     return "";
   }
 
-  /* ========= LOTE (Tabela) ========= */
-  function openBatchTableModal() {
-    // linhas
-    var rows = [
-      mkRow()
-    ];
+  // ========= TRANSFERÊNCIA ENTRE CENTROS =========
+  function openTransferModal() {
+    var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—");
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Transferir entre centros</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-row" style="flex-wrap:wrap">' +
+          '<div class="fin-field" style="min-width:260px;flex:1"><label>De (Centro)</label><select id="tr-from">' + ccOpts + '</select></div>' +
+          '<div class="fin-field" style="min-width:260px;flex:1"><label>Para (Centro)</label><select id="tr-to">' + ccOpts + '</select></div>' +
+        '</div>' +
+        '<div class="fin-row" style="flex-wrap:wrap;margin-top:10px">' +
+          '<div class="fin-field" style="min-width:260px;flex:1"><label>Valor</label><input id="tr-val" placeholder="Ex.: 1500,00"></div>' +
+          '<div class="fin-field" style="min-width:260px;flex:1"><label>Data</label><input id="tr-date" placeholder="YYYY-MM-DD"></div>' +
+        '</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="tr-go" data-busylock="1">Transferir</button>' +
+        '</div>' +
+      '</div>'
+    );
 
-    function mkRow() {
+    function tipoEnumForKind(kind) {
+      var items = S.enums[CFG.F.TIPO_FIN] || [];
+      for (var i = 0; i < items.length; i++) {
+        var t = String(items[i].VALUE || "").toUpperCase();
+        if (kind === "DESPESA" && t.indexOf("DESP") > -1) return String(items[i].ID);
+        if (kind === "RECEITA" && t.indexOf("REC") > -1) return String(items[i].ID);
+      }
+      return "";
+    }
+
+    m.q("#tr-go").addEventListener("click", function(){
+      var from = m.q("#tr-from").value || "";
+      var to = m.q("#tr-to").value || "";
+      var val = parseMoneyBR(m.q("#tr-val").value || "");
+      var dt = toISODate(m.q("#tr-date").value || "");
+
+      if (!from || !to || from === to) { toast("Escolha centros diferentes.", "err"); return; }
+      if (!val) { toast("Informe o valor.", "err"); return; }
+      if (!dt) { toast("Informe a data (YYYY-MM-DD).", "err"); return; }
+
+      var tipoDesp = tipoEnumForKind("DESPESA");
+      var tipoRec = tipoEnumForKind("RECEITA");
+      if (!tipoDesp || !tipoRec) { toast("Enum Tipo Financeiro (DESPESA/RECEITA) não encontrado.", "err"); return; }
+
+      setLoading(true);
+
+      // cria 1 despesa (saída) e 1 receita (entrada)
+      createDeal({
+        TITLE: "TRANSFERÊNCIA • SAÍDA",
+        CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
+        STAGE_ID: CFG.STAGES.DESP_A_PAGAR,
+        [CFG.F.TIPO_FIN]: tipoDesp,
+        [CFG.F.CENTRO_CUSTO]: from,
+        [CFG.F.FAVORECIDO]: "Transferência entre centros",
+        [CFG.F.VALOR_PREV]: val,
+        [CFG.F.DATA_PREV]: dt
+      }).then(function(){
+        return createDeal({
+          TITLE: "TRANSFERÊNCIA • ENTRADA",
+          CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID),
+          STAGE_ID: CFG.STAGES.REC_A_RECEBER,
+          [CFG.F.TIPO_FIN]: tipoRec,
+          [CFG.F.CENTRO_CUSTO]: to,
+          [CFG.F.FAVORECIDO]: "Transferência entre centros",
+          [CFG.F.VALOR_PREV]: val,
+          [CFG.F.DATA_PREV]: dt
+        });
+      }).then(function(){
+        toast("Transferência criada ✅");
+        m.close();
+        return refresh();
+      }).catch(function(e){
+        toast("Falha: " + (e.message || String(e)), "err");
+      }).finally(function(){
+        setLoading(false);
+      });
+    });
+  }
+
+  /* ========= LOTE (Tabela) ========= */
+  function openBatchTableModal(kindFixed) {
+    // kindFixed: "DESPESA" | "RECEITA"
+    var rows = [];
+    for (var n=0;n<15;n++) rows.push(mkRow(kindFixed)); // ✅ 15 linhas por padrão
+
+    function mkRow(kind) {
       return {
         centro: "",
-        conta: "",
+        conta: "",      // opcional
         categoria: "",
         favorecido: "",
         valor: "",
-        obs: "",
-        // tipo do lançamento (despesa/receita)
-        kind: "DESPESA",
-        // recorrência
-        freq: "once",          // once | weekly | monthly | yearly
-        // parâmetros
+        obs: "",        // opcional
+        kind: (kind === "RECEITA") ? "RECEITA" : "DESPESA",
+        freq: "once",   // once | weekly | monthly | yearly
         start: "",
         count: "1",
-        weekday: "1",          // 1..7 (seg..dom)
-        monthday: "1",         // 1..31
-        month: "1"             // 1..12 (anual)
+        weekday: "1",
+        monthday: "1",
+        month: "1"
       };
-    }
-
-    function weekdayLabel(v){
-      var m = { "1":"Seg", "2":"Ter", "3":"Qua", "4":"Qui", "5":"Sex", "6":"Sáb", "7":"Dom" };
-      return m[String(v)] || v;
     }
 
     function calcDate(baseISO, row, idx) {
       baseISO = toISODate(baseISO);
       if (!baseISO) return "";
-
       if (row.freq === "once") return baseISO;
 
       if (row.freq === "weekly") {
-        // se escolher "dia da semana", ajusta a primeira ocorrência pro próximo dia
-        var wd = Number(row.weekday || 1); // 1..7
+        var wd = Number(row.weekday || 1);
         var d = new Date(baseISO + "T12:00:00");
-        var jswd = d.getDay(); // 0..6 (dom..sab)
-        var cur = (jswd === 0 ? 7 : jswd); // 1..7
+        var jswd = d.getDay();
+        var cur = (jswd === 0 ? 7 : jswd);
         var delta = wd - cur;
         if (delta < 0) delta += 7;
         var first = addDaysISO(baseISO, delta);
@@ -660,10 +800,8 @@
       if (row.freq === "yearly") {
         var mo = Number(row.month || 1);
         var dayy = Number(row.monthday || 1);
-        // primeiro ano usa a data base como referência (mas aplica mês/dia escolhidos)
         var baseY = String(baseISO).slice(0,4);
         var first = baseY + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
-        // se first < baseISO, joga pro próximo ano
         if (first < baseISO) first = String(Number(baseY)+1) + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
         return addYearsISO(first, idx, mo, dayy);
       }
@@ -687,55 +825,49 @@
 
     function renderTable(host) {
       var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—");
-      var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "—");
+      var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "— (opcional) —");
       var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—");
 
+      var isReceita = (kindFixed === "RECEITA");
+
       var html =
-        '<div class="fin-muted" style="margin-bottom:10px;font-weight:900">' +
-          'LOTE em modo lista/tabela. Preencha as linhas e clique em <b>Criar</b>.' +
-          '<br>Competência é opcional: se não preencher, o sistema tenta derivar pela Data inicial.' +
+        '<div class="fin-row" style="justify-content:space-between;flex-wrap:wrap;margin-bottom:10px">' +
+          '<div class="fin-muted" style="font-weight:900">' +
+            (isReceita ? 'LOTE RECEITAS' : 'LOTE DESPESAS') +
+            ' • Competência opcional • CONTA/OBS opcionais' +
+          '</div>' +
+          '<div class="fin-row fin-row--right" style="gap:8px;flex-wrap:wrap">' +
+            (isReceita ? '<button class="fin-btn" id="b-csv">Importar CSV (Favorecido;Valor;Data)</button>' : '') +
+            '<button class="fin-btn" id="b-clean">Limpar linhas vazias</button>' +
+            '<button class="fin-btn" data-close="1">Voltar</button>' +
+          '</div>' +
         '</div>' +
 
-        '<div style="overflow:auto;max-height:60vh">' +
+        '<div style="overflow:auto;max-height:70vh">' +
           '<table class="fin-batch-table">' +
             '<thead><tr>' +
-              '<th style="min-width:120px">CENTRO DE CUSTO</th>' +
-              '<th style="min-width:120px">CONTA</th>' +
-              '<th style="min-width:120px">CATEGORIA</th>' +
-              '<th style="min-width:180px">FAVORECIDO</th>' +
-              '<th style="min-width:110px">VALOR</th>' +
-              '<th style="min-width:220px">OBS</th>' +
-              '<th style="min-width:100px">TIPO</th>' +
-              '<th style="min-width:120px">RECORRÊNCIA</th>' +
-              '<th style="min-width:120px">DIA SEMANA</th>' +
-              '<th style="min-width:120px">DIA MÊS</th>' +
-              '<th style="min-width:140px">MÊS (ANUAL)</th>' +
+              '<th style="min-width:120px">CENTRO</th>' +
+              '<th style="min-width:140px">CONTA (opcional)</th>' +
+              '<th style="min-width:140px">CATEGORIA</th>' +
+              '<th style="min-width:220px">FAVORECIDO</th>' +
+              '<th style="min-width:120px">VALOR</th>' +
               '<th style="min-width:140px">DATA INICIAL</th>' +
-              '<th style="min-width:90px">QTD</th>' +
+              '<th style="min-width:220px">OBS (opcional)</th>' +
+              '<th style="min-width:130px">RECORRÊNCIA</th>' +
+              '<th style="min-width:110px">QTD</th>' +
               '<th style="min-width:90px"></th>' +
             '</tr></thead><tbody>';
 
       for (var i = 0; i < rows.length; i++) {
         var r = rows[i];
-        var showWeek = (r.freq === "weekly");
-        var showMonthDay = (r.freq === "monthly" || r.freq === "yearly");
-        var showMonth = (r.freq === "yearly");
-
         html += '<tr data-i="'+i+'">' +
-          '<td><select class="fin-batch-sel" data-k="centro">' + ccOpts.replace('value="'+esc(r.centro)+'"', 'value="'+esc(r.centro)+'" selected') + '</select></td>' +
-          '<td><select class="fin-batch-sel" data-k="conta">' + contaOpts.replace('value="'+esc(r.conta)+'"', 'value="'+esc(r.conta)+'" selected') + '</select></td>' +
-          '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts.replace('value="'+esc(r.categoria)+'"', 'value="'+esc(r.categoria)+'" selected') + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="centro">' + ccOpts + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="conta">' + contaOpts + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts + '</select></td>' +
           '<td><input class="fin-batch-inp" data-k="favorecido" value="'+esc(r.favorecido)+'" placeholder="Ex.: Light, Cliente..."></td>' +
           '<td><input class="fin-batch-inp" data-k="valor" value="'+esc(r.valor)+'" placeholder="1500,00"></td>' +
+          '<td><input class="fin-batch-inp" data-k="start" value="'+esc(r.start)+'" placeholder="YYYY-MM-DD"></td>' +
           '<td><textarea class="fin-batch-txt" data-k="obs" placeholder="Observações...">'+esc(r.obs)+'</textarea></td>' +
-
-          '<td>' +
-            '<select class="fin-batch-sel" data-k="kind">' +
-              '<option value="DESPESA" '+(r.kind==="DESPESA"?"selected":"")+'>DESPESA</option>' +
-              '<option value="RECEITA" '+(r.kind==="RECEITA"?"selected":"")+'>RECEITA</option>' +
-            '</select>' +
-          '</td>' +
-
           '<td>' +
             '<select class="fin-batch-sel" data-k="freq">' +
               '<option value="once" '+(r.freq==="once"?"selected":"")+'>Avulsa</option>' +
@@ -744,25 +876,7 @@
               '<option value="yearly" '+(r.freq==="yearly"?"selected":"")+'>Anual</option>' +
             '</select>' +
           '</td>' +
-
-          '<td>' +
-            '<select class="fin-batch-sel" data-k="weekday" '+(showWeek?'':'disabled')+'>' +
-              '<option value="1" '+(r.weekday==="1"?"selected":"")+'>Seg</option>' +
-              '<option value="2" '+(r.weekday==="2"?"selected":"")+'>Ter</option>' +
-              '<option value="3" '+(r.weekday==="3"?"selected":"")+'>Qua</option>' +
-              '<option value="4" '+(r.weekday==="4"?"selected":"")+'>Qui</option>' +
-              '<option value="5" '+(r.weekday==="5"?"selected":"")+'>Sex</option>' +
-              '<option value="6" '+(r.weekday==="6"?"selected":"")+'>Sáb</option>' +
-              '<option value="7" '+(r.weekday==="7"?"selected":"")+'>Dom</option>' +
-            '</select>' +
-          '</td>' +
-
-          '<td><input class="fin-batch-inp" data-k="monthday" value="'+esc(r.monthday)+'" '+(showMonthDay?'':'disabled')+' placeholder="1..31"></td>' +
-          '<td><input class="fin-batch-inp" data-k="month" value="'+esc(r.month)+'" '+(showMonth?'':'disabled')+' placeholder="1..12"></td>' +
-
-          '<td><input class="fin-batch-inp" data-k="start" value="'+esc(r.start)+'" placeholder="YYYY-MM-DD"></td>' +
           '<td><input class="fin-batch-inp" data-k="count" value="'+esc(r.count)+'" placeholder="1"></td>' +
-
           '<td><button class="fin-btn fin-btn--danger" data-del="1" style="width:100%">Remover</button></td>' +
         '</tr>';
       }
@@ -774,12 +888,35 @@
             '<div class="fin-field" style="min-width:260px"><label>Competência (opcional)</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || [], true, "Automático") + '</select></div>' +
             '<button class="fin-btn fin-btn--primary" id="b-create" data-busylock="1">Criar</button>' +
           '</div>' +
-        '</div>';
+        '</div>' +
+        (isReceita ? '<input type="file" id="csvfile" accept=".csv" style="display:none">' : '');
 
       host.innerHTML = html;
 
+      // set selected values after render (evita replace)
+      var trs = host.querySelectorAll("tr[data-i]");
+      for (var x=0;x<trs.length;x++){
+        var idx = Number(trs[x].getAttribute("data-i"));
+        var rr = rows[idx];
+        var s1 = trs[x].querySelector('[data-k="centro"]'); if (s1) s1.value = rr.centro || "";
+        var s2 = trs[x].querySelector('[data-k="conta"]'); if (s2) s2.value = rr.conta || "";
+        var s3 = trs[x].querySelector('[data-k="categoria"]'); if (s3) s3.value = rr.categoria || "";
+        var s4 = trs[x].querySelector('[data-k="freq"]'); if (s4) s4.value = rr.freq || "once";
+      }
+
       host.querySelector("#b-add").addEventListener("click", function(){
-        rows.push(mkRow());
+        rows.push(mkRow(kindFixed));
+        renderTable(host);
+      });
+
+      host.querySelector("#b-clean").addEventListener("click", function(){
+        var kept = [];
+        for (var i=0;i<rows.length;i++){
+          var r = rows[i];
+          var has = (String(r.favorecido||"").trim() || String(r.valor||"").trim() || String(r.start||"").trim() || String(r.categoria||"").trim());
+          if (has) kept.push(r);
+        }
+        rows = kept.length ? kept : [mkRow(kindFixed)];
         renderTable(host);
       });
 
@@ -804,9 +941,6 @@
         var k = e.target.getAttribute("data-k");
         if (!k) return;
         rows[i][k] = e.target.value;
-
-        // se mudou frequência, re-render pra habilitar/desabilitar campos (semana/mês/ano)
-        if (k === "freq") renderTable(host);
       });
 
       tbody.addEventListener("click", function(e){
@@ -815,23 +949,69 @@
         var tr = btn.closest("tr[data-i]");
         var i = Number(tr.getAttribute("data-i"));
         rows.splice(i, 1);
-        if (!rows.length) rows.push(mkRow());
+        if (!rows.length) rows.push(mkRow(kindFixed));
         renderTable(host);
       });
+
+      // CSV (só receitas)
+      if (isReceita) {
+        host.querySelector("#b-csv").addEventListener("click", function(){
+          host.querySelector("#csvfile").click();
+        });
+        host.querySelector("#csvfile").addEventListener("change", function(ev){
+          var f = ev.target.files && ev.target.files[0];
+          if (!f) return;
+          var reader = new FileReader();
+          reader.onload = function(){
+            var txt = String(reader.result || "");
+            var lines = txt.split(/\r?\n/).filter(function(l){ return String(l||"").trim(); });
+            if (!lines.length) return;
+
+            // aceita ; ou ,
+            function splitLine(line){
+              var a = line.split(";");
+              if (a.length >= 3) return a;
+              return line.split(",");
+            }
+
+            // pula header se parecer
+            var startAt = 0;
+            var head = splitLine(lines[0]).map(function(x){ return String(x||"").toLowerCase(); }).join("|");
+            if (head.indexOf("fav")>-1 || head.indexOf("valor")>-1 || head.indexOf("data")>-1) startAt = 1;
+
+            var idxRow = 0;
+            for (var i=startAt;i<lines.length;i++){
+              var cols = splitLine(lines[i]);
+              var fav = String(cols[0]||"").trim();
+              var val = String(cols[1]||"").trim();
+              var dat = String(cols[2]||"").trim();
+              if (!fav && !val && !dat) continue;
+
+              if (!rows[idxRow]) rows.push(mkRow("RECEITA"));
+              rows[idxRow].favorecido = fav;
+              rows[idxRow].valor = val;
+              rows[idxRow].start = toISODate(dat);
+              idxRow++;
+            }
+            renderTable(host);
+            toast("CSV importado ✅", "ok");
+          };
+          reader.readAsText(f);
+        });
+      }
     }
 
     function createBatch(compOverride) {
       setLoading(true);
 
       try {
-        // valida e cria
         var ops = Promise.resolve();
         var created = 0;
 
         for (var i = 0; i < rows.length; i++) (function(r){
           ops = ops.then(function(){
             var fav = String(r.favorecido || "").trim();
-            if (!fav) throw new Error("Linha sem Favorecido.");
+            if (!fav) return; // linha vazia: ignora
             if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
 
             var vprev = parseMoneyBR(r.valor || "");
@@ -839,19 +1019,17 @@
             if (!start) throw new Error("Linha sem Data inicial (YYYY-MM-DD).");
 
             var cc = r.centro || "";
-            var conta = r.conta || "";
+            var conta = r.conta || "";   // opcional
             var cat = r.categoria || "";
-            var obs = String(r.obs || "").trim();
+            var obs = String(r.obs || "").trim(); // opcional
 
-            var kind = (r.kind === "RECEITA") ? "RECEITA" : "DESPESA";
+            var kind = (kindFixed === "RECEITA") ? "RECEITA" : "DESPESA";
             var tipoEnum = tipoEnumForKind(kind);
-            if (!tipoEnum) throw new Error("Não encontrei enum de Tipo Financeiro para " + kind + ". (Precisa existir um item DESPESA/RECEITA no seu campo Tipo.)");
+            if (!tipoEnum) throw new Error("Não encontrei enum de Tipo Financeiro para " + kind + ".");
 
             var stage = stageForKind(kind);
-
             var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
 
-            // competência: usa override do topo; se vazio, tenta derivar pela data
             var comp = compOverride || "";
             if (!comp) comp = guessCompetenciaIdFromISO(start);
 
@@ -866,17 +1044,25 @@
                 fields.STAGE_ID = stage;
 
                 fields[CFG.F.TIPO_FIN] = tipoEnum;
-                if (comp) fields[CFG.F.COMPETENCIA] = comp; // opcional
+                if (comp) fields[CFG.F.COMPETENCIA] = comp;
                 if (cc) fields[CFG.F.CENTRO_CUSTO] = cc;
-                if (conta) fields[CFG.F.CONTA] = conta;
+                if (conta) fields[CFG.F.CONTA] = conta;        // ✅ opcional
                 if (cat) fields[CFG.F.CATEGORIA] = cat;
 
                 fields[CFG.F.DATA_PREV] = dt;
                 fields[CFG.F.VALOR_PREV] = vprev;
                 fields[CFG.F.FAVORECIDO] = fav;
-                if (obs) fields[CFG.F.OBS] = obs;
+                if (obs) fields[CFG.F.OBS] = obs;              // ✅ opcional
 
-                return createDeal(fields).then(function(){ created++; });
+                return createDeal(fields).then(function(finId){
+                  created++;
+
+                  // ✅ Se recorrente, cria lembrete na Pipeline 17 (Manuela)
+                  if (r.freq && r.freq !== "once") {
+                    var label = (r.freq === "weekly") ? "Semanal" : (r.freq === "monthly") ? "Mensal" : (r.freq === "yearly") ? "Anual" : "Recorrente";
+                    return createReminderDeal(finId, kind, fav, vprev, dt, label);
+                  }
+                });
               });
             })(k);
 
@@ -901,8 +1087,12 @@
     }
 
     var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">LOTE — Lançar várias despesas/receitas</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body"><div id="batch-host"></div></div>'
+      '<div class="fin-modal-head">' +
+        '<div class="fin-modal-title">' + esc((kindFixed==="RECEITA") ? "LOTE — RECEITAS" : "LOTE — DESPESAS") + '</div>' +
+        '<button class="fin-x" data-close="1" title="Voltar">×</button>' +
+      '</div>' +
+      '<div class="fin-modal-body"><div id="batch-host"></div></div>',
+      { full: true } // ✅ quase tela cheia
     );
 
     renderTable(m.q("#batch-host"));
@@ -914,7 +1104,7 @@
       '<div class="fin-modal-body">' +
         '<div class="fin-field"><label>Saldo atual</label><input id="rv" value="' + esc(String(S.reserve.balance || 0).replace(".", ",")) + '" placeholder="Ex.: 5000,00"></div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
           '<button class="fin-btn fin-btn--primary" id="rsave" data-busylock="1">Salvar</button>' +
         '</div>' +
       '</div>'
@@ -1008,8 +1198,10 @@
 
           '<div class="fin-top-actions">' +
             '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
+            '<button class="fin-btn" id="btn-transfer" data-busylock="1">TRANSFERIR</button>' +
             '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
-            '<button class="fin-btn fin-btn--primary" id="btn-batch" data-busylock="1">LOTE</button>' +
+            '<button class="fin-btn fin-btn--primary" id="btn-batch-exp" data-busylock="1">LOTE DESPESAS</button>' +
+            '<button class="fin-btn fin-btn--primary" id="btn-batch-rec" data-busylock="1">LOTE RECEITAS</button>' +
             '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
           '</div>' +
         '</header>' +
@@ -1017,12 +1209,12 @@
         '<div class="fin-shell">' +
           '<div class="fin-body">' +
             '<aside class="fin-side">' +
-              '<div class="fin-side-brand">' + /* ✅ sem logo duplicada */
+              '<div class="fin-side-brand">' +
                 '<div class="fin-brand-title">Financeiro CGD</div>' +
                 '<div class="fin-brand-sub">Deals • Pipeline 27</div>' +
               '</div>' +
               '<div class="fin-side-block">' +
-                '<div class="fin-side-h">Centro de custo</div>' +
+                '<div class="fin-side-h">Centro de custo (saldo)</div>' +
                 '<div id="fin-side-centers" class="fin-side-list"></div>' +
               '</div>' +
             '</aside>' +
@@ -1079,7 +1271,6 @@
           '</div>' +
         '</div>' +
 
-        /* ✅ Rodapé CGD (agora é DIV, não some) */
         '<div class="fin-footerbar">' +
           '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + '</div></div>' +
           '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + '</div>' +
@@ -1093,11 +1284,11 @@
 
       '</div>';
 
-    // handlers
+    el("#btn-transfer").addEventListener("click", function(){ openTransferModal(); });
     el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
 
-    // ✅ LOTE agora abre SEM FALHA
-    el("#btn-batch").addEventListener("click", function () { openBatchTableModal(); });
+    el("#btn-batch-exp").addEventListener("click", function () { openBatchTableModal("DESPESA"); });
+    el("#btn-batch-rec").addEventListener("click", function () { openBatchTableModal("RECEITA"); });
 
     el("#btn-refresh").addEventListener("click", function () { refresh(); });
 
@@ -1128,7 +1319,6 @@
       .finally(function () { setLoading(false); });
   }
 
-  // Promise.finally fallback
   if (!Promise.prototype.finally) {
     Promise.prototype.finally = function (cb) {
       var P = this.constructor;
