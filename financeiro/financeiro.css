@@ -1,16 +1,15 @@
-/* Financeiro CGD — Layout full width + tema cinza/off-white */
+/* Financeiro CGD — Full bleed + tema cinza/off-white */
 
 :root{
-  --dark:#2c2c2c;         /* substitui preto */
-  --off:#f6f5f1;          /* substitui branco e “azul” */
-  --off2:#efeee9;         /* off-white levemente mais escuro */
+  --dark:#2c2c2c;         /* cinza escuro (não absoluto) */
+  --dark2:#f2f2f2;        /* cinza clarinho (para onde era preto absoluto) */
+  --off:#f6f5f1;          /* off-white */
+  --off2:#efeee9;         /* off-white + contraste */
   --line:#d8d8d4;
   --text:#111827;
   --muted:#6b7280;
 
-  --shadow:0 10px 30px rgba(0,0,0,.20);
-  --radius:14px;
-  --radius2:18px;
+  --shadow:0 10px 30px rgba(0,0,0,.18);
 
   --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Helvetica Neue", "Noto Sans";
 }
@@ -22,19 +21,46 @@ body{
   margin:0;
   font-family:var(--font);
   color:var(--text);
-  background:
-    radial-gradient(1200px 800px at 20% 20%, rgba(17,24,39,.16), transparent 60%),
-    radial-gradient(900px 650px at 75% 55%, rgba(17,24,39,.10), transparent 60%),
-    linear-gradient(180deg, #141414, #101010);
+  background: var(--dark2); /* fundo geral cinza clarinho */
 }
 
-/* ========= NOVA ESTRUTURA: header/footer full width ========= */
+/* (1) Ocultar rodapé do Bitrix Sites (seletores comuns) */
+footer, .footer, .landing-footer, .landing-footer-wrap, .landing-footer-container,
+.bx-footer, .bx-footer-wrap, .bx-footer-container,
+.landing-layout-footer, .landing-ui-footer,
+.landing-public-footer, .landing-footer-main{
+  display:none !important;
+  height:0 !important;
+  overflow:hidden !important;
+}
+
+/* (3) Ocultar sentinel “JS iniciou ✅” se existir no HTML */
+#fin-sentinel{display:none !important;}
+
+/* ========= ESTRUTURA ========= */
 .fin-page{
   min-height:100vh;
   display:flex;
   flex-direction:column;
-  gap:12px;
-  padding:14px;
+}
+
+/* barras full bleed: usam 100vw + margem negativa pra escapar do container do Bitrix */
+.fin-topbar,
+.fin-footerbar{
+  width:100vw;
+  margin-left:calc(50% - 50vw);
+  margin-right:calc(50% - 50vw);
+  border-radius:0;                /* (2) quina 90° */
+}
+
+/* Conteúdo interno com padding normal */
+.fin-shell{
+  padding:14px;                   /* “miolo” com respiro */
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  flex:1;
+  min-height:0;
 }
 
 .fin-body{
@@ -46,24 +72,22 @@ body{
   min-height:0;
 }
 
-/* ========= TOPBAR (full width, cinza) ========= */
+/* ========= TOPBAR (2) faixa retangular full width ========= */
 .fin-topbar{
-  width:100%;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:12px;
-  padding:10px 12px;            /* um pouco menor */
-  border-radius:var(--radius2);
+  padding:10px 14px;
   background:var(--dark);
-  border:1px solid rgba(255,255,255,.10);
   color:#fff;
+  border-bottom:1px solid rgba(255,255,255,.10);
   box-shadow: var(--shadow);
 }
 
 .fin-top-left{display:flex; align-items:center; gap:10px; min-width:280px}
 .fin-top-logo{
-  width:40px;height:40px;border-radius:14px;
+  width:40px;height:40px;
   background:var(--off);
   padding:6px;
   object-fit:contain;
@@ -85,7 +109,7 @@ body{
 /* Search */
 .fin-search{
   display:flex; align-items:center; gap:8px;
-  padding:8px 10px;                /* menor */
+  padding:8px 10px;
   border-radius:999px;
   border:1px solid rgba(255,255,255,.14);
   background:rgba(255,255,255,.10);
@@ -101,22 +125,22 @@ body{
 }
 .fin-search input::placeholder{color:rgba(255,255,255,.65); font-weight:800}
 
-/* Botões topo: 30% menores */
+/* (7) botões topo menores já aplicados antes (mantido) */
 .fin-btn{
-  padding:7px 9px;                 /* ~30% menor */
-  border-radius:12px;
+  padding:7px 9px;
+  border-radius:10px;
   border:1px solid rgba(255,255,255,.14);
   background:rgba(255,255,255,.10);
   color:#fff;
   cursor:pointer;
   font-weight:900;
-  font-size:12px;                  /* menor */
+  font-size:12px;
   letter-spacing:.2px;
 }
 .fin-btn:hover{background:rgba(255,255,255,.14)}
 .fin-btn:disabled{opacity:.45; cursor:not-allowed}
 
-/* “Azul” -> off-white (botão primário vira claro) */
+/* azul -> off-white */
 .fin-btn--primary{
   background:var(--off);
   color:#111827;
@@ -131,7 +155,6 @@ body{
 .fin-side{
   width:280px;
   padding:14px;
-  border-radius:var(--radius2);
   background:var(--dark);
   border:1px solid rgba(255,255,255,.10);
   color:#fff;
@@ -140,6 +163,7 @@ body{
   flex-direction:column;
   gap:12px;
   min-height:0;
+  border-radius:16px; /* pode manter arredondado no miolo */
 }
 
 .fin-side-brand{
@@ -182,7 +206,7 @@ body{
 }
 .fin-side-item:hover{background:rgba(255,255,255,.10)}
 .fin-side-item.is-active{
-  background:rgba(255,255,255,.12);
+  background:rgba(255,255,255,.14);
   border-color:rgba(255,255,255,.22);
 }
 .fin-dot{width:10px;height:10px;border-radius:4px;background:rgba(255,255,255,.35)}
@@ -191,18 +215,18 @@ body{
 
 /* ========= PANEL (off-white) ========= */
 .fin-panel{
-  border-radius:var(--radius2);
-  background:rgba(255,255,255,.08);
-  border:1px solid rgba(255,255,255,.10);
+  background:rgba(0,0,0,.03);
+  border:1px solid rgba(0,0,0,.08);
   box-shadow: var(--shadow);
   overflow:hidden;
+  border-radius:16px;
 }
 .fin-panel-inner{
-  background:var(--off);           /* branco -> off-white */
+  background:var(--off);
   padding:14px;
 }
 
-/* KPIs (off-white) */
+/* KPIs */
 .fin-kpis{
   display:grid;
   grid-template-columns: repeat(3, minmax(220px, 1fr));
@@ -212,12 +236,12 @@ body{
   border-radius:16px;
   padding:14px;
   border:1px solid var(--line);
-  background:var(--off2);          /* branco -> off-white */
+  background:var(--off2);
 }
 .fin-kpi-k{font-weight:950; font-size:12px; opacity:.8}
 .fin-kpi-v{font-weight:950; font-size:22px; margin-top:6px}
 
-/* Filters (off-white) */
+/* Filters */
 .fin-filters{
   margin-top:12px;
   display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;
@@ -240,7 +264,6 @@ body{
   font-weight:900; color:#111827;
   font-size:13px;
 }
-
 .fin-field textarea{
   width:100%;
   border:1px solid var(--line);
@@ -257,7 +280,7 @@ body{
   gap:10px;
 }
 
-/* Bloco checkboxes (fica acima dos gráficos) */
+/* CHECKBOX bloco */
 .fin-toggles{
   display:flex;
   gap:10px;
@@ -275,7 +298,7 @@ body{
 }
 .fin-check input{width:16px;height:16px}
 
-/* Charts agora abaixo dos checkboxes */
+/* (4) Gráficos abaixo do CHECKBOX */
 .fin-charts{
   width:100%;
   display:grid;
@@ -299,7 +322,7 @@ body{
   overflow:auto;
   border:1px solid var(--line);
   border-radius:14px;
-  background:var(--off);           /* branco -> off-white */
+  background:var(--off);
 }
 .fin-table{
   width:100%;
@@ -312,7 +335,7 @@ body{
   color:var(--muted);
   text-align:left;
   font-weight:950;
-  background:var(--off);           /* branco -> off-white */
+  background:var(--off);
   position:sticky; top:0;
 }
 .fin-table td{font-weight:850}
@@ -326,7 +349,7 @@ body{
   padding:6px 8px;
   border-radius:10px;
   border:1px solid var(--line);
-  background:var(--off);           /* branco -> off-white */
+  background:var(--off);
   cursor:pointer;
   font-weight:950;
   font-size:12px;
@@ -335,14 +358,13 @@ body{
 .fin-mini--ok{border-color:rgba(22,163,74,.35); background:rgba(22,163,74,.08)}
 .fin-mini--danger{border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.08)}
 
-/* Checkbox por linha (pagar/receber) */
 .fin-rowchk{
   display:flex; align-items:center; gap:8px;
   font-weight:950;
 }
 .fin-rowchk input{width:16px;height:16px}
 
-/* ========= MODAL ========= */
+/* MODAL */
 .fin-modal-wrap{position:fixed; inset:0; z-index:9999}
 .fin-modal-backdrop{position:absolute; inset:0; background:rgba(0,0,0,.55)}
 .fin-modal{
@@ -353,13 +375,13 @@ body{
   border-radius:18px;
   background:var(--off);
   border:1px solid rgba(0,0,0,.10);
-  box-shadow: 0 30px 80px rgba(0,0,0,.30);
+  box-shadow: 0 30px 80px rgba(0,0,0,.26);
   overflow:hidden;
 }
 .fin-modal-head{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px;
-  background:var(--dark);          /* preto -> cinza */
+  background:var(--dark);
   color:#fff;
 }
 .fin-modal-title{font-weight:950}
@@ -374,7 +396,7 @@ body{
 .fin-row--right{justify-content:flex-end}
 .fin-hint{font-weight:800; opacity:.85}
 
-/* ========= TOAST ========= */
+/* Toast */
 .fin-toast-host{
   position:fixed;
   right:14px;
@@ -388,24 +410,22 @@ body{
   transform:translateY(6px);
   opacity:0;
   transition:all .18s ease;
-  background:#111827;
+  background:#3a3a3a; /* (10) sem preto absoluto */
   color:#fff;
   padding:10px 12px;
   border-radius:14px;
   border:1px solid rgba(255,255,255,.12);
-  box-shadow: 0 14px 40px rgba(0,0,0,.25);
+  box-shadow: 0 14px 40px rgba(0,0,0,.18);
   font-weight:900;
 }
 .fin-toast--show{transform:translateY(0); opacity:1}
-.fin-toast--err{background:#7f1d1d}
+.fin-toast--err{background:#7a2a2a}
 
-/* ========= FOOTER (full width, cinza) ========= */
+/* ========= FOOTER (2) faixa retangular full width ========= */
 .fin-footerbar{
-  width:100%;
-  border-radius:var(--radius2);
-  background:var(--dark);          /* preto -> cinza */
+  background:var(--dark);
   color:#fff;
-  border:1px solid rgba(255,255,255,.10);
+  border-top:1px solid rgba(255,255,255,.10);
   box-shadow: var(--shadow);
   padding:12px 14px;
   display:grid;
