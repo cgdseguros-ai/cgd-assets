@@ -1,11 +1,12 @@
 /* financeiro.js — CGD Financeiro (Bitrix via Worker)
-   - LOTE quase tela cheia (despesas e receitas separados)
-   - Import CSV (somente RECEITAS: Favorecido, Valor, Data)
+   - LOTE full screen (despesas e receitas separados)
+   - Import CSV via UPLOAD (somente RECEITAS: Favorecido, Valor, Data)
    - Export CSV (somente RECEITAS: Favorecido, Valor, Data)
    - Saldo por Centro de Custo (saldo inicial manual + ajustes)
    - Transferência entre Centros de Custo (ledger local)
-   - Modal Cartão de Crédito (compras/parcelas)
+   - Modal Cartão de Crédito (compras/parcelas) usando CONTA = UF_CRM_1770770758
    - Lembretes na Pipeline 17, coluna MANUELA (C17:PREPARATION), atribuído ao user 813
+     com recorrência (avulso/semanal/mensal/anual) e N ocorrências
    - Campos opcionais em lote: CONTA, OBS, VALOR (pode lançar zerado e preencher depois)
 */
 (function () {
@@ -23,7 +24,7 @@
 
     // Pipeline lembretes / follow-up
     REMINDER_CATEGORY_ID: 17,
-    REMINDER_STAGE_ID: "C17:PREPARATION", // MANUELA (conforme seu print)
+    REMINDER_STAGE_ID: "C17:PREPARATION", // MANUELA
     REMINDER_ASSIGNED_ID: 813,            // user 813
 
     // Logo e footer
@@ -39,7 +40,7 @@
       partnersUserIds: [1, 27, 15]
     },
 
-    // Campos Bitrix (os seus)
+    // Campos Bitrix
     F: {
       TIPO_FIN: "UF_CRM_1771208061",
       COMPETENCIA: "UF_CRM_1771163661",
@@ -51,7 +52,7 @@
       CATEGORIA: "UF_CRM_1770770570",
       DATA_PREV: "UF_CRM_1770769767",
       STATUS_FIN: "UF_CRM_1770770088",
-      CONTA: "UF_CRM_1770770758",
+      CONTA: "UF_CRM_1770770758",          // ✅ cartões / contas
       CENTRO_CUSTO: "UF_CRM_1771801157"
     },
 
@@ -65,10 +66,9 @@
       CONCLUIDO: "C27:UC_LP2NSK"
     },
 
-    // list pagination
     PAGE_SIZE: 300,
 
-    // storage keys
+    // storage keys (apenas reserve + CC ledger/balances continuam locais)
     LS: {
       RESERVE: "FIN_RESERVE_BALANCE",
       CC_BALANCES: "FIN_CC_BALANCES_V1",
@@ -108,7 +108,6 @@
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (m) return m[3] + "-" + m[2] + "-" + m[1];
-    // tenta CSV BR com separadores
     var m2 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
     if (m2) {
       var dd = String(m2[1]).padStart(2, "0");
@@ -185,6 +184,10 @@
     return yy + "-" + mm + "-" + dd;
   }
 
+  function safeClosest(node, sel) {
+    try { return node && node.closest ? node.closest(sel) : null; } catch (_) { return null; }
+  }
+
   // =========================
   // Toast / Modal
   // =========================
@@ -219,7 +222,6 @@
       }
     });
 
-    // ESC fecha
     function onKey(ev) {
       if (ev.key === "Escape") {
         try { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); } catch (_) {}
@@ -268,7 +270,6 @@
         });
     }
 
-    // tenta /api/method e fallback /api?method=
     return req(API_BASE + "/" + method)
       .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
       .then(function (res) { S.apiMode = res.mode; return res.json; });
@@ -303,15 +304,14 @@
 
     reserve: { balance: 0 },
 
-    // saldos por centro / ledger
     cc: {
-      balances: {}, // { centroId: { initial: number, adjust: number } }
-      ledger: []    // [{ts, from, to, amount, note}]
+      balances: {},
+      ledger: []
     }
   };
 
   // =========================
-  // LocalStorage
+  // LocalStorage (somente reserva + CC)
   // =========================
   function loadReserve() {
     try {
@@ -395,7 +395,6 @@
     return "";
   }
 
-  // competência (opcional: tenta derivar pela data)
   function guessCompetenciaIdFromISO(iso) {
     iso = toISODate(iso);
     var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -566,7 +565,6 @@
       if (S.filters.stageId) {
         if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
       } else {
-        // padrão: não mostrar concluído
         if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
       }
 
@@ -601,7 +599,6 @@
   // Totals + CC balances
   // =========================
   function computeCCBalance(centroId) {
-    // saldo = initial + adjust + (receitas recebidas - despesas pagas) + transfers net
     centroId = String(centroId || "");
     var base = S.cc.balances[centroId] || { initial: 0, adjust: 0 };
     var initial = Number(base.initial || 0) || 0;
@@ -616,14 +613,10 @@
       var st = String(d.STAGE_ID || "");
       var vReal = Number(d[CFG.F.VALOR_REAL] || 0) || 0;
 
-      // RECEITA RECEBIDA conta como entrada
       if (st === CFG.STAGES.REC_RECEBIDA) realIn += vReal;
-
-      // DESPESA PAGA conta como saída
       if (st === CFG.STAGES.DESP_PAGA) realOut += vReal;
     }
 
-    // transfers
     var tNet = 0;
     for (var j = 0; j < (S.cc.ledger || []).length; j++) {
       var t = S.cc.ledger[j] || {};
@@ -648,7 +641,6 @@
     if (el("#reserve-balance")) el("#reserve-balance").textContent = moneyBR(S.reserve.balance || 0);
     if (el("#tot-count")) el("#tot-count").textContent = String(list.length);
 
-    // saldo do centro selecionado (se houver)
     var ccSel = String(S.filters.centro || "");
     if (el("#cc-balance")) {
       if (!ccSel) el("#cc-balance").textContent = "—";
@@ -690,7 +682,6 @@
 
     host.innerHTML = html;
 
-    // clique
     var bs = host.querySelectorAll("[data-centro]");
     for (var k = 0; k < bs.length; k++) {
       bs[k].addEventListener("click", function () {
@@ -730,7 +721,7 @@
     m.q("#pr-save").addEventListener("click", function () {
       setLoading(true);
 
-      var v = parseMoneyBR(m.q("#pr-val").value || ""); // opcional -> pode ser 0
+      var v = parseMoneyBR(m.q("#pr-val").value || "");
       var dt = toISODate(m.q("#pr-date").value || "");
       if (!dt) {
         toast("Informe a data.", "err");
@@ -796,10 +787,9 @@
   }
 
   // =========================
-  // CC balance modal (initial + adjust)
+  // CC balance modal
   // =========================
   function openCCBalanceModal() {
-    var items = S.enums[CFG.F.CENTRO_CUSTO] || [];
     var ccSel = String(S.filters.centro || "");
     if (!ccSel) {
       toast("Selecione um Centro de Custo na lateral para ajustar saldo.", "err");
@@ -840,7 +830,6 @@
     updateNow();
 
     m.q("#cc-save").addEventListener("click", function () {
-      // já setamos no updateNow, só persistir
       saveCC();
       toast("Saldo do centro atualizado ✅");
       m.close();
@@ -896,34 +885,183 @@
   }
 
   // =========================
-  // Reminder creation (pipeline 17 / MANUELA / user 813)
+  // Reminder creation (pipeline 17 / MANUELA / user 813) + recorrência
   // =========================
-  function createReminder(title, note) {
-    // cria um deal em category 17, stage MANUELA, assigned 813
-    var fields = {};
-    fields.TITLE = String(title || "LEMBRETE");
-    fields.CATEGORY_ID = String(CFG.REMINDER_CATEGORY_ID);
-    fields.STAGE_ID = String(CFG.REMINDER_STAGE_ID);
-    fields.ASSIGNED_BY_ID = String(CFG.REMINDER_ASSIGNED_ID);
-    // tenta colocar OBS na descrição padrão do deal (COMMENTS / UF?) — sem saber seu campo, usa COMMENTS se existir no Bitrix
-    fields.COMMENTS = String(note || "");
-    return apiCall("crm.deal.add", { fields: fields }).then(function () {
-      toast("Lembrete criado na MANUELA ✅");
+  function calcRecurringISO(startISO, freq, idx, weekday, monthday, month) {
+    startISO = toISODate(startISO);
+    if (!startISO) return "";
+    freq = freq || "once";
+
+    if (freq === "once") return startISO;
+
+    if (freq === "weekly") {
+      var wd = Number(weekday || 1); // 1..7 (seg..dom)
+      var d = new Date(startISO + "T12:00:00");
+      var jswd = d.getDay(); // 0..6 (dom..sab)
+      var cur = (jswd === 0 ? 7 : jswd);
+      var delta = wd - cur;
+      if (delta < 0) delta += 7;
+      var first = addDaysISO(startISO, delta);
+      return addDaysISO(first, idx * 7);
+    }
+
+    if (freq === "monthly") {
+      var day = Number(monthday || 1);
+      return addMonthsISO(startISO, idx, day);
+    }
+
+    if (freq === "yearly") {
+      var mo = Number(month || 1);
+      var dayy = Number(monthday || 1);
+      var baseY = String(startISO).slice(0, 4);
+      var first = baseY + "-" + String(mo).padStart(2, "0") + "-" + String(dayy).padStart(2, "0");
+      if (first < startISO) first = String(Number(baseY) + 1) + "-" + String(mo).padStart(2, "0") + "-" + String(dayy).padStart(2, "0");
+      return addYearsISO(first, idx, mo, dayy);
+    }
+
+    return startISO;
+  }
+
+  function createReminderDeals(opts) {
+    // opts: { title, note, freq, start, count, weekday, monthday, month }
+    var title = String(opts.title || "LEMBRETE");
+    var note = String(opts.note || "");
+    var freq = String(opts.freq || "once");
+    var start = toISODate(opts.start || "");
+    var count = Math.max(1, parseInt(opts.count || "1", 10) || 1);
+    var weekday = String(opts.weekday || "1");
+    var monthday = String(opts.monthday || "1");
+    var month = String(opts.month || "1");
+
+    if (!start) throw new Error("Informe a data inicial (YYYY-MM-DD).");
+
+    // sequencial
+    var created = 0;
+    var p = Promise.resolve();
+
+    for (var i = 0; i < count; i++) (function (idx) {
+      p = p.then(function () {
+        var dt = calcRecurringISO(start, freq, idx, weekday, monthday, month);
+        if (!dt) return;
+
+        var fields = {};
+        fields.TITLE = title + (count > 1 ? (" • " + (idx + 1) + "/" + count) : "");
+        fields.CATEGORY_ID = String(CFG.REMINDER_CATEGORY_ID);
+        fields.STAGE_ID = String(CFG.REMINDER_STAGE_ID);
+        fields.ASSIGNED_BY_ID = String(CFG.REMINDER_ASSIGNED_ID);
+
+        // coloca a data do lembrete no COMMENTS + também tenta usar BEGINDATE se existir? (sem depender)
+        fields.COMMENTS = "📌 Data: " + dt + "\n" + note;
+
+        return apiCall("crm.deal.add", { fields: fields }).then(function () { created++; });
+      });
+    })(i);
+
+    return p.then(function () { return created; });
+  }
+
+  function openReminderModalFromDeal(deal) {
+    var fav = String(deal[CFG.F.FAVORECIDO] || deal.TITLE || ("Deal #" + deal.ID));
+    var baseTitle = "LEMBRETE • " + fav;
+    var baseNote = "Criado do Financeiro.\nDeal #" + deal.ID + " — " + stageName(deal.STAGE_ID) + "\n\nObs do lançamento:\n" + String(deal[CFG.F.OBS] || "");
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Lembrete (Pipeline 17 • MANUELA • User 813)</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
+          '<div class="fin-field" style="flex:2;min-width:260px"><label>Título</label><input id="rm-title" value="' + esc(baseTitle) + '"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:220px"><label>Data inicial</label><input id="rm-start" value="' + esc(toISODate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+        '</div>' +
+
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
+          '<div class="fin-field" style="flex:1;min-width:220px"><label>Recorrência</label>' +
+            '<select id="rm-freq">' +
+              '<option value="once">Avulso</option>' +
+              '<option value="weekly">Semanal</option>' +
+              '<option value="monthly">Mensal</option>' +
+              '<option value="yearly">Anual</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="fin-field" style="flex:1;min-width:160px"><label>Qtd</label><input id="rm-count" value="1" placeholder="1"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:200px"><label>Dia semana (semanal)</label>' +
+            '<select id="rm-weekday">' +
+              '<option value="1">Seg</option><option value="2">Ter</option><option value="3">Qua</option><option value="4">Qui</option><option value="5">Sex</option><option value="6">Sáb</option><option value="7">Dom</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
+          '<div class="fin-field" style="flex:1;min-width:200px"><label>Dia do mês (mensal/anual)</label><input id="rm-monthday" value="1" placeholder="1..31"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:200px"><label>Mês (anual)</label><input id="rm-month" value="1" placeholder="1..12"></div>' +
+        '</div>' +
+
+        '<div class="fin-field" style="margin-top:10px"><label>Observação</label><textarea id="rm-note">' + esc(baseNote) + '</textarea></div>' +
+
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="rm-save" data-busylock="1">Criar lembrete</button>' +
+        '</div>' +
+
+        '<div class="fin-muted" style="margin-top:10px;font-weight:900">Cria 1 ou N cards na Pipeline 17, etapa MANUELA, atribuído à user 813. A data é registrada no COMMENTS.</div>' +
+      '</div>',
+      { full: true } // ✅ full screen também
+    );
+
+    function toggleByFreq() {
+      var f = m.q("#rm-freq").value || "once";
+      var wd = m.q("#rm-weekday");
+      var md = m.q("#rm-monthday");
+      var mo = m.q("#rm-month");
+      wd.disabled = (f !== "weekly");
+      md.disabled = !(f === "monthly" || f === "yearly");
+      mo.disabled = (f !== "yearly");
+    }
+    m.q("#rm-freq").addEventListener("change", toggleByFreq);
+    toggleByFreq();
+
+    m.q("#rm-save").addEventListener("click", function () {
+      try {
+        setLoading(true);
+
+        var opts = {
+          title: m.q("#rm-title").value || baseTitle,
+          note: m.q("#rm-note").value || "",
+          freq: m.q("#rm-freq").value || "once",
+          start: m.q("#rm-start").value || "",
+          count: m.q("#rm-count").value || "1",
+          weekday: m.q("#rm-weekday").value || "1",
+          monthday: m.q("#rm-monthday").value || "1",
+          month: m.q("#rm-month").value || "1"
+        };
+
+        createReminderDeals(opts)
+          .then(function (created) {
+            toast("Lembrete(s) criado(s) ✅ (" + created + ")", "ok");
+            m.close();
+          })
+          .catch(function (e) {
+            toast("Falha lembrete: " + (e.message || String(e)), "err");
+          })
+          .finally(function () { setLoading(false); });
+
+      } catch (e0) {
+        toast("Falha lembrete: " + (e0.message || String(e0)), "err");
+        setLoading(false);
+      }
     });
   }
 
   // =========================
-  // CSV (Receitas)
+  // CSV (Receitas) + UPLOAD import
   // =========================
   function parseCSV(text) {
-    // simples: separador ; ou ,
     var t = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     var lines = t.split("\n").filter(function (l) { return l.trim() !== ""; });
     if (!lines.length) return [];
 
     var sep = (lines[0].indexOf(";") > -1) ? ";" : ",";
     function split(line) {
-      // split com aspas
       var out = [];
       var cur = "";
       var inQ = false;
@@ -950,7 +1088,6 @@
     var idxVal = header.indexOf("valor");
     var idxDat = header.indexOf("data");
 
-    // se não tiver cabeçalho, assume 3 colunas
     var startRow = 1;
     if (idxFav < 0 || idxVal < 0 || idxDat < 0) {
       idxFav = 0; idxVal = 1; idxDat = 2;
@@ -972,7 +1109,6 @@
 
   function downloadCSV(filename, rows) {
     var csv = rows.map(function (r) {
-      // Favorecido;Valor;Data
       return '"' + String(r.favorecido || "").replace(/"/g, '""') + '";' +
              '"' + String(r.valor || "").replace(/"/g, '""') + '";' +
              '"' + String(r.data || "").replace(/"/g, '""') + '"';
@@ -990,7 +1126,6 @@
   }
 
   function exportReceitasCSV() {
-    // apenas receitas (A RECEBER + RECEBIDA), usando FAVORECIDO, VALOR_REAL (se tiver) senão PREV, DATA_REAL senão DATA_PREV
     var rows = [];
     for (var i = 0; i < (S.deals || []).length; i++) {
       var d = S.deals[i];
@@ -1011,13 +1146,79 @@
     downloadCSV("receitas.csv", rows);
   }
 
+  function openImportCSVModal(onDone) {
+    // ✅ FULL + UPLOAD
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">IMPORTAR CSV — RECEITAS</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-muted" style="font-weight:900;margin-bottom:10px">Formato: <b>Favorecido;Valor;Data</b> (com ou sem cabeçalho).</div>' +
+
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
+          '<div class="fin-field" style="flex:2;min-width:260px">' +
+            '<label>Arquivo CSV</label>' +
+            '<input id="csvfile" type="file" accept=".csv,text/csv" />' +
+          '</div>' +
+          '<div class="fin-field" style="flex:1;min-width:200px">' +
+            '<label>Linhas detectadas</label>' +
+            '<input id="csvcount" value="0" disabled />' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Voltar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="csvok" data-busylock="1" disabled>Importar</button>' +
+        '</div>' +
+
+        '<div class="fin-muted" style="margin-top:10px;font-weight:900">O arquivo não é salvo. Só lemos e preenchemos as linhas.</div>' +
+      '</div>',
+      { full: true }
+    );
+
+    var parsed = [];
+
+    function setCount(n) {
+      try { m.q("#csvcount").value = String(n || 0); } catch (_) {}
+      try { m.q("#csvok").disabled = !(n > 0); } catch (_) {}
+    }
+
+    m.q("#csvfile").addEventListener("change", function () {
+      var f = (m.q("#csvfile").files || [])[0];
+      if (!f) { parsed = []; setCount(0); return; }
+
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var txt = String(reader.result || "");
+          parsed = parseCSV(txt);
+          setCount(parsed.length);
+          if (!parsed.length) toast("CSV vazio ou inválido.", "err");
+        } catch (e) {
+          parsed = [];
+          setCount(0);
+          toast("Falha ao ler CSV: " + (e.message || String(e)), "err");
+        }
+      };
+      reader.onerror = function () {
+        parsed = [];
+        setCount(0);
+        toast("Falha ao ler o arquivo.", "err");
+      };
+      reader.readAsText(f, "utf-8");
+    });
+
+    m.q("#csvok").addEventListener("click", function () {
+      if (!parsed.length) { toast("CSV vazio ou inválido.", "err"); return; }
+      m.close();
+      try { onDone(parsed); } catch (_) {}
+    });
+  }
+
   // =========================
   // Batch modal (full screen) — DESPESAS / RECEITAS separados
   // =========================
   function openBatch(kind) {
     kind = (kind === "RECEITA") ? "RECEITA" : "DESPESA";
 
-    // 15 linhas padrão
     var rows = [];
     for (var i = 0; i < 15; i++) rows.push(mkRow(kind));
 
@@ -1040,36 +1241,7 @@
     }
 
     function calcDate(baseISO, row, idx) {
-      baseISO = toISODate(baseISO);
-      if (!baseISO) return "";
-      if (row.freq === "once") return baseISO;
-
-      if (row.freq === "weekly") {
-        var wd = Number(row.weekday || 1); // 1..7 (seg..dom)
-        var d = new Date(baseISO + "T12:00:00");
-        var jswd = d.getDay(); // 0..6 (dom..sab)
-        var cur = (jswd === 0 ? 7 : jswd);
-        var delta = wd - cur;
-        if (delta < 0) delta += 7;
-        var first = addDaysISO(baseISO, delta);
-        return addDaysISO(first, idx * 7);
-      }
-
-      if (row.freq === "monthly") {
-        var day = Number(row.monthday || 1);
-        return addMonthsISO(baseISO, idx, day);
-      }
-
-      if (row.freq === "yearly") {
-        var mo = Number(row.month || 1);
-        var dayy = Number(row.monthday || 1);
-        var baseY = String(baseISO).slice(0, 4);
-        var first = baseY + "-" + String(mo).padStart(2, "0") + "-" + String(dayy).padStart(2, "0");
-        if (first < baseISO) first = String(Number(baseY) + 1) + "-" + String(mo).padStart(2, "0") + "-" + String(dayy).padStart(2, "0");
-        return addYearsISO(first, idx, mo, dayy);
-      }
-
-      return baseISO;
+      return calcRecurringISO(baseISO, row.freq, idx, row.weekday, row.monthday, row.month);
     }
 
     function renderTable(host) {
@@ -1172,7 +1344,6 @@
 
       host.innerHTML = html;
 
-      // preset selects value restoration
       var trs = host.querySelectorAll("tr[data-i]");
       for (var ti = 0; ti < trs.length; ti++) {
         var idx = Number(trs[ti].getAttribute("data-i"));
@@ -1183,7 +1354,6 @@
         var s3 = trs[ti].querySelector('select[data-k="categoria"]'); if (s3) s3.value = r2.categoria || "";
       }
 
-      // buttons
       host.querySelector("#b-add").addEventListener("click", function () {
         rows.push(mkRow(kind));
         renderTable(host);
@@ -1203,14 +1373,12 @@
         createBatch(host.querySelector("#b-comp").value || "");
       });
 
-      // CSV import/export for RECEITAS
       var btnExp = host.querySelector("#b-export-rec");
       if (btnExp) btnExp.addEventListener("click", function(){ exportReceitasCSV(); });
 
       var btnImp = host.querySelector("#b-import-rec");
       if (btnImp) btnImp.addEventListener("click", function(){
         openImportCSVModal(function(importRows){
-          // aplica import nas primeiras linhas (só Favorecido/Valor/Data)
           for (var i3 = 0; i3 < importRows.length && i3 < rows.length; i3++) {
             rows[i3].favorecido = importRows[i3].favorecido || "";
             rows[i3].valor = importRows[i3].valor || "";
@@ -1219,15 +1387,14 @@
             rows[i3].count = "1";
           }
           renderTable(host);
-          toast("CSV importado ✅ (colado nas linhas)");
+          toast("CSV importado ✅ (preencheu as linhas)");
         });
       });
 
-      // listeners de edição (input/change)
       var tbody = host.querySelector("tbody");
 
       tbody.addEventListener("input", function (e) {
-        var tr = e.target.closest("tr[data-i]");
+        var tr = safeClosest(e.target, "tr[data-i]");
         if (!tr) return;
         var i = Number(tr.getAttribute("data-i"));
         var k = e.target.getAttribute("data-k");
@@ -1236,7 +1403,7 @@
       });
 
       tbody.addEventListener("change", function (e) {
-        var tr = e.target.closest("tr[data-i]");
+        var tr = safeClosest(e.target, "tr[data-i]");
         if (!tr) return;
         var i = Number(tr.getAttribute("data-i"));
         var k = e.target.getAttribute("data-k");
@@ -1246,9 +1413,9 @@
       });
 
       tbody.addEventListener("click", function (e) {
-        var btn = e.target.closest("[data-del]");
+        var btn = safeClosest(e.target, "[data-del]");
         if (!btn) return;
-        var tr = btn.closest("tr[data-i]");
+        var tr = safeClosest(btn, "tr[data-i]");
         var i = Number(tr.getAttribute("data-i"));
         rows.splice(i, 1);
         if (!rows.length) {
@@ -1264,26 +1431,23 @@
       var created = 0;
       var tipoEnum = tipoEnumForKind(kind);
       if (!tipoEnum) {
-        toast("Não encontrei enum de Tipo Financeiro para " + kind + " (precisa existir DESPESA/RECEITA).", "err");
+        toast("Não encontrei enum de Tipo Financeiro para " + kind + ".", "err");
         setLoading(false);
         return;
       }
 
-      // cria sequencial (evita rate-limit)
       var ops = Promise.resolve();
 
       for (var i = 0; i < rows.length; i++) (function (r) {
         ops = ops.then(function () {
           var fav = String(r.favorecido || "").trim();
-          // favorecido continua obrigatório (sem isso vira bagunça)
-          if (!fav) return; // pula linha vazia
+          if (!fav) return;
           if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
 
           var start = toISODate(r.start || "");
           if (!start) throw new Error("Linha com Favorecido sem Data inicial (YYYY-MM-DD). Fav: " + fav);
 
-          // CONTA / OBS / VALOR opcionais
-          var vprev = parseMoneyBR(r.valor || ""); // se vazio => 0
+          var vprev = parseMoneyBR(r.valor || "");
           var cc = r.centro || "";
           var conta = r.conta || "";
           var cat = r.categoria || "";
@@ -1292,7 +1456,6 @@
           var stage = stageForKind(kind);
           var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
 
-          // competência: override do topo; se vazio tenta derivar
           var comp = compOverride || "";
           if (!comp) comp = guessCompetenciaIdFromISO(start);
 
@@ -1314,7 +1477,7 @@
               if (cat) fields[CFG.F.CATEGORIA] = cat;
 
               fields[CFG.F.DATA_PREV] = dt;
-              if (vprev) fields[CFG.F.VALOR_PREV] = vprev; // opcional -> só salva se >0
+              if (vprev) fields[CFG.F.VALOR_PREV] = vprev;
               fields[CFG.F.FAVORECIDO] = fav;
               if (obs) fields[CFG.F.OBS] = obs;
 
@@ -1337,49 +1500,25 @@
       });
     }
 
-    // modal full (quase tela cheia)
     var m = modal(
       '<div class="fin-modal-head">' +
         '<div class="fin-modal-title">' + esc(kind === "RECEITA" ? "LOTE — RECEITAS" : "LOTE — DESPESAS") + '</div>' +
         '<button class="fin-x" data-close="1">×</button>' +
       '</div>' +
       '<div class="fin-modal-body"><div id="batch-host"></div></div>',
-      { full: true }
+      { full: true } // ✅ full screen
     );
 
     renderTable(m.q("#batch-host"));
   }
 
-  function openImportCSVModal(onDone) {
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">IMPORTAR CSV — RECEITAS</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-muted" style="font-weight:900;margin-bottom:10px">Formato: <b>Favorecido;Valor;Data</b> (com ou sem cabeçalho).</div>' +
-        '<textarea id="csv" class="fin-batch-txt" style="min-height:240px" placeholder="Cole aqui o CSV..."></textarea>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Voltar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="csvok" data-busylock="1">Importar</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#csvok").addEventListener("click", function () {
-      var txt = m.q("#csv").value || "";
-      var rows = parseCSV(txt);
-      if (!rows.length) { toast("CSV vazio ou inválido.", "err"); return; }
-      m.close();
-      try { onDone(rows); } catch (_) {}
-    });
-  }
-
   // =========================
-  // Credit card purchases modal
+  // Credit card purchases modal (FULL)
   // =========================
   function openCardModal() {
-    // vamos usar o campo CONTA como "cartão", já que você já tem enum de conta
     var contas = S.enums[CFG.F.CONTA] || [];
     if (!contas.length) {
-      toast("Não encontrei enum de CONTA para cartões.", "err");
+      toast("Não encontrei enum de CONTA (UF_CRM_1770770758) para cartões.", "err");
       return;
     }
 
@@ -1402,7 +1541,7 @@
           '<div class="fin-field" style="min-width:320px;flex:1"><label>Cartão (CONTA)</label><select id="cc-card">' + buildOptions(contas, true, "Selecione o cartão…") + '</select></div>' +
           '<div class="fin-field" style="min-width:320px;flex:1"><label>Competência (opc.)</label><select id="cc-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || [], true, "Automático") + '</select></div>' +
         '</div>' +
-        '<div class="fin-muted" style="font-weight:900;margin-top:8px">Cria DESPESAS “A PAGAR” com OBS indicando parcela. Valor é opcional, mas recomendado.</div>' +
+        '<div class="fin-muted" style="font-weight:900;margin-top:8px">Cria DESPESAS “A PAGAR” com CONTA=cartão e OBS indicando parcela. Valor é opcional, mas recomendado.</div>' +
         '<div style="overflow:auto;max-height:60vh;margin-top:10px">' +
           '<table class="fin-batch-table">' +
             '<thead><tr>' +
@@ -1426,7 +1565,7 @@
           '</div>' +
         '</div>' +
       '</div>',
-      { full: true }
+      { full: true } // ✅ full screen
     );
 
     function renderRows() {
@@ -1450,7 +1589,6 @@
       }
       tb.innerHTML = html;
 
-      // restore selects
       var trs = tb.querySelectorAll("tr[data-i]");
       for (var t = 0; t < trs.length; t++) {
         var idx = Number(trs[t].getAttribute("data-i"));
@@ -1468,7 +1606,7 @@
     });
 
     m.q("#cc-tb").addEventListener("input", function (e) {
-      var tr = e.target.closest("tr[data-i]");
+      var tr = safeClosest(e.target, "tr[data-i]");
       if (!tr) return;
       var i = Number(tr.getAttribute("data-i"));
       var k = e.target.getAttribute("data-k");
@@ -1476,7 +1614,7 @@
       rows[i][k] = e.target.value;
     });
     m.q("#cc-tb").addEventListener("change", function (e) {
-      var tr = e.target.closest("tr[data-i]");
+      var tr = safeClosest(e.target, "tr[data-i]");
       if (!tr) return;
       var i = Number(tr.getAttribute("data-i"));
       var k = e.target.getAttribute("data-k");
@@ -1484,9 +1622,9 @@
       rows[i][k] = e.target.value;
     });
     m.q("#cc-tb").addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-del]");
+      var btn = safeClosest(e.target, "[data-del]");
       if (!btn) return;
-      var tr = btn.closest("tr[data-i]");
+      var tr = safeClosest(btn, "tr[data-i]");
       var i = Number(tr.getAttribute("data-i"));
       rows.splice(i, 1);
       if (!rows.length) rows.push({ favorecido: "", valor: "", data: "", parcelas: "1", parcelaAtual: "1", centro: "", categoria: "", obs: "" });
@@ -1501,6 +1639,7 @@
       if (!tipoEnum) { toast("Enum de Tipo (DESPESA) não encontrado.", "err"); return; }
 
       var compOverride = m.q("#cc-comp").value || "";
+      var cardName = enumName(CFG.F.CONTA, card) || card;
 
       setLoading(true);
 
@@ -1510,13 +1649,13 @@
       rows.forEach(function (r) {
         ops = ops.then(function () {
           var fav = String(r.favorecido || "").trim();
-          if (!fav) return; // pula
+          if (!fav) return;
           if (isBadFav(fav)) throw new Error("Favorecido inválido: " + fav);
 
           var dt0 = toISODate(r.data || "");
           if (!dt0) throw new Error("Linha sem data (YYYY-MM-DD). Fav: " + fav);
 
-          var v = parseMoneyBR(r.valor || ""); // opcional
+          var v = parseMoneyBR(r.valor || "");
           var parcelas = Math.max(1, parseInt(r.parcelas || "1", 10) || 1);
           var parcIni = Math.max(1, parseInt(r.parcelaAtual || "1", 10) || 1);
           if (parcIni > parcelas) parcIni = parcelas;
@@ -1527,7 +1666,6 @@
 
           var comp = compOverride || guessCompetenciaIdFromISO(dt0);
 
-          // cria 1 deal por parcela (mensal)
           var p = Promise.resolve();
           for (var k = 0; k < parcelas; k++) (function (idx) {
             p = p.then(function () {
@@ -1544,14 +1682,17 @@
               fields[CFG.F.TIPO_FIN] = tipoEnum;
               if (comp) fields[CFG.F.COMPETENCIA] = comp;
               if (cc) fields[CFG.F.CENTRO_CUSTO] = cc;
-              if (card) fields[CFG.F.CONTA] = card;
+
+              // ✅ salva cartão no campo CONTA
+              fields[CFG.F.CONTA] = card;
+
               if (cat) fields[CFG.F.CATEGORIA] = cat;
 
               fields[CFG.F.DATA_PREV] = dt;
               if (v) fields[CFG.F.VALOR_PREV] = v;
 
               fields[CFG.F.FAVORECIDO] = fav;
-              var obs2 = "Cartão: " + enumName(CFG.F.CONTA, card) + " • Parcela " + parc + "/" + parcelas + (obs ? " • " + obs : "");
+              var obs2 = "Cartão: " + cardName + " • Parcela " + parc + "/" + parcelas + (obs ? " • " + obs : "");
               fields[CFG.F.OBS] = obs2;
 
               return createDeal(fields).then(function () { created++; });
@@ -1583,7 +1724,7 @@
 
     var list = S.filtered || [];
     if (!list.length) {
-      tb.innerHTML = '<tr><td colspan="12" class="fin-muted">Nenhum item encontrado.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="11" class="fin-muted">Nenhum item encontrado.</td></tr>';
       return;
     }
 
@@ -1624,9 +1765,8 @@
 
     tb.innerHTML = rows.join("");
 
-    // Delegação de clicks (mais robusto que bind por item)
     tb.onclick = function (ev) {
-      var t = ev.target.closest("[data-act]");
+      var t = safeClosest(ev.target, "[data-act]");
       if (!t) return;
       var id = t.getAttribute("data-id");
       var act = t.getAttribute("data-act");
@@ -1637,15 +1777,7 @@
 
       if (act === "del") return confirmDelete(deal);
       if (act === "chk") return openPayReceiveModal(deal);
-      if (act === "rem") {
-        var fav = String(deal[CFG.F.FAVORECIDO] || deal.TITLE || ("Deal #" + deal.ID));
-        var note = "Lembrete criado do Financeiro. Deal #" + deal.ID + " — " + stageName(deal.STAGE_ID);
-        setLoading(true);
-        createReminder("LEMBRETE • " + fav, note)
-          .catch(function(e){ toast("Falha lembrete: " + (e.message||e), "err"); })
-          .finally(function(){ setLoading(false); });
-        return;
-      }
+      if (act === "rem") return openReminderModalFromDeal(deal);
     };
   }
 
@@ -1653,7 +1785,6 @@
   // Render UI
   // =========================
   function render() {
-    // OBS: CSS vem do seu CSS no Bitrix. Aqui só renderiza HTML.
     root.innerHTML =
       '<div class="fin-page">' +
 
@@ -1758,9 +1889,6 @@
 
       '</div>';
 
-    // =========================
-    // Bind buttons (robusto)
-    // =========================
     el("#btn-reserve").addEventListener("click", openReserveModal);
     el("#btn-cc-balance").addEventListener("click", openCCBalanceModal);
     el("#btn-transfer").addEventListener("click", openTransferModal);
@@ -1801,7 +1929,6 @@
       .finally(function () { setLoading(false); });
   }
 
-  // Promise.finally fallback
   if (!Promise.prototype.finally) {
     Promise.prototype.finally = function (cb) {
       var P = this.constructor;
