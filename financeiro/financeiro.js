@@ -1,1620 +1,1528 @@
-(function () {
-  "use strict";
+/* cgd-assets/financeiro/financeiro.js */
+(function(){
+  // =========================
+  // CONFIG
+  // =========================
+  const WORKER_BASE = "https://financeiro199702.cgdseguros.workers.dev";
 
-  var WORKER_BASE = "https://financeiro199702.cgdseguros.workers.dev";
-  var API_BASE = WORKER_BASE.replace(/\/$/, "") + "/api";
-
-  var CFG = {
-    DEAL_CATEGORY_ID: 27,
-    REMINDER_CATEGORY_ID: 17,
-    REMINDER_ASSIGNED_ID: 813,
-    REMINDER_STAGE_ID: "C17:NEW", // ✅ troque aqui se a coluna da Pipeline 17 for outra
-
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w",
-
-    FOOTER: {
-      addressTitle: "Endereço",
-      addressText: "Av Ayrton Senna, 2500, SS109, Barra da Tijuca",
-      credits: "System created by GRUPO CGD",
-      companies: [
-        { name: "CGD CORRETORA", meta: "CNPJ 01.654.471/0001-86 • SUSEP 202031791" },
-        { name: "CGD BARRA", meta: "CNPJ 53.013.848/0001-11 • SUSEP 242158650" }
-      ],
-      partnersUserIds: [1, 27, 15]
-    },
-
-    // Cartões (nome + vencimento + melhor dia)
-    CARDS: [
-      { name: "CT ITAÚ PJ", dueDay: 2, bestDay: 21 },
-      { name: "CT PORTO PF", dueDay: 10, bestDay: 4 },
-      { name: "CT C6 PJ", dueDay: 15, bestDay: 9 },
-      { name: "CT XP PF", dueDay: 15, bestDay: 11 },
-      { name: "CT ITAÚ PF", dueDay: 21, bestDay: 13 },
-      { name: "CT CORA CGD BARRA", dueDay: 23, bestDay: 17 },
-      { name: "CT PORTO PJ", dueDay: 30, bestDay: 25 }
-    ],
-
-    F: {
-      TIPO_FIN: "UF_CRM_1771208061",
-      COMPETENCIA: "UF_CRM_1771163661",
-      VALOR_PREV: "UF_CRM_1770769991",
-      VALOR_REAL: "UF_CRM_1770770017",
-      DATA_REAL: "UF_CRM_1770771170",
-      FAVORECIDO: "UF_CRM_1770775760",
-      OBS: "UF_CRM_691385BE7D33D",
-      CATEGORIA: "UF_CRM_1770770570",
-      DATA_PREV: "UF_CRM_1770769767",
-      STATUS_FIN: "UF_CRM_1770770088",
-      CONTA: "UF_CRM_1770770758",
-      CENTRO_CUSTO: "UF_CRM_1771801157"
-    },
-
-    STAGES: {
-      DESP_A_PAGAR: "C27:NEW",
-      DESP_PAGA: "C27:PREPARATION",
-      REC_A_RECEBER: "C27:UC_EQAFD7",
-      REC_RECEBIDA: "C27:PREPAYMENT_INVOIC",
-      CANCELADO: "C27:EXECUTING",
-      CONCLUIDO: "C27:UC_LP2NSK"
-    },
-
-    PAGE_SIZE: 500,
-    REL_PREFIX: "REL_P17:",
-    TRF_PREFIX: "TRF:"
+  // Campos (Pipeline 27)
+  const F = {
+    tipo: "UF_CRM_1771208061",
+    competencia: "UF_CRM_1771163661",
+    valorPrev: "UF_CRM_1770769991",
+    valorReal: "UF_CRM_1770770017",
+    dataReal: "UF_CRM_1770771170",
+    favorecido: "UF_CRM_1770775760",
+    formaPgto: "UF_CRM_1769351652",
+    obs: "UF_CRM_691385BE7D33D",
+    categoria: "UF_CRM_1770770570",
+    dataPrev: "UF_CRM_1770769767",
+    statusFin: "UF_CRM_1770770088",
+    conta: "UF_CRM_1770770758",
+    centroCusto: "UF_CRM_1771801157",
   };
 
-  var root = document.getElementById("fin-root") || document.body;
+  // Stages Pipeline 27
+  const ST27 = {
+    queueJson: "C27:UC_SVUYIO",
+    despesaAPagar: "C27:NEW",
+    despesaPaga: "C27:PREPARATION",
+    receitaAReceber: "C27:UC_EQAFD7",
+    receitaRecebida: "C27:PREPAYMENT_INVOIC",
+    cancelado: "C27:EXECUTING",
+    concluido: "C27:UC_LP2NSK",
+  };
 
-  function esc(s) {
-    s = String(s == null ? "" : s);
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  // Pipeline 17 (lembretes)
+  const P17 = {
+    categoryId: 17,
+    stageManuela: "C17:PREPARATION",  // MANUELA
+    assigned813: 813
+  };
+
+  // UI defaults
+  const DEFAULT_BATCH_ROWS = 15;
+  const HIDE_STAGE_DEFAULT = new Set([ST27.concluido]); // ocultar “CONCLUÍDO” na listagem padrão
+
+  // Cartões (config fornecida)
+  const CARDS = [
+    { name:"CT ITAÚ PJ", venc:"02", melhor:"21" },
+    { name:"CT PORTO PF", venc:"10", melhor:"04" },
+    { name:"CT C6 PJ", venc:"15", melhor:"09" },
+    { name:"CT XP PF", venc:"15", melhor:"11" },
+    { name:"CT ITAÚ PF", venc:"21", melhor:"13" },
+    { name:"CT CORA CGD BARRA", venc:"23", melhor:"17" },
+    { name:"CT PORTO PJ", venc:"30", melhor:"25" },
+  ];
+
+  // Logo (Bitrix public)
+  const LOGO_URL = "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w";
+
+  // Sócios p/ rodapé (USER IDs)
+  const SOCIOS = [
+    { id: 1, label: "User 1" },
+    { id: 27, label: "User 27" },
+    { id: 15, label: "User 15" },
+  ];
+
+  // =========================
+  // HELPERS
+  // =========================
+  const $ = (sel, root=document)=> root.querySelector(sel);
+  const $$ = (sel, root=document)=> Array.from(root.querySelectorAll(sel));
+  const esc = (s)=> String(s??"").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
+
+  function moneyToNumber(v){
+    if(v==null || v==="") return null;
+    const s = String(v).trim().replace(/\./g,"").replace(",",".").replace(/[^\d.-]/g,"");
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   }
-  function parseJson(t) { try { return JSON.parse(t); } catch (_) { return null; } }
-  function el(q) { return root.querySelector(q); }
+  function fmtBRL(n){
+    const x = Number(n||0);
+    try{ return x.toLocaleString("pt-BR",{ style:"currency", currency:"BRL" }); }
+    catch(_){ return "R$ " + x.toFixed(2).replace(".",","); }
+  }
+  function fmtDateISO(d){
+    // d: Date
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,"0");
+    const da = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${da}`;
+  }
+  function todayISO(){ return fmtDateISO(new Date()); }
 
-  function apiCall(method, payload) {
-    var body = JSON.stringify(payload || {});
-    var headers = { "content-type": "application/json" };
+  function getCfg(){
+    return (window.FINANCEIRO_CFG || {});
+  }
 
-    function req(url) {
-      return fetch(url, { method: "POST", headers: headers, body: body })
-        .then(function (r) {
-          return r.text().then(function (txt) {
-            var j = parseJson(txt);
-            if (!r.ok) throw new Error((j && (j.error_description || j.error)) || txt || ("HTTP " + r.status));
-            if (j && j.error) throw new Error(j.error_description || j.error);
-            return { json: j || {}, mode: (url.indexOf("?method=") > -1 ? "query" : "path") };
-          });
-        });
+  // =========================
+  // BITRIX CALL (Webhook OR Worker proxy)
+  // =========================
+  async function bx(method, params={}){
+    const cfg = getCfg();
+
+    // 1) Se o HTML definiu WEBHOOK_URL, chama direto
+    if(cfg.WEBHOOK_URL){
+      const url = cfg.WEBHOOK_URL.replace(/\/?$/,"/") + method + ".json";
+      const res = await fetch(url, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(params)
+      });
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(j.error_description || j.error || ("HTTP "+res.status));
+      return j.result;
     }
 
-    return req(API_BASE + "/" + method)
-      .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
-      .then(function (res) { S.apiMode = res.mode; return res.json; });
-  }
-
-  function nowBR() {
-    var dt = new Date();
-    var dd = String(dt.getDate()); if (dd.length < 2) dd = "0" + dd;
-    var mo = String(dt.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
-    var yy = dt.getFullYear();
-    var hh = String(dt.getHours()); if (hh.length < 2) hh = "0" + hh;
-    var mm = String(dt.getMinutes()); if (mm.length < 2) mm = "0" + mm;
-    return dd + "/" + mo + "/" + yy + " " + hh + ":" + mm;
-  }
-
-  function toISODate(d) {
-    var s = String(d == null ? "" : d).trim();
-    if (!s) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (m) return m[3] + "-" + m[2] + "-" + m[1];
-    return s;
-  }
-
-  function parseMoneyBR(s) {
-    var t = String(s == null ? "" : s).trim();
-    if (!t) return 0;
-    t = t.replace(/[^\d,.-]/g, "");
-    t = t.replace(/\./g, "");
-    t = t.replace(",", ".");
-    var n = Number(t);
-    return isFinite(n) ? n : 0;
-  }
-
-  function moneyBR(v) {
-    var n = Number(v);
-    if (!isFinite(n)) return "R$ 0,00";
-    var fixed = n.toFixed(2);
-    var parts = fixed.split(".");
-    var a = parts[0];
-    var b = parts[1] || "00";
-    a = a.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-    return "R$ " + a + "," + b;
-  }
-
-  function addDaysISO(iso, days) {
-    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    d.setDate(d.getDate() + days);
-    var y = d.getFullYear();
-    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
-    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
-    return y + "-" + mo + "-" + da;
-  }
-
-  function addMonthsISO(iso, months, forceDay) {
-    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    var y = Number(m[1]), mo = Number(m[2]) - 1, da = Number(m[3]);
-    var d = new Date(y, mo, da);
-    d.setMonth(d.getMonth() + months);
-
-    if (forceDay != null) {
-      var fd = Math.max(1, Math.min(31, Number(forceDay) || 1));
-      var tryD = new Date(d.getFullYear(), d.getMonth(), fd);
-      if (tryD.getMonth() === d.getMonth()) d = tryD;
-      else d = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    }
-
-    var yy = d.getFullYear();
-    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
-    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
-    return yy + "-" + mm + "-" + dd;
-  }
-
-  function addYearsISO(iso, years, forceMonth, forceDay) {
-    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    var y = Number(m[1]) + years;
-    var mo = (forceMonth != null) ? (Math.max(1, Math.min(12, Number(forceMonth)||1)) - 1) : (Number(m[2]) - 1);
-    var da = (forceDay != null) ? Math.max(1, Math.min(31, Number(forceDay)||1)) : Number(m[3]);
-
-    var d = new Date(y, mo, da);
-    if (d.getMonth() !== mo) d = new Date(y, mo + 1, 0);
-    var yy = d.getFullYear();
-    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
-    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
-    return yy + "-" + mm + "-" + dd;
-  }
-
-  function toast(msg, type) {
-    type = type || "ok";
-    var host = el("#fin-toast-host");
-    if (!host) { alert(msg); return; }
-    var t = document.createElement("div");
-    t.className = "fin-toast fin-toast--" + type;
-    t.textContent = msg;
-    host.appendChild(t);
-    setTimeout(function () { t.classList.add("fin-toast--show"); }, 10);
-    setTimeout(function () {
-      t.classList.remove("fin-toast--show");
-      setTimeout(function () { if (t && t.parentNode) t.parentNode.removeChild(t); }, 200);
-    }, 3200);
-  }
-
-  function modal(html, fullscreen) {
-    var wrap = document.createElement("div");
-    wrap.className = "fin-modal-wrap";
-    wrap.innerHTML =
-      '<div class="fin-modal-backdrop" data-close="1"></div>' +
-      '<div class="fin-modal">' + html + "</div>";
-    document.body.appendChild(wrap);
-
-    if (fullscreen) {
-      var m = wrap.querySelector(".fin-modal");
-      if (m) m.classList.add("is-fullscreen");
-    }
-
-    wrap.addEventListener("click", function (e) {
-      var t = e.target;
-      if (t && t.getAttribute && t.getAttribute("data-close") === "1") {
-        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      }
+    // 2) Senão, tenta via Worker: /bx/<method>
+    const url = WORKER_BASE.replace(/\/$/,"") + "/bx/" + method;
+    const res = await fetch(url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(params)
     });
 
-    return {
-      node: wrap,
-      close: function () { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); },
-      q: function (s) { return wrap.querySelector(s); }
-    };
+    // Se o Worker não tiver esse endpoint, vai falhar — mensagem clara
+    if(!res.ok){
+      const t = await res.text().catch(()=> "");
+      throw new Error("Falha ao chamar Worker proxy (/bx). Configure FINANCEIRO_CFG.WEBHOOK_URL no HTML OU implemente /bx no Worker. Detalhe: " + (t||("HTTP "+res.status)));
+    }
+
+    const j = await res.json();
+    if(j.error) throw new Error(j.error_description || j.error);
+    return j.result;
   }
 
-  function setLoading(v) {
-    S.loading = !!v;
-    var badge = el("#fin-loading");
-    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
-    var btns = root.querySelectorAll("[data-busylock='1']");
-    for (var i = 0; i < btns.length; i++) btns[i].disabled = S.loading;
-  }
-
-  var S = {
-    enums: {},
-    stages: [],
-    deals: [],
-    filtered: [],
-    partners: [],
-    lastSyncAt: null,
-    loading: false,
-    apiMode: null,
-
-    // saldo inicial/ajustes por centro: { [centroId]: number }
-    centroAdjust: {},
-
-    filters: {
+  // =========================
+  // STATE
+  // =========================
+  const S = {
+    fields: null,
+    enums: {
+      centro: [],
+      categoria: [],
+      formaPgto: [],
+      tipo: [],
+      conta: [],
+    },
+    filter: {
+      month: null,
+      centro: "ALL",
+      stage: "DEFAULT", // DEFAULT = oculta CONCLUÍDO
       q: "",
-      centro: "",
-      competencia: "",
-      conta: "",
-      stageId: "",
-      showPayables: true,
-      showReceivables: true
     },
-
-    reserve: { balance: 0 }
+    deals: [],
+    users: {}, // userId -> {PHOTO, NAME}
+    balances: {}, // centroId/name -> number (manual)
   };
 
-  function loadLocal() {
-    try {
-      var rawR = localStorage.getItem("FIN_RESERVE_BALANCE");
-      S.reserve.balance = rawR ? Number(rawR) : 0;
-      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
+  const LS_BAL = "FIN_BALANCES_V1";
 
-      var rawA = localStorage.getItem("FIN_CENTRO_ADJUST");
-      S.centroAdjust = rawA ? (parseJson(rawA) || {}) : {};
-      if (!S.centroAdjust || typeof S.centroAdjust !== "object") S.centroAdjust = {};
-    } catch (_) {
-      S.reserve.balance = 0;
-      S.centroAdjust = {};
+  function loadBalances(){
+    try{
+      const raw = localStorage.getItem(LS_BAL);
+      S.balances = raw ? JSON.parse(raw) : {};
+    }catch(_){
+      S.balances = {};
     }
   }
-  function saveReserve() { try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {} }
-  function saveCentroAdjust() { try { localStorage.setItem("FIN_CENTRO_ADJUST", JSON.stringify(S.centroAdjust || {})); } catch (_) {} }
-
-  function buildOptions(items, includeBlank, blankText) {
-    if (includeBlank !== false) includeBlank = true;
-    blankText = blankText || "— Todos —";
-    var arr = Array.isArray(items) ? items : [];
-    var out = [];
-    if (includeBlank) out.push('<option value="">' + esc(blankText) + "</option>");
-    for (var i = 0; i < arr.length; i++) out.push('<option value="' + esc(arr[i].ID) + '">' + esc(arr[i].VALUE) + "</option>");
-    return out.join("");
+  function saveBalances(){
+    try{ localStorage.setItem(LS_BAL, JSON.stringify(S.balances||{})); }catch(_){}
   }
 
-  function enumName(fieldId, enumId) {
-    if (!enumId) return "";
-    var list = (S.enums && S.enums[fieldId]) ? S.enums[fieldId] : [];
-    for (var i = 0; i < list.length; i++) if (String(list[i].ID) === String(enumId)) return list[i].VALUE;
-    return String(enumId);
+  // =========================
+  // UI - BASE STRUCTURE
+  // =========================
+  function mountBase(){
+    const root = document.getElementById("fin-root") || document.body;
+    root.innerHTML = `
+      <div id="fin-app">
+        <header class="fin-header">
+          <div class="fin-brand">
+            <img class="fin-logo" src="${esc(LOGO_URL)}" alt="CGD"/>
+            <div>
+              <div class="title">Financeiro CGD</div>
+              <div class="subtitle">Pipeline 27 • Controle Financeiro</div>
+            </div>
+          </div>
+
+          <div class="fin-top-actions">
+            <div class="fin-search">
+              <span class="ico">🔎</span>
+              <input id="fin-q" placeholder="Buscar por favorecido, categoria, valor..." />
+            </div>
+
+            <button class="fin-btn" id="btn-novo">NOVO</button>
+            <button class="fin-btn" id="btn-lote-desp">LOTE DESPESAS</button>
+            <button class="fin-btn" id="btn-lote-rec">LOTE RECEITAS</button>
+            <button class="fin-btn" id="btn-cartoes">CARTÕES</button>
+            <button class="fin-btn" id="btn-saldos">SALDOS</button>
+            <button class="fin-btn" id="btn-transfer">TRANSFERIR</button>
+            <button class="fin-btn" id="btn-refresh">ATUALIZAR</button>
+          </div>
+        </header>
+
+        <aside class="fin-sidebar">
+          <div class="fin-sidebox">
+            <div class="label">Mês (Competência)</div>
+            <select id="fin-month"></select>
+          </div>
+
+          <div class="fin-sidebox">
+            <div class="label">Centro de custo</div>
+            <select id="fin-centro"></select>
+          </div>
+
+          <div class="fin-sidebox">
+            <div class="label">Exibir</div>
+            <select id="fin-stage-mode">
+              <option value="DEFAULT">Padrão (oculta CONCLUÍDO)</option>
+              <option value="ALL">Todas as etapas</option>
+            </select>
+          </div>
+
+          <div class="fin-sidebox">
+            <div class="label">Atalhos</div>
+            <div class="fin-nav">
+              <button class="active" data-view="overview">Visão Geral</button>
+              <button data-view="despesas">Despesas</button>
+              <button data-view="receitas">Receitas</button>
+              <button data-view="lancamentos">Lançamentos</button>
+            </div>
+          </div>
+
+          <div class="fin-sidebox">
+            <div class="label">Fundo de Reserva</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="fin-reserve" placeholder="R$ 0,00" />
+            </div>
+            <div style="margin-top:6px;font-size:11px;font-weight:900;opacity:.85">
+              (Saldo manual — você pode ajustar quando quiser)
+            </div>
+          </div>
+        </aside>
+
+        <main class="fin-main">
+          <section class="fin-panel">
+            <div class="fin-panel-inner" id="fin-view"></div>
+          </section>
+        </main>
+
+        <footer class="fin-footer">
+          <div class="left">
+            <div class="fin-avatars" id="fin-avatars"></div>
+            <div class="addr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
+          </div>
+          <div class="center">System created by GRUPO CGD</div>
+          <div class="right">
+            <div class="block">CGD CORRETORA<br/>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
+            <div class="block">CGD BARRA<br/>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+          </div>
+        </footer>
+      </div>
+
+      <!-- MODAL (reutilizado para NOVO / LOTE / MOVIMENTOS) -->
+      <div class="fin-modal" id="fin-modal">
+        <div class="fin-modal-card">
+          <div class="fin-modal-top">
+            <div class="title" id="fin-modal-title">Modal</div>
+            <div class="actions" id="fin-modal-actions"></div>
+          </div>
+          <div class="fin-modal-body" id="fin-modal-body"></div>
+        </div>
+      </div>
+    `;
   }
 
-  function enumIdByValue(fieldId, label) {
-    var target = String(label || "").trim().toLowerCase();
-    if (!target) return "";
-    var list = (S.enums && S.enums[fieldId]) ? S.enums[fieldId] : [];
-    for (var i = 0; i < list.length; i++) {
-      if (String(list[i].VALUE || "").trim().toLowerCase() === target) return String(list[i].ID);
+  // =========================
+  // UI - MODAL
+  // =========================
+  function openModal(title, actionsHTML, bodyHTML){
+    $("#fin-modal-title").textContent = title;
+    $("#fin-modal-actions").innerHTML = actionsHTML;
+    $("#fin-modal-body").innerHTML = bodyHTML;
+    $("#fin-modal").classList.add("show");
+
+    // binds close
+    const close = ()=> closeModal();
+    const btnClose = $("#fin-modal-actions [data-act='close']");
+    if(btnClose) btnClose.addEventListener("click", close);
+  }
+  function closeModal(){
+    $("#fin-modal").classList.remove("show");
+    $("#fin-modal-body").innerHTML = "";
+    $("#fin-modal-actions").innerHTML = "";
+  }
+
+  // =========================
+  // LOAD ENUMS FROM crm.deal.fields
+  // =========================
+  function findFieldByKey(fieldsObj, fieldKey){
+    // fieldKey is UF_...
+    return fieldsObj && fieldsObj[fieldKey] ? fieldsObj[fieldKey] : null;
+  }
+  function enumFromField(field){
+    // Bitrix: field.items might exist; otherwise field 'items' in crm.deal.fields response
+    if(!field) return [];
+    const items = field.items || field.ITEMS || field.values || field.VALUES;
+    if(Array.isArray(items)) return items.map(x=>({ id: String(x.ID ?? x.id ?? x.VALUE ?? x.value ?? ""), name: String(x.VALUE ?? x.value ?? x.NAME ?? x.name ?? "") })).filter(x=>x.name);
+    // Sometimes crm.deal.fields returns "items" as object map
+    if(items && typeof items==="object"){
+      return Object.keys(items).map(k=>({ id:String(k), name:String(items[k]) }));
     }
-    // fallback "contains"
-    for (var j = 0; j < list.length; j++) {
-      var v = String(list[j].VALUE || "").trim().toLowerCase();
-      if (v && target && v.indexOf(target) > -1) return String(list[j].ID);
-    }
-    return "";
+    return [];
   }
 
-  function stageName(stageId) {
-    for (var i = 0; i < S.stages.length; i++) if (String(S.stages[i].STATUS_ID) === String(stageId)) return S.stages[i].NAME;
-    return String(stageId || "");
-  }
-
-  function isBadFav(fav) {
-    var s = String(fav || "").trim().toUpperCase();
-    if (!s) return false;
-    if (s.indexOf("__QUEUE__") === 0) return true;
-    if (s.indexOf("FILA ATENDIMENTO") > -1) return true;
-    return false;
-  }
-
-  function updateDeal(id, fields) { return apiCall("crm.deal.update", { id: String(id), fields: fields || {} }); }
-  function createDeal(fields) { return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) { return r && r.result ? r.result : null; }); }
-  function deleteDeal(id) { return apiCall("crm.deal.delete", { id: String(id) }); }
-
-  function loadMeta() {
-    return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
-      var fields = (fieldsRes && fieldsRes.result) ? fieldsRes.result : {};
-      S.enums = {};
-      for (var k in fields) {
-        if (!fields.hasOwnProperty(k)) continue;
-        var v = fields[k];
-        if (v && Array.isArray(v.items)) {
-          S.enums[k] = v.items.map(function (it) { return { ID: String(it.ID), VALUE: String(it.VALUE) }; });
+  // =========================
+  // USERS (rodapé)
+  // =========================
+  async function loadUsers(){
+    for(const u of SOCIOS){
+      try{
+        const r = await bx("user.get", { filter:{ ID: u.id } });
+        const one = Array.isArray(r) ? r[0] : null;
+        if(one){
+          S.users[u.id] = {
+            id: u.id,
+            name: one.NAME ? (one.NAME + (one.LAST_NAME ? (" "+one.LAST_NAME) : "")) : ("User "+u.id),
+            photo: one.PERSONAL_PHOTO || one.PERSONAL_PHOTO_URL || one.PERSONAL_PHOTO_FILE || ""
+          };
         }
+      }catch(_){
+        // ignore
       }
-      return apiCall("crm.status.list", { filter: { ENTITY_ID: "DEAL_STAGE_" + CFG.DEAL_CATEGORY_ID } });
-    }).then(function (st) {
-      var allowed = {};
-      for (var a in CFG.STAGES) allowed[String(CFG.STAGES[a])] = true;
-
-      var raw = (st && st.result) ? st.result : [];
-      var out = [];
-      for (var i = 0; i < raw.length; i++) {
-        var sid = String(raw[i].STATUS_ID || raw[i].ID || "");
-        if (!allowed[sid]) continue;
-        out.push({ STATUS_ID: sid, NAME: String(raw[i].NAME || ""), SORT: Number(raw[i].SORT || 0) });
-      }
-      out.sort(function (x, y) { return x.SORT - y.SORT; });
-      S.stages = out;
-    });
+    }
+    renderFooterAvatars();
   }
 
-  function listDealsAll() {
-    var out = [];
-    var start = 0;
-    var stageArr = [
-      CFG.STAGES.DESP_A_PAGAR,
-      CFG.STAGES.DESP_PAGA,
-      CFG.STAGES.REC_A_RECEBER,
-      CFG.STAGES.REC_RECEBIDA,
-      CFG.STAGES.CANCELADO,
-      CFG.STAGES.CONCLUIDO
+  function renderFooterAvatars(){
+    const wrap = $("#fin-avatars");
+    if(!wrap) return;
+    wrap.innerHTML = "";
+
+    for(const u of SOCIOS){
+      const info = S.users[u.id];
+      if(info && info.photo){
+        const img = document.createElement("img");
+        img.className = "fin-avatar";
+        img.src = info.photo;
+        img.alt = info.name || ("User "+u.id);
+        wrap.appendChild(img);
+      }else{
+        const div = document.createElement("div");
+        div.className = "fin-avatar fallback";
+        div.textContent = String(u.id);
+        wrap.appendChild(div);
+      }
+    }
+  }
+
+  // =========================
+  // MONTH OPTIONS
+  // =========================
+  function buildMonthOptions(){
+    const sel = $("#fin-month");
+    if(!sel) return;
+
+    const now = new Date();
+    const opts = [];
+    for(let i=0;i<18;i++){
+      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const key = `${y}-${m}`;
+      const label = d.toLocaleString("pt-BR",{ month:"long", year:"numeric" }).replace(/^\w/, c=>c.toUpperCase());
+      opts.push({ key, label });
+    }
+
+    sel.innerHTML = opts.map(o=>`<option value="${esc(o.key)}">${esc(o.label)}</option>`).join("");
+    S.filter.month = opts[0].key;
+  }
+
+  // =========================
+  // BALANCE UI (manual)
+  // =========================
+  function reserveGet(){
+    const v = $("#fin-reserve")?.value ?? "";
+    return moneyToNumber(v) || 0;
+  }
+  function reserveSet(n){
+    const el = $("#fin-reserve");
+    if(el) el.value = fmtBRL(n || 0);
+  }
+
+  function getCentroLabelById(id){
+    const it = S.enums.centro.find(x=>String(x.id)===String(id));
+    return it ? it.name : (id ? String(id) : "Sem Centro");
+  }
+
+  function balanceKeyForCentro(centroId){
+    // store by "id" if exists, else by name
+    return centroId ? ("ID:"+String(centroId)) : "ID:__NONE__";
+  }
+
+  function getBalance(centroId){
+    const k = balanceKeyForCentro(centroId);
+    return Number(S.balances[k] || 0);
+  }
+  function setBalance(centroId, value){
+    const k = balanceKeyForCentro(centroId);
+    S.balances[k] = Number(value || 0);
+    saveBalances();
+  }
+
+  // =========================
+  // LOAD DATA (Deals)
+  // =========================
+  async function loadFields(){
+    const fields = await bx("crm.deal.fields", {});
+    S.fields = fields;
+
+    // enums
+    S.enums.centro = enumFromField(findFieldByKey(fields, F.centroCusto));
+    S.enums.categoria = enumFromField(findFieldByKey(fields, F.categoria));
+    S.enums.formaPgto = enumFromField(findFieldByKey(fields, F.formaPgto));
+    S.enums.tipo = enumFromField(findFieldByKey(fields, F.tipo));
+    S.enums.conta = enumFromField(findFieldByKey(fields, F.conta));
+
+    // sidebar selects
+    const centroSel = $("#fin-centro");
+    if(centroSel){
+      const all = [{ id:"ALL", name:"Todos" }, ...S.enums.centro];
+      centroSel.innerHTML = all.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+      centroSel.value = "ALL";
+    }
+  }
+
+  function buildDealFilter(){
+    // filtro por categoria/pipeline 27 + estágio permitido
+    const stageMode = $("#fin-stage-mode")?.value || "DEFAULT";
+    const allowAll = stageMode === "ALL";
+
+    const allowedStages = [
+      ST27.despesaAPagar,
+      ST27.despesaPaga,
+      ST27.receitaAReceber,
+      ST27.receitaRecebida,
+      ST27.cancelado,
+      ST27.concluido,
     ];
 
-    function loop() {
-      return apiCall("crm.deal.list", {
+    const stages = allowAll ? allowedStages : allowedStages.filter(s=>!HIDE_STAGE_DEFAULT.has(s));
+
+    // Centro
+    const centro = $("#fin-centro")?.value || "ALL";
+
+    // Busca
+    const q = (S.filter.q || "").toLowerCase().trim();
+
+    return { stages, centro, q };
+  }
+
+  async function loadDeals(){
+    // Busca “compacta”: pega deals na categoria 27
+    // Paginação simples (até 500 por padrão; dá para ampliar depois)
+    const all = [];
+    let start = 0;
+    const limit = 50;
+
+    for(let page=0; page<10; page++){
+      const r = await bx("crm.deal.list", {
+        order: { "ID": "DESC" },
+        filter: { "CATEGORY_ID": 27 },
         select: [
-          "ID", "TITLE", "STAGE_ID", "CATEGORY_ID",
-          CFG.F.TIPO_FIN, CFG.F.COMPETENCIA, CFG.F.VALOR_PREV, CFG.F.VALOR_REAL,
-          CFG.F.DATA_REAL, CFG.F.FAVORECIDO, CFG.F.OBS, CFG.F.CATEGORIA,
-          CFG.F.DATA_PREV, CFG.F.STATUS_FIN, CFG.F.CONTA, CFG.F.CENTRO_CUSTO
+          "ID","TITLE","STAGE_ID","CATEGORY_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
+          F.tipo, F.competencia, F.valorPrev, F.valorReal, F.dataReal, F.favorecido, F.formaPgto, F.obs,
+          F.categoria, F.dataPrev, F.statusFin, F.conta, F.centroCusto
         ],
-        filter: { CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID), STAGE_ID: stageArr },
-        order: { ID: "DESC" },
-        start: start
-      }).then(function (res) {
-        var chunk = (res && res.result) ? res.result : [];
-        for (var i = 0; i < chunk.length; i++) out.push(chunk[i]);
-        if (res && res.next != null) { start = res.next; return loop(); }
-        return out;
+        start
       });
-    }
-    return loop();
-  }
 
-  function initialsFromName(name) {
-    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-    var a = parts[0] ? parts[0].charAt(0) : "";
-    var b = parts[1] ? parts[1].charAt(0) : "";
-    var out = (a + b).toUpperCase();
-    return out || "CG";
-  }
-
-  function resolveUserPhotoUrl(user) {
-    var raw = user && (user.PERSONAL_PHOTO_URL || user.PERSONAL_PHOTO || user.PHOTO || "");
-    if (!raw) return "";
-    if (typeof raw === "string" && raw.indexOf("http") === 0) return raw;
-    return "";
-  }
-
-  function loadPartners() {
-    return apiCall("user.get", { ID: CFG.FOOTER.partnersUserIds })
-      .then(function (r) { S.partners = (r && r.result) ? r.result : []; })
-      .catch(function () { S.partners = []; });
-  }
-
-  function renderPartnersAvatars() {
-    var host = el("#fin-avatars");
-    if (!host) return;
-
-    var byId = {};
-    for (var i = 0; i < S.partners.length; i++) byId[String(S.partners[i].ID)] = S.partners[i];
-
-    var html = [];
-    for (var j = 0; j < CFG.FOOTER.partnersUserIds.length; j++) {
-      var id = CFG.FOOTER.partnersUserIds[j];
-      var u = byId[String(id)] || {};
-      var name = ((u.NAME || "") + " " + (u.LAST_NAME || "")).trim() || ("User " + id);
-      var url = resolveUserPhotoUrl(u);
-
-      if (url) html.push('<div class="fin-avatar" title="' + esc(name) + '"><img src="' + esc(url) + '" alt="' + esc(name) + '"></div>');
-      else html.push('<div class="fin-avatar" title="' + esc(name) + '">' + esc(initialsFromName(name)) + "</div>");
-    }
-    host.innerHTML = html.join("");
-  }
-
-  function renderSidebarCenters() {
-    var host = el("#fin-side-centers");
-    if (!host) return;
-
-    var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
-    var sel = String(S.filters.centro || "");
-
-    function btn(id, label, active) {
-      return (
-        '<button class="fin-side-item ' + (active ? "is-active" : "") + '" data-centro="' + esc(id) + '">' +
-          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" +
-        "</button>"
-      );
+      if(Array.isArray(r)) all.push(...r);
+      // Bitrix pode retornar array + next; como estamos usando "start", se vier vazio, para
+      if(!Array.isArray(r) || r.length < limit) break;
+      start += limit;
+      await sleep(50);
     }
 
-    var html = btn("", "Todos os centros", !sel);
-    for (var i = 0; i < items.length; i++) html += btn(String(items[i].ID), String(items[i].VALUE), sel === String(items[i].ID));
-
-    host.innerHTML = html;
-
-    var bs = host.querySelectorAll("[data-centro]");
-    for (var k = 0; k < bs.length; k++) {
-      bs[k].addEventListener("click", function () {
-        S.filters.centro = this.getAttribute("data-centro") || "";
-        renderSidebarCenters();
-        applyFilters();
-      });
-    }
+    S.deals = all;
   }
 
-  function calcSaldoCentroRealizado(centroId) {
-    // Opção A: (Receitas Recebidas) - (Despesas Pagas) + ajuste manual
-    var sumRec = 0;
-    var sumDesp = 0;
+  // =========================
+  // VIEW RENDERING
+  // =========================
+  function dealTypeLabel(d){
+    const v = d[F.tipo];
+    const it = S.enums.tipo.find(x=>String(x.id)===String(v));
+    return it ? it.name : (v ? String(v) : "");
+  }
+  function enumLabel(list, id){
+    const it = list.find(x=>String(x.id)===String(id));
+    return it ? it.name : (id ? String(id) : "");
+  }
+  function dealCentroLabel(d){ return enumLabel(S.enums.centro, d[F.centroCusto]); }
+  function dealCategoriaLabel(d){ return enumLabel(S.enums.categoria, d[F.categoria]); }
+  function dealContaLabel(d){ return enumLabel(S.enums.conta, d[F.conta]); }
+  function dealFormaLabel(d){ return enumLabel(S.enums.formaPgto, d[F.formaPgto]); }
 
-    for (var i = 0; i < S.deals.length; i++) {
-      var d = S.deals[i];
-      if (String(d[CFG.F.CENTRO_CUSTO] || "") !== String(centroId || "")) continue;
-
-      var st = String(d.STAGE_ID || "");
-      var v = Number(d[CFG.F.VALOR_REAL] || 0) || 0;
-
-      if (st === CFG.STAGES.REC_RECEBIDA) sumRec += v;
-      if (st === CFG.STAGES.DESP_PAGA) sumDesp += v;
-    }
-
-    var adj = Number(S.centroAdjust[String(centroId)] || 0) || 0;
-    return (sumRec - sumDesp + adj);
+  function dealAmountPrev(d){
+    const n = moneyToNumber(d[F.valorPrev]);
+    return n || 0;
+  }
+  function dealAmountReal(d){
+    const n = moneyToNumber(d[F.valorReal]);
+    return n || 0;
   }
 
-  function renderTotals() {
-    var list = S.filtered || [];
-    var prev = 0, real = 0;
+  function applyClientFilters(list){
+    const { stages, centro, q } = buildDealFilter();
 
-    for (var i = 0; i < list.length; i++) {
-      prev += Number(list[i][CFG.F.VALOR_PREV] || 0) || 0;
-      real += Number(list[i][CFG.F.VALOR_REAL] || 0) || 0;
-    }
+    return list.filter(d=>{
+      if(String(d.CATEGORY_ID) !== "27") return false;
+      if(!stages.includes(d.STAGE_ID)) return false;
+      if(centro !== "ALL" && String(d[F.centroCusto]) !== String(centro)) return false;
 
-    if (el("#tot-prev")) el("#tot-prev").textContent = moneyBR(prev);
-    if (el("#tot-real")) el("#tot-real").textContent = moneyBR(real);
-    if (el("#reserve-balance")) el("#reserve-balance").textContent = moneyBR(S.reserve.balance || 0);
-    if (el("#tot-count")) el("#tot-count").textContent = String(list.length);
-
-    // saldo centro (se um centro estiver selecionado)
-    var c = S.filters.centro;
-    if (el("#saldo-centro")) {
-      if (c) el("#saldo-centro").textContent = moneyBR(calcSaldoCentroRealizado(c));
-      else el("#saldo-centro").textContent = "—";
-    }
-
-    if (S.lastSyncAt && el("#fin-lastsync")) {
-      el("#fin-lastsync").textContent = "Atualizado em " + S.lastSyncAt + " • API: " + (S.apiMode || "?");
-    }
-  }
-
-  function renderChartsPlaceholders() {
-    var a = el("#chart-cat");
-    var b = el("#chart-evo");
-    if (a) a.innerHTML = '<div class="fin-chart-box">Pizza: Despesas por Categorias (próximo passo)</div>';
-    if (b) b.innerHTML = '<div class="fin-chart-box">Linha: Evolução Receitas x Despesas (próximo passo)</div>';
-  }
-
-  function applyFilters() {
-    var q = String(S.filters.q || "").trim().toLowerCase();
-
-    S.filtered = (S.deals || []).filter(function (d) {
-      if (isBadFav(d[CFG.F.FAVORECIDO])) return false;
-
-      if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
-      if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
-      if (S.filters.conta && String(d[CFG.F.CONTA] || "") !== String(S.filters.conta)) return false;
-
-      if (S.filters.stageId) {
-        if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
-      } else {
-        // padrão: esconder CONCLUÍDO
-        if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
-      }
-
-      var st = String(d.STAGE_ID || "");
-      var isExp = (st === CFG.STAGES.DESP_A_PAGAR || st === CFG.STAGES.DESP_PAGA);
-      var isRec = (st === CFG.STAGES.REC_A_RECEBER || st === CFG.STAGES.REC_RECEBIDA);
-
-      if (!S.filters.showPayables && isExp) return false;
-      if (!S.filters.showReceivables && isRec) return false;
-
-      if (q) {
-        var hay = [
-          d.ID, d.TITLE,
-          d[CFG.F.FAVORECIDO],
-          d[CFG.F.OBS],
-          enumName(CFG.F.CONTA, d[CFG.F.CONTA]),
-          enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]),
-          enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA])
-        ].join(" ").toLowerCase();
-        if (hay.indexOf(q) === -1) return false;
+      if(q){
+        const hay = [
+          d.TITLE, d[F.favorecido], dealCategoriaLabel(d), dealCentroLabel(d), dealContaLabel(d)
+        ].map(x=>String(x||"").toLowerCase()).join(" ");
+        if(!hay.includes(q)) return false;
       }
       return true;
     });
-
-    renderTable();
-    renderTotals();
-    renderChartsPlaceholders();
-    renderSaldoCentroList(); // sidebar list
   }
 
-  function nextStageByCurrent(stageId) {
-    stageId = String(stageId || "");
-    if (stageId === CFG.STAGES.DESP_A_PAGAR) return CFG.STAGES.DESP_PAGA;
-    if (stageId === CFG.STAGES.REC_A_RECEBER) return CFG.STAGES.REC_RECEBIDA;
-    return "";
-  }
-
-  function openPayReceiveModal(deal) {
-    var stageTo = nextStageByCurrent(deal.STAGE_ID);
-    if (!stageTo) {
-      toast("Este item não está em A PAGAR / A RECEBER.", "err");
-      return;
-    }
-
-    var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
-    var title = isDesp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
-
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(title) + '</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-row fin-wrap" style="gap:10px">' +
-          '<div class="fin-field" style="flex:1;min-width:240px"><label>Valor pago/recebido</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
-        '</div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="pr-save" data-busylock="1">Salvar</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#pr-save").addEventListener("click", function () {
-      setLoading(true);
-
-      var v = parseMoneyBR(m.q("#pr-val").value || "");
-      var dt = toISODate(m.q("#pr-date").value || "");
-
-      var fields = {};
-      fields[CFG.F.VALOR_REAL] = v;
-      fields[CFG.F.DATA_REAL] = dt;
-      fields.STAGE_ID = stageTo;
-
-      updateDeal(deal.ID, fields)
-        .then(function () { toast("Atualizado ✅"); m.close(); return refresh(); })
-        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
-        .finally(function () { setLoading(false); });
-    });
-  }
-
-  function confirmDelete(deal) {
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Excluir lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div style="font-weight:900">Tem certeza que deseja EXCLUIR o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?</div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#del-ok").addEventListener("click", function () {
-      setLoading(true);
-      deleteDeal(deal.ID)
-        .then(function () { toast("Excluído ✅"); m.close(); return refresh(); })
-        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
-        .finally(function () { setLoading(false); });
-    });
-  }
-
-  /* ===== Competência opcional ===== */
-  function guessCompetenciaIdFromISO(iso) {
-    iso = toISODate(iso);
-    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return "";
-    var yy = m[1], mm = m[2];
-
-    var list = S.enums[CFG.F.COMPETENCIA] || [];
-    var map = {
-      "01":["jan","janeiro","01"],
-      "02":["fev","fevereiro","02"],
-      "03":["mar","março","03"],
-      "04":["abr","abril","04"],
-      "05":["mai","maio","05"],
-      "06":["jun","junho","06"],
-      "07":["jul","julho","07"],
-      "08":["ago","agosto","08"],
-      "09":["set","setembro","09"],
-      "10":["out","outubro","10"],
-      "11":["nov","novembro","11"],
-      "12":["dez","dezembro","12"]
+  function splitByStage(list){
+    const by = {
+      aPagar: [],
+      pagas: [],
+      aReceber: [],
+      recebidas: [],
+      cancelado: [],
+      concluido: [],
     };
-    var keys = map[mm] || [mm];
+    for(const d of list){
+      if(d.STAGE_ID === ST27.despesaAPagar) by.aPagar.push(d);
+      else if(d.STAGE_ID === ST27.despesaPaga) by.pagas.push(d);
+      else if(d.STAGE_ID === ST27.receitaAReceber) by.aReceber.push(d);
+      else if(d.STAGE_ID === ST27.receitaRecebida) by.recebidas.push(d);
+      else if(d.STAGE_ID === ST27.cancelado) by.cancelado.push(d);
+      else if(d.STAGE_ID === ST27.concluido) by.concluido.push(d);
+    }
+    return by;
+  }
 
-    for (var i = 0; i < list.length; i++) {
-      var t = String(list[i].VALUE || "").toLowerCase();
-      if (t.indexOf(yy) === -1) continue;
-      for (var k = 0; k < keys.length; k++) {
-        if (t.indexOf(keys[k]) > -1) return String(list[i].ID);
+  function calcKpis(list){
+    const receitas = list.filter(d=>d.STAGE_ID===ST27.receitaAReceber || d.STAGE_ID===ST27.receitaRecebida);
+    const despesas = list.filter(d=>d.STAGE_ID===ST27.despesaAPagar || d.STAGE_ID===ST27.despesaPaga);
+
+    const rec = receitas.reduce((s,d)=> s + (dealAmountReal(d) || dealAmountPrev(d)), 0);
+    const des = despesas.reduce((s,d)=> s + (dealAmountReal(d) || dealAmountPrev(d)), 0);
+    const lucro = rec - des;
+
+    // saldos manuais por centro (somatório)
+    const totalSaldoManual = Object.values(S.balances||{}).reduce((a,b)=>a+Number(b||0),0);
+
+    return { rec, des, lucro, totalSaldoManual };
+  }
+
+  function renderOverview(){
+    const filtered = applyClientFilters(S.deals);
+    const by = splitByStage(filtered);
+    const k = calcKpis(filtered);
+
+    const view = $("#fin-view");
+    view.innerHTML = `
+      <div class="fin-filters">
+        <div class="fin-field">
+          <label>Centro</label>
+          <div style="font-weight:1000">${esc($("#fin-centro")?.selectedOptions?.[0]?.textContent || "Todos")}</div>
+        </div>
+        <div class="fin-field">
+          <label>Exibição</label>
+          <div style="font-weight:1000">${esc($("#fin-stage-mode")?.value==="ALL" ? "Todas as etapas" : "Padrão")}</div>
+        </div>
+        <div class="fin-spacer"></div>
+        <button class="fin-mini-btn" id="btn-export">Exportar CSV (tudo)</button>
+      </div>
+
+      <div class="fin-kpis">
+        <div class="fin-kpi">
+          <div class="icon">💰</div>
+          <div>
+            <div class="value">${esc(fmtBRL(k.rec))}</div>
+            <div class="label">Receitas (prev/real)</div>
+          </div>
+        </div>
+        <div class="fin-kpi">
+          <div class="icon">📉</div>
+          <div>
+            <div class="value">${esc(fmtBRL(k.des))}</div>
+            <div class="label">Despesas (prev/real)</div>
+          </div>
+        </div>
+        <div class="fin-kpi">
+          <div class="icon">📈</div>
+          <div>
+            <div class="value">${esc(fmtBRL(k.lucro))}</div>
+            <div class="label">Lucro (mês)</div>
+          </div>
+        </div>
+        <div class="fin-kpi">
+          <div class="icon">🏦</div>
+          <div>
+            <div class="value">${esc(fmtBRL(reserveGet()))}</div>
+            <div class="label">Fundo de Reserva</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="fin-lists">
+        <div class="fin-card">
+          <h3>Despesas — A Pagar → Pagas (checkbox)</h3>
+          <ul class="fin-list" id="list-apagar">
+            ${by.aPagar.slice(0,8).map(d=>itemHTML(d,"pagar")).join("")}
+          </ul>
+          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
+            Marque para mover para <b>DESPESA - PAGA</b> e informar data/valor realizado.
+          </div>
+        </div>
+
+        <div class="fin-card">
+          <h3>Receitas — A Receber → Recebidas (checkbox)</h3>
+          <ul class="fin-list" id="list-areceber">
+            ${by.aReceber.slice(0,8).map(d=>itemHTML(d,"receber")).join("")}
+          </ul>
+          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
+            Marque para mover para <b>RECEITA RECEBIDA</b> e informar data/valor realizado.
+          </div>
+        </div>
+      </div>
+
+      <!-- GRÁFICOS ABAIXO DO CHECKBOX (você pediu) -->
+      <div class="fin-charts">
+        <div class="fin-chartbox">
+          <h3>Despesas por Categoria (mock visual)</h3>
+          <div class="fin-chart-row">
+            <div class="fin-donut">
+              <div class="fin-donut-center">${esc(fmtBRL(k.des))}</div>
+            </div>
+            <div class="fin-legend" id="legend-desp"></div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
+            *Visual mock — depois podemos renderizar por dados reais (agora já temos os dados).
+          </div>
+        </div>
+
+        <div class="fin-chartbox">
+          <h3>Evolução de Receitas x Despesas (mock visual)</h3>
+          <div class="fin-linechart">
+            <div class="fin-spark">
+              <svg viewBox="0 0 600 200" preserveAspectRatio="none">
+                <path class="a" d="M10,130 C120,90 180,110 240,70 C300,40 360,85 420,60 C480,45 540,50 590,30"/>
+                <path class="b" d="M10,150 C120,130 180,140 240,120 C300,95 360,125 420,105 C480,110 540,105 590,95"/>
+                <circle class="p" cx="10" cy="130" r="4"/><circle class="p" cx="240" cy="70" r="4"/><circle class="p" cx="590" cy="30" r="4"/>
+                <circle class="p" cx="10" cy="150" r="4"/><circle class="p" cx="240" cy="120" r="4"/><circle class="p" cx="590" cy="95" r="4"/>
+              </svg>
+            </div>
+          </div>
+          <div class="fin-chart-note">
+            <span class="fin-tag"><span class="sq" style="background:rgba(34,197,94,.90)"></span> Receitas</span>
+            <span class="fin-tag"><span class="sq" style="background:rgba(239,68,68,.88)"></span> Despesas</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Legend real (top 6 categorias por soma)
+    const cats = {};
+    for(const d of filtered){
+      if(d.STAGE_ID===ST27.despesaAPagar || d.STAGE_ID===ST27.despesaPaga){
+        const c = dealCategoriaLabel(d) || "Sem categoria";
+        cats[c] = (cats[c]||0) + (dealAmountReal(d)||dealAmountPrev(d));
       }
     }
-    return "";
+    const entries = Object.entries(cats).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    $("#legend-desp").innerHTML = `
+      <ul>
+        ${entries.map(([k,v],i)=>`
+          <li>
+            <span class="left"><span class="fin-sw" style="background:${["#60a5fa","#34d399","#fbbf24","#f87171","#a78bfa","#94a3b8"][i%6]}"></span>${esc(k)}</span>
+            <span>${esc(fmtBRL(v))}</span>
+          </li>
+        `).join("")}
+      </ul>
+    `;
+
+    bindOverviewActions();
   }
 
-  function tipoEnumForKind(kind) {
-    var items = S.enums[CFG.F.TIPO_FIN] || [];
-    for (var i = 0; i < items.length; i++) {
-      var t = String(items[i].VALUE || "").toUpperCase();
-      if (kind === "DESPESA" && t.indexOf("DESP") > -1) return String(items[i].ID);
-      if (kind === "RECEITA" && t.indexOf("REC") > -1) return String(items[i].ID);
-    }
-    return "";
-  }
-  function stageForKind(kind) { return (kind === "RECEITA") ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR; }
+  function itemHTML(d, mode){
+    const id = String(d.ID);
+    const favorecido = d[F.favorecido] || d.TITLE || ("Deal "+id);
+    const centro = dealCentroLabel(d) || "Sem centro";
+    const cat = dealCategoriaLabel(d) || "Sem categoria";
+    const valor = dealAmountReal(d) || dealAmountPrev(d);
 
-  function calcDate(baseISO, row, idx) {
-    baseISO = toISODate(baseISO);
-    if (!baseISO) return "";
+    // checkbox identifica ação
+    const cbId = `cb_${mode}_${id}`;
 
-    if (row.freq === "once") return baseISO;
-
-    if (row.freq === "weekly") {
-      var wd = Number(row.weekday || 1); // 1..7
-      var d = new Date(baseISO + "T12:00:00");
-      var jswd = d.getDay(); // 0..6 (dom..sab)
-      var cur = (jswd === 0 ? 7 : jswd); // 1..7
-      var delta = wd - cur;
-      if (delta < 0) delta += 7;
-      var first = addDaysISO(baseISO, delta);
-      return addDaysISO(first, idx * 7);
-    }
-
-    if (row.freq === "monthly") {
-      var day = Number(row.monthday || 1);
-      return addMonthsISO(baseISO, idx, day);
-    }
-
-    if (row.freq === "yearly") {
-      var mo = Number(row.month || 1);
-      var dayy = Number(row.monthday || 1);
-      var baseY = String(baseISO).slice(0,4);
-      var first = baseY + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
-      if (first < baseISO) first = String(Number(baseY)+1) + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
-      return addYearsISO(first, idx, mo, dayy);
-    }
-
-    return baseISO;
+    return `
+      <li class="fin-item" data-id="${esc(id)}" data-mode="${esc(mode)}">
+        <div class="left">
+          <input type="checkbox" id="${esc(cbId)}"/>
+          <div style="min-width:0">
+            <div class="name">${esc(favorecido)}</div>
+            <div class="meta">${esc(centro)} • ${esc(cat)}</div>
+          </div>
+        </div>
+        <div class="actions">
+          <span class="amt">${esc(fmtBRL(valor))}</span>
+          <button class="fin-mini-btn" data-act="ver">Ver</button>
+          <button class="fin-mini-btn" data-act="editar">Editar</button>
+          <button class="fin-mini-btn" data-act="excluir" style="color:#b91c1c">Excluir</button>
+        </div>
+      </li>
+    `;
   }
 
-  function createReminderP17(recKey, title, nextDueISO) {
-    // ✅ cria “controle de recorrência” na Pipeline 17 para user 813
-    // (você pode mudar os campos depois, mas aqui já cria)
-    var fields = {
-      TITLE: title,
-      CATEGORY_ID: String(CFG.REMINDER_CATEGORY_ID),
-      STAGE_ID: CFG.REMINDER_STAGE_ID,
-      ASSIGNED_BY_ID: String(CFG.REMINDER_ASSIGNED_ID)
-    };
-    // guarda referência e próxima data no TITLE/OBS (sem depender de campo custom)
-    // OBS do Deal (pipeline 17) pode ser outro campo — aqui usamos COMMENTS via "COMMENTS" se existir, ou ignora.
-    fields.COMMENTS = (CFG.REL_PREFIX + recKey + " | next=" + nextDueISO);
+  function bindOverviewActions(){
+    // Checkbox -> abrir modal de confirmação com data/valor realizado
+    $$("#fin-view .fin-item input[type='checkbox']").forEach(cb=>{
+      cb.addEventListener("change", async ()=>{
+        if(!cb.checked) return;
+        const li = cb.closest(".fin-item");
+        const id = li?.getAttribute("data-id");
+        const mode = li?.getAttribute("data-mode");
+        if(!id) return;
 
-    return createDeal(fields).catch(function(){ /* não trava o lote */ });
+        try{
+          await openRealizeModal(id, mode);
+        }finally{
+          cb.checked = false;
+        }
+      });
+    });
+
+    // Ver/Editar/Excluir
+    $$("#fin-view .fin-item button[data-act]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const li = btn.closest(".fin-item");
+        const id = li?.getAttribute("data-id");
+        const act = btn.getAttribute("data-act");
+        if(!id) return;
+
+        if(act==="excluir"){
+          const ok = confirm("Excluir este lançamento? (isso apaga o negócio no Bitrix)");
+          if(!ok) return;
+          await bx("crm.deal.delete", { id });
+          await refresh();
+          return;
+        }
+
+        if(act==="ver" || act==="editar"){
+          const d = S.deals.find(x=>String(x.ID)===String(id));
+          if(!d) return;
+          openModal(
+            act==="ver" ? "Ver lançamento" : "Editar lançamento",
+            `<button class="fin-btn" data-act="close">VOLTAR</button>` + (act==="editar" ? `<button class="fin-btn" id="btn-save-edit">SALVAR</button>` : ""),
+            renderEditForm(d, act==="editar")
+          );
+
+          if(act==="editar"){
+            $("#btn-save-edit").addEventListener("click", async ()=>{
+              const payload = readEditForm();
+              await bx("crm.deal.update", { id, fields: payload });
+              closeModal();
+              await refresh();
+            });
+          }
+        }
+      });
+    });
+
+    $("#btn-export")?.addEventListener("click", ()=>{
+      exportCSV(applyClientFilters(S.deals));
+    });
   }
 
-  /* ========= CSV (receitas) ========= */
-  function parseCSV(text) {
-    // simples: detecta ; ou ,
-    var sep = (text.indexOf(";") > -1 && text.indexOf(",") === -1) ? ";" : ",";
-    var lines = text.split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
-    if (!lines.length) return [];
-    var first = lines[0].toUpperCase();
-    var hasHeader = (first.indexOf("FAVOREC")>-1 || first.indexOf("VALOR")>-1 || first.indexOf("DATA")>-1);
+  async function openRealizeModal(id, mode){
+    const title = (mode==="pagar") ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
+    const d = S.deals.find(x=>String(x.ID)===String(id));
+    if(!d) return;
 
-    var start = hasHeader ? 1 : 0;
-    var out = [];
-    for (var i = start; i < lines.length; i++) {
-      var parts = lines[i].split(sep).map(function(x){ return x.trim(); });
-      if (!parts.length) continue;
-      var fav = parts[0] || "";
-      var val = parts[1] || "";
-      var dat = parts[2] || "";
-      if (!fav) continue;
-      out.push({ favorecido: fav, valor: val, data: dat });
+    const prev = dealAmountPrev(d);
+    const fav = d[F.favorecido] || d.TITLE || ("Deal "+id);
+
+    openModal(
+      title,
+      `<button class="fin-btn" data-act="close">VOLTAR</button><button class="fin-btn" id="btn-confirm-realize">CONFIRMAR</button>`,
+      `
+        <div class="fin-card" style="border-radius:12px">
+          <div style="font-weight:1000;margin-bottom:6px">${esc(fav)}</div>
+          <div style="font-size:12px;font-weight:900;color:var(--muted);margin-bottom:10px">
+            Previsto: <b>${esc(fmtBRL(prev))}</b>
+          </div>
+
+          <div class="fin-filters" style="border-radius:12px">
+            <div class="fin-field">
+              <label>Data realizada</label>
+              <input id="real-date" type="date" value="${esc(todayISO())}"/>
+            </div>
+            <div class="fin-field">
+              <label>Valor realizado</label>
+              <input id="real-value" placeholder="R$ 0,00" value="${esc(fmtBRL(prev))}"/>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
+            Isso vai mover o negócio de etapa e preencher Data/Valor Realizado.
+          </div>
+        </div>
+      `
+    );
+
+    $("#btn-confirm-realize").addEventListener("click", async ()=>{
+      const date = $("#real-date").value || todayISO();
+      const val = moneyToNumber($("#real-value").value);
+      if(val==null){
+        alert("Informe o valor realizado.");
+        return;
+      }
+
+      const fields = {};
+      fields[F.dataReal] = date;
+      fields[F.valorReal] = String(val);
+
+      if(mode==="pagar"){
+        await bx("crm.deal.update", { id, fields: { ...fields, STAGE_ID: ST27.despesaPaga } });
+      }else{
+        await bx("crm.deal.update", { id, fields: { ...fields, STAGE_ID: ST27.receitaRecebida } });
+      }
+
+      closeModal();
+      await refresh();
+    });
+  }
+
+  function renderEditForm(d, editable){
+    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.centroCusto])?" selected":""}>${esc(x.name)}</option>`).join("");
+    const catOpts = S.enums.categoria.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.categoria])?" selected":""}>${esc(x.name)}</option>`).join("");
+    const contaOpts = S.enums.conta.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.conta])?" selected":""}>${esc(x.name)}</option>`).join("");
+
+    // CONTA e OBS não obrigatórios: aqui deixo livres
+    return `
+      <div class="fin-card" style="border-radius:12px">
+        <div class="fin-filters" style="border-radius:12px">
+          <div class="fin-field">
+            <label>Centro</label>
+            <select id="ef-centro" ${editable?"":"disabled"}>${centroOpts}</select>
+          </div>
+          <div class="fin-field">
+            <label>Categoria</label>
+            <select id="ef-cat" ${editable?"":"disabled"}>${catOpts}</select>
+          </div>
+          <div class="fin-field">
+            <label>Favorecido</label>
+            <input id="ef-fav" value="${esc(d[F.favorecido]||"")}" ${editable?"":"disabled"} />
+          </div>
+          <div class="fin-field">
+            <label>Valor Previsto</label>
+            <input id="ef-prev" value="${esc(d[F.valorPrev]||"")}" ${editable?"":"disabled"} />
+          </div>
+          <div class="fin-field">
+            <label>Data Prevista</label>
+            <input id="ef-date" type="date" value="${esc((d[F.dataPrev]||"").slice(0,10))}" ${editable?"":"disabled"} />
+          </div>
+          <div class="fin-field">
+            <label>Conta (opcional)</label>
+            <select id="ef-conta" ${editable?"":"disabled"}>
+              <option value="">(vazio)</option>
+              ${contaOpts}
+            </select>
+          </div>
+          <div class="fin-field" style="flex:1;min-width:260px">
+            <label>Obs (opcional)</label>
+            <input id="ef-obs" value="${esc(d[F.obs]||"")}" ${editable?"":"disabled"} />
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function readEditForm(){
+    const fields = {};
+    fields[F.centroCusto] = $("#ef-centro").value || null;
+    fields[F.categoria] = $("#ef-cat").value || null;
+    fields[F.favorecido] = $("#ef-fav").value || "";
+    fields[F.valorPrev] = $("#ef-prev").value || "";
+    fields[F.dataPrev] = $("#ef-date").value || "";
+    fields[F.conta] = $("#ef-conta").value || "";
+    fields[F.obs] = $("#ef-obs").value || "";
+    return fields;
+  }
+
+  // =========================
+  // BATCH (LOTE) FULLSCREEN - 15 linhas, sem scroll
+  // =========================
+  function openBatchModal(kind){
+    // kind: "DESP" or "REC"
+    const isRec = kind==="REC";
+    const title = isRec ? "LOTE RECEITAS (tela cheia)" : "LOTE DESPESAS (tela cheia)";
+
+    const actions = `
+      <button class="fin-btn" data-act="close">VOLTAR</button>
+      <button class="fin-btn" id="btn-clean">LIMPAR VAZIAS</button>
+      <button class="fin-btn" id="btn-add-row">+ LINHA</button>
+      <button class="fin-btn" id="btn-save-batch">SALVAR</button>
+    `;
+
+    const csv = isRec ? `
+      <div class="fin-file">
+        <span class="hint">CSV (somente RECEITAS): Favorecido, Valor, Data</span>
+        <input id="csv-file" type="file" accept=".csv,text/csv"/>
+        <button class="fin-mini-btn" id="csv-load">IMPORTAR</button>
+      </div>
+    ` : "";
+
+    openModal(
+      title,
+      actions,
+      `
+        <div class="fin-batch-controls">
+          <div class="hint">15 linhas por padrão. CONTA e OBS são opcionais.</div>
+          ${csv}
+        </div>
+
+        <div class="fin-grid" id="batch-grid">
+          <div class="head">
+            <div>Centro</div>
+            <div>Conta (opcional)</div>
+            <div>Categoria</div>
+            <div>Favorecido</div>
+            <div>Valor</div>
+            <div>Data</div>
+            <div>Recorrência</div>
+            <div>Dia</div>
+            <div>Obs (opcional)</div>
+          </div>
+          <div class="rows" id="batch-rows"></div>
+        </div>
+
+        <div class="fin-card" style="border-radius:12px">
+          <div style="font-size:11px;font-weight:900;color:var(--muted)">
+            Recorrência cria também lembrete na PIPELINE 17 → coluna MANUELA (C17:PREPARATION) para a USER 813.
+          </div>
+        </div>
+      `
+    );
+
+    // build 15 rows
+    const rowsWrap = $("#batch-rows");
+    rowsWrap.innerHTML = "";
+    for(let i=0;i<DEFAULT_BATCH_ROWS;i++){
+      rowsWrap.appendChild(buildBatchRow(i, isRec));
     }
+
+    // binds
+    $("#btn-add-row").addEventListener("click", ()=>{
+      const n = $$("#batch-rows .row").length;
+      $("#batch-rows").appendChild(buildBatchRow(n, isRec));
+    });
+
+    $("#btn-clean").addEventListener("click", ()=>{
+      $$("#batch-rows .row").forEach(row=>{
+        const fav = $(".b-fav", row).value.trim();
+        const val = $(".b-val", row).value.trim();
+        const dt = $(".b-date", row).value.trim();
+        if(!fav && !val && !dt){
+          row.remove();
+        }
+      });
+      // garante ao menos 1
+      if($$("#batch-rows .row").length===0){
+        $("#batch-rows").appendChild(buildBatchRow(0, isRec));
+      }
+    });
+
+    $("#btn-save-batch").addEventListener("click", async ()=>{
+      const entries = readBatchRows(isRec);
+      if(entries.length===0){
+        alert("Nada para salvar. Preencha ao menos 1 linha.");
+        return;
+      }
+      await saveBatch(entries, isRec);
+      closeModal();
+      await refresh();
+    });
+
+    // CSV only receipts
+    if(isRec){
+      $("#csv-load").addEventListener("click", async ()=>{
+        const f = $("#csv-file").files?.[0];
+        if(!f){ alert("Selecione um CSV."); return; }
+        const text = await f.text();
+        importCSVReceitas(text);
+      });
+    }
+  }
+
+  function buildBatchRow(i, isRec){
+    const row = document.createElement("div");
+    row.className = "row";
+    row.setAttribute("data-i", String(i));
+
+    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+    const contaOpts = S.enums.conta.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+    const catOpts = S.enums.categoria.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+
+    // recorrência
+    const recOpts = `
+      <option value="AVULSA">Avulsa</option>
+      <option value="SEMANAL">Semanal</option>
+      <option value="MENSAL">Mensal</option>
+      <option value="ANUAL">Anual</option>
+      <option value="CARTAO">Cartão</option>
+    `;
+
+    row.innerHTML = `
+      <select class="b-centro">${centroOpts}</select>
+      <select class="b-conta">
+        <option value="">(vazio)</option>
+        ${contaOpts}
+      </select>
+      <select class="b-cat">${catOpts}</select>
+      <input class="b-fav" placeholder="${isRec ? "Pagador / Recebedor" : "Favorecido"}"/>
+      <input class="b-val" placeholder="0,00"/>
+      <input class="b-date" type="date" value="${esc(todayISO())}"/>
+      <select class="b-rec">${recOpts}</select>
+      <select class="b-dia"></select>
+      <input class="b-obs obs" placeholder="Opcional"/>
+    `;
+
+    // dia depende recorrência
+    const recSel = $(".b-rec", row);
+    const diaSel = $(".b-dia", row);
+    function refreshDia(){
+      const v = recSel.value;
+      diaSel.innerHTML = "";
+
+      if(v==="SEMANAL"){
+        ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].forEach((d,idx)=>{
+          const opt = document.createElement("option");
+          opt.value = String(idx+1); // 1=Seg ... 7=Dom
+          opt.textContent = d;
+          diaSel.appendChild(opt);
+        });
+      }else if(v==="MENSAL"){
+        for(let d=1; d<=31; d++){
+          const opt = document.createElement("option");
+          opt.value = String(d);
+          opt.textContent = String(d);
+          diaSel.appendChild(opt);
+        }
+      }else if(v==="ANUAL"){
+        // Dia do ano: "DD/MM"
+        for(let m=1; m<=12; m++){
+          for(let d=1; d<=28; d++){ // simplificado para caber; podemos expandir se quiser
+            const mm = String(m).padStart(2,"0");
+            const dd = String(d).padStart(2,"0");
+            const opt = document.createElement("option");
+            opt.value = `${dd}/${mm}`;
+            opt.textContent = `${dd}/${mm}`;
+            diaSel.appendChild(opt);
+          }
+        }
+      }else if(v==="CARTAO"){
+        // escolhe cartão pelo dia (lista de cartões)
+        CARDS.forEach((c,idx)=>{
+          const opt = document.createElement("option");
+          opt.value = c.name;
+          opt.textContent = `${c.name} (venc ${c.venc}, melhor ${c.melhor})`;
+          diaSel.appendChild(opt);
+        });
+      }else{
+        // Avulsa
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "-";
+        diaSel.appendChild(opt);
+      }
+    }
+    recSel.addEventListener("change", refreshDia);
+    refreshDia();
+
+    return row;
+  }
+
+  function readBatchRows(isRec){
+    const out = [];
+    $$("#batch-rows .row").forEach(row=>{
+      const centro = $(".b-centro", row).value || "";
+      const conta = $(".b-conta", row).value || ""; // opcional
+      const cat = $(".b-cat", row).value || "";
+      const fav = $(".b-fav", row).value.trim();
+      const val = moneyToNumber($(".b-val", row).value);
+      const date = $(".b-date", row).value || "";
+      const rec = $(".b-rec", row).value || "AVULSA";
+      const dia = $(".b-dia", row).value || "";
+      const obs = $(".b-obs", row).value || "";
+
+      // ignora linha vazia
+      if(!fav && (val==null) && !date) return;
+
+      // valor é essencial: se não tiver, não salva (para evitar lixo no financeiro)
+      if(val==null){
+        throw new Error("Há linha com Favorecido preenchido mas sem Valor. Preencha o valor ou apague a linha.");
+      }
+
+      out.push({
+        centro, conta, cat, fav, val, date, rec, dia, obs,
+        isRec
+      });
+    });
     return out;
   }
 
-  /* ========= LOTE ========= */
-  function openBatchTableModal(forceKind) {
-    var rows = [ mkRow() ];
+  function parseCSV(text){
+    // aceita ; ou ,
+    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    if(lines.length===0) return [];
+    const sep = lines[0].includes(";") ? ";" : ",";
+    const rows = lines.map(l=>{
+      const parts = l.split(sep).map(x=>x.trim().replace(/^"|"$/g,""));
+      return parts;
+    });
+    return rows;
+  }
 
-    function mkRow() {
-      return {
-        centro: S.filters.centro || "",
-        conta: "",         // opcional
-        categoria: "",
-        favorecido: "",
-        valor: "",         // ✅ opcional
-        obs: "",           // opcional
-        kind: forceKind || "DESPESA",
-        freq: "once",      // once | weekly | monthly | yearly
-        start: "",
-        count: "1",
-        weekday: "1",
-        monthday: "1",
-        month: "1"
-      };
+  function importCSVReceitas(text){
+    // Espera: Favorecido, Valor, Data
+    const rows = parseCSV(text);
+    if(rows.length===0) return;
+
+    // tenta detectar header
+    let start = 0;
+    const h = rows[0].map(x=>x.toLowerCase());
+    if(h.includes("favorecido") || h.includes("valor") || h.includes("data")){
+      start = 1;
     }
 
-    function renderTable(host) {
-      var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—");
-      var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "— (opcional) —");
-      var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—");
+    const lines = rows.slice(start);
+    const gridRows = $$("#batch-rows .row");
 
-      var isReceita = (forceKind === "RECEITA");
+    for(let i=0;i<Math.min(lines.length, gridRows.length); i++){
+      const r = lines[i];
+      const fav = r[0] || "";
+      const val = r[1] || "";
+      const dt = r[2] || "";
 
-      var html =
-        '<div class="fin-muted" style="margin-bottom:10px;font-weight:900">' +
-          'LOTE ' + esc(forceKind || "DESPESAS/RECEITAS") + ' em modo lista/tabela.' +
-          '<br><b>Obrigatório:</b> Favorecido e Data inicial. <b>Conta, Obs e Valor</b> são opcionais.' +
-          '<br>Competência: opcional (se vazio, tenta derivar pela Data inicial).' +
-        '</div>' +
+      $(".b-fav", gridRows[i]).value = fav;
+      $(".b-val", gridRows[i]).value = String(val).replace(".",",");
+      // data: aceita dd/mm/yyyy ou yyyy-mm-dd
+      const iso = normalizeDate(dt);
+      $(".b-date", gridRows[i]).value = iso || todayISO();
+    }
+  }
 
-        (isReceita ? (
-          '<div class="fin-row fin-wrap" style="margin-bottom:10px; gap:10px; align-items:center">' +
-            '<div class="fin-field" style="min-width:380px; flex:1">' +
-              '<label>Importar CSV (FAVORECIDO, VALOR, DATA)</label>' +
-              '<input type="file" id="csvFile" accept=".csv,text/csv" />' +
-            '</div>' +
-            '<button class="fin-btn" id="csvHelp">Formato CSV</button>' +
-          '</div>'
-        ) : '') +
+  function normalizeDate(v){
+    const s = String(v||"").trim();
+    if(!s) return "";
+    if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if(m){
+      const dd = String(m[1]).padStart(2,"0");
+      const mm = String(m[2]).padStart(2,"0");
+      const yy = m[3];
+      return `${yy}-${mm}-${dd}`;
+    }
+    return "";
+  }
 
-        '<div style="overflow:auto;max-height:62vh">' +
-          '<table class="fin-batch-table">' +
-            '<thead><tr>' +
-              '<th style="min-width:140px">CENTRO DE CUSTO</th>' +
-              '<th style="min-width:160px">CONTA (opcional)</th>' +
-              '<th style="min-width:140px">CATEGORIA</th>' +
-              '<th style="min-width:220px">FAVORECIDO</th>' +
-              '<th style="min-width:130px">VALOR (opcional)</th>' +
-              '<th style="min-width:260px">OBS (opcional)</th>' +
-              '<th style="min-width:140px">RECORRÊNCIA</th>' +
-              '<th style="min-width:120px">DIA SEMANA</th>' +
-              '<th style="min-width:110px">DIA MÊS</th>' +
-              '<th style="min-width:110px">MÊS (ANUAL)</th>' +
-              '<th style="min-width:140px">DATA INICIAL</th>' +
-              '<th style="min-width:90px">QTD</th>' +
-              '<th style="min-width:100px"></th>' +
-            '</tr></thead><tbody>';
+  async function saveBatch(entries, isRec){
+    // cria deals no pipeline 27
+    for(const e of entries){
+      const fields = {};
+      fields[F.centroCusto] = e.centro || null;
+      fields[F.conta] = e.conta || ""; // opcional
+      fields[F.categoria] = e.cat || null;
+      fields[F.favorecido] = e.fav;
+      fields[F.valorPrev] = String(e.val);
+      fields[F.dataPrev] = e.date || todayISO();
+      fields[F.obs] = e.obs || "";
 
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        var showWeek = (r.freq === "weekly");
-        var showMonthDay = (r.freq === "monthly" || r.freq === "yearly");
-        var showMonth = (r.freq === "yearly");
+      // tipo: receita/despesa (se tiver enum)
+      // Se você quiser forçar, podemos mapear pelo valor do enum — aqui deixo só pelo stage.
+      fields["CATEGORY_ID"] = 27;
 
-        html += '<tr data-i="'+i+'">' +
-          '<td><select class="fin-batch-sel" data-k="centro">' + ccOpts + '</select></td>' +
-          '<td><select class="fin-batch-sel" data-k="conta">' + contaOpts + '</select></td>' +
-          '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts + '</select></td>' +
-          '<td><input class="fin-batch-inp" data-k="favorecido" value="'+esc(r.favorecido)+'" placeholder="Ex.: Light, Cliente..."></td>' +
-          '<td><input class="fin-batch-inp" data-k="valor" value="'+esc(r.valor)+'" placeholder="1500,00 (opcional)"></td>' +
-          '<td><textarea class="fin-batch-txt" data-k="obs" placeholder="Observações (opcional)">'+esc(r.obs)+'</textarea></td>' +
-
-          '<td>' +
-            '<select class="fin-batch-sel" data-k="freq">' +
-              '<option value="once" '+(r.freq==="once"?"selected":"")+'>Avulsa</option>' +
-              '<option value="weekly" '+(r.freq==="weekly"?"selected":"")+'>Semanal</option>' +
-              '<option value="monthly" '+(r.freq==="monthly"?"selected":"")+'>Mensal</option>' +
-              '<option value="yearly" '+(r.freq==="yearly"?"selected":"")+'>Anual</option>' +
-            '</select>' +
-          '</td>' +
-
-          '<td>' +
-            '<select class="fin-batch-sel" data-k="weekday" '+(showWeek?'':'disabled')+'>' +
-              '<option value="1">Seg</option><option value="2">Ter</option><option value="3">Qua</option><option value="4">Qui</option>' +
-              '<option value="5">Sex</option><option value="6">Sáb</option><option value="7">Dom</option>' +
-            '</select>' +
-          '</td>' +
-
-          '<td><input class="fin-batch-inp" data-k="monthday" value="'+esc(r.monthday)+'" '+(showMonthDay?'':'disabled')+' placeholder="1..31"></td>' +
-          '<td><input class="fin-batch-inp" data-k="month" value="'+esc(r.month)+'" '+(showMonth?'':'disabled')+' placeholder="1..12"></td>' +
-
-          '<td><input class="fin-batch-inp" data-k="start" value="'+esc(r.start)+'" placeholder="YYYY-MM-DD"></td>' +
-          '<td><input class="fin-batch-inp" data-k="count" value="'+esc(r.count)+'" placeholder="1"></td>' +
-          '<td><button class="fin-btn fin-btn--danger" data-del="1" style="width:100%">Remover</button></td>' +
-        '</tr>';
+      // stage conforme lote
+      if(isRec){
+        fields["STAGE_ID"] = ST27.receitaAReceber;
+      }else{
+        fields["STAGE_ID"] = ST27.despesaAPagar;
       }
 
-      html += '</tbody></table></div>' +
-        '<div class="fin-row fin-wrap" style="margin-top:10px;justify-content:space-between">' +
-          '<button class="fin-btn" id="b-add">+ Linha</button>' +
-          '<div class="fin-row fin-row--right fin-wrap" style="gap:8px">' +
-            '<div class="fin-field" style="min-width:300px"><label>Competência (opcional)</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || [], true, "Automático") + '</select></div>' +
-            '<button class="fin-btn fin-btn--primary" id="b-create" data-busylock="1">Criar</button>' +
-          '</div>' +
-        '</div>';
+      // Recorrência: gravar no TITLE e criar lembrete pipeline 17
+      const recLabel = e.rec === "AVULSA" ? "AVULSA" :
+                       e.rec === "SEMANAL" ? ("SEMANAL("+e.dia+")") :
+                       e.rec === "MENSAL" ? ("MENSAL(dia "+e.dia+")") :
+                       e.rec === "ANUAL" ? ("ANUAL("+e.dia+")") :
+                       e.rec === "CARTAO" ? ("CARTAO("+e.dia+")") : e.rec;
 
-      host.innerHTML = html;
+      const title = (isRec ? "RECEITA" : "DESPESA") + " • " + e.fav + (recLabel ? (" • "+recLabel) : "");
+      fields["TITLE"] = title;
 
-      // preencher selects com valores atuais (após render)
-      var trs = host.querySelectorAll("tr[data-i]");
-      for (var ti = 0; ti < trs.length; ti++) {
-        var idx = Number(trs[ti].getAttribute("data-i"));
-        var r0 = rows[idx];
+      const createdId = await bx("crm.deal.add", { fields });
 
-        function setSel(tr, k, val){
-          var s = tr.querySelector('select[data-k="'+k+'"]');
-          if (s) s.value = String(val||"");
-        }
-        setSel(trs[ti], "centro", r0.centro);
-        setSel(trs[ti], "conta", r0.conta);
-        setSel(trs[ti], "categoria", r0.categoria);
-        setSel(trs[ti], "weekday", r0.weekday);
-        // freq/others já estão em selected, mas garante:
-        var f = trs[ti].querySelector('select[data-k="freq"]'); if (f) f.value = r0.freq;
+      // Se recorrente, cria lembrete na pipeline 17 (coluna MANUELA) para USER 813
+      if(e.rec !== "AVULSA"){
+        await createReminderP17({
+          isRec,
+          fav: e.fav,
+          val: e.val,
+          date: e.date,
+          rec: e.rec,
+          dia: e.dia,
+          sourceDealId: createdId
+        });
       }
-
-      host.querySelector("#b-add").addEventListener("click", function(){
-        rows.push(mkRow());
-        renderTable(host);
-      });
-
-      host.querySelector("#b-create").addEventListener("click", function(){
-        createBatch(host.querySelector("#b-comp").value || "");
-      });
-
-      // CSV (receitas)
-      if (isReceita) {
-        var fInp = host.querySelector("#csvFile");
-        var hBtn = host.querySelector("#csvHelp");
-        if (hBtn) hBtn.addEventListener("click", function(){
-          toast("CSV: FAVORECIDO,VALOR,DATA (ex.: Cliente X;1200,00;15/03/2026)", "ok");
-        });
-        if (fInp) {
-          fInp.addEventListener("change", function(){
-            var file = fInp.files && fInp.files[0];
-            if (!file) return;
-            var reader = new FileReader();
-            reader.onload = function(){
-              var txt = String(reader.result || "");
-              var items = parseCSV(txt);
-              if (!items.length) { toast("CSV vazio ou inválido.", "err"); return; }
-              rows = items.map(function(it){
-                var r = mkRow();
-                r.kind = "RECEITA";
-                r.favorecido = it.favorecido;
-                r.valor = it.valor || "";
-                r.start = toISODate(it.data || "");
-                return r;
-              });
-              renderTable(host);
-              toast("CSV importado ✅ ("+rows.length+" linhas)", "ok");
-            };
-            reader.readAsText(file);
-          });
-        }
-      }
-
-      // listeners de edição
-      var tbody = host.querySelector("tbody");
-      tbody.addEventListener("input", function(e){
-        var tr = e.target.closest("tr[data-i]");
-        if (!tr) return;
-        var i = Number(tr.getAttribute("data-i"));
-        var k = e.target.getAttribute("data-k");
-        if (!k) return;
-        rows[i][k] = e.target.value;
-      });
-      tbody.addEventListener("change", function(e){
-        var tr = e.target.closest("tr[data-i]");
-        if (!tr) return;
-        var i = Number(tr.getAttribute("data-i"));
-        var k = e.target.getAttribute("data-k");
-        if (!k) return;
-        rows[i][k] = e.target.value;
-        if (k === "freq") renderTable(host);
-      });
-      tbody.addEventListener("click", function(e){
-        var btn = e.target.closest("[data-del]");
-        if (!btn) return;
-        var tr = btn.closest("tr[data-i]");
-        var i = Number(tr.getAttribute("data-i"));
-        rows.splice(i, 1);
-        if (!rows.length) rows.push(mkRow());
-        renderTable(host);
-      });
     }
+  }
 
-    function createBatch(compOverride) {
-      setLoading(true);
+  async function createReminderP17({isRec, fav, val, date, rec, dia, sourceDealId}){
+    const fields = {};
+    fields["CATEGORY_ID"] = P17.categoryId;
+    fields["STAGE_ID"] = P17.stageManuela;         // MANUELA
+    fields["ASSIGNED_BY_ID"] = P17.assigned813;    // USER 813
 
-      var ops = Promise.resolve();
-      var created = 0;
-      var createdRec = 0;
+    const txtRec = rec==="SEMANAL" ? ("Semanal • dia "+dia) :
+                   rec==="MENSAL" ? ("Mensal • dia "+dia) :
+                   rec==="ANUAL" ? ("Anual • "+dia) :
+                   rec==="CARTAO" ? ("Cartão • "+dia) : rec;
 
-      for (var i = 0; i < rows.length; i++) (function(r){
-        ops = ops.then(function(){
-          var fav = String(r.favorecido || "").trim();
-          if (!fav) throw new Error("Linha sem Favorecido.");
-          if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
+    fields["TITLE"] = (isRec ? "LEMBRETE RECEITA" : "LEMBRETE DESPESA") + " • " + fav;
+    // usa OBS para amarrar
+    fields[F.obs] = `Gerado pelo Financeiro. Origem Deal27=${sourceDealId}. Previsto=${fmtBRL(val)}. Data=${date||""}. Recorrência=${txtRec}`;
+    await bx("crm.deal.add", { fields });
+  }
 
-          var start = toISODate(r.start || "");
-          if (!start) throw new Error("Linha sem Data inicial (YYYY-MM-DD ou dd/mm/aaaa).");
+  // =========================
+  // CARTÕES (modal)
+  // =========================
+  function openCardsModal(){
+    openModal(
+      "CARTÕES (lançar compras e visualizar)",
+      `<button class="fin-btn" data-act="close">VOLTAR</button>`,
+      `
+        <div class="fin-card" style="border-radius:12px">
+          <div style="font-weight:1000;margin-bottom:8px">Selecione um cartão para lançar compras em lote:</div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:10px">
+            ${CARDS.map(c=>`
+              <button class="fin-mini-btn" data-card="${esc(c.name)}" style="padding:12px;border-radius:12px;text-align:left">
+                <div style="font-weight:1000">${esc(c.name)}</div>
+                <div style="font-size:11px;font-weight:900;color:var(--muted)">Venc.: ${esc(c.venc)} • Melhor dia: ${esc(c.melhor)}</div>
+              </button>
+            `).join("")}
+          </div>
 
-          // ✅ VALOR opcional
-          var vprev = parseMoneyBR(r.valor || "");
-          // conta/obs opcionais
-          var cc = r.centro || "";
-          var conta = r.conta || "";
-          var cat = r.categoria || "";
-          var obs = String(r.obs || "").trim();
+          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
+            Ao escolher um cartão, abrimos o LOTE DESPESAS já com Recorrência = CARTÃO e “Dia” = cartão.
+          </div>
+        </div>
+      `
+    );
 
-          var kind = (forceKind === "RECEITA") ? "RECEITA" : "DESPESA";
-          var tipoEnum = tipoEnumForKind(kind);
-          if (!tipoEnum) throw new Error("Não achei enum de Tipo Financeiro para " + kind + ". (Precisa existir DESPESA/RECEITA no campo Tipo.)");
-
-          var stage = stageForKind(kind);
-          var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
-
-          var comp = compOverride || "";
-          if (!comp) comp = guessCompetenciaIdFromISO(start);
-
-          // se recorrente, cria “controle” na pipeline 17 (1 vez)
-          var isRecurring = (r.freq !== "once");
-          var recKey = "";
-          if (isRecurring) {
-            recKey = String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+    $$("#fin-modal-body button[data-card]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const card = btn.getAttribute("data-card");
+        // abre lote despesas e preenche primeira linha como cartão
+        openBatchModal("DESP");
+        // aguarda DOM
+        setTimeout(()=>{
+          const first = $("#batch-rows .row");
+          if(first){
+            $(".b-rec", first).value = "CARTAO";
+            $(".b-rec", first).dispatchEvent(new Event("change"));
+            $(".b-dia", first).value = card;
           }
-
-          var p = Promise.resolve();
-          for (var k = 0; k < count; k++) (function(idx){
-            p = p.then(function(){
-              var dt = calcDate(start, r, idx);
-
-              var fields = {};
-              fields.TITLE = "FIN • " + kind + " • " + fav + (isRecurring ? (" • " + (idx+1)+"/"+count) : "");
-              fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-              fields.STAGE_ID = stage;
-
-              fields[CFG.F.TIPO_FIN] = tipoEnum;
-              if (comp) fields[CFG.F.COMPETENCIA] = comp;
-              if (cc) fields[CFG.F.CENTRO_CUSTO] = cc;
-              if (conta) fields[CFG.F.CONTA] = conta;
-              if (cat) fields[CFG.F.CATEGORIA] = cat;
-
-              fields[CFG.F.DATA_PREV] = dt;
-              fields[CFG.F.VALOR_PREV] = vprev; // 0 se vazio
-              fields[CFG.F.FAVORECIDO] = fav;
-
-              var extra = "";
-              if (isRecurring) extra = (CFG.REL_PREFIX + recKey);
-              var finalObs = [obs, extra].filter(Boolean).join(" | ");
-              if (finalObs) fields[CFG.F.OBS] = finalObs;
-
-              return createDeal(fields).then(function(){ created++; });
-            });
-          })(k);
-
-          // cria o reminder na pipeline 17
-          if (isRecurring) {
-            var nextDue = calcDate(start, r, 0);
-            p = p.then(function(){
-              return createReminderP17(recKey, ("RECORRÊNCIA • " + kind + " • " + fav), nextDue)
-                .then(function(){ createdRec++; });
-            });
-          }
-
-          return p;
-        });
-      })(rows[i]);
-
-      ops.then(function(){
-        toast("Lote criado ✅ (" + created + " itens)" + (createdRec ? (" • " + createdRec + " lembrete(s) P17") : ""), "ok");
-        m.close();
-        return refresh();
-      }).catch(function(e){
-        toast("Falha no lote: " + (e.message || String(e)), "err");
-      }).finally(function(){
-        setLoading(false);
-      });
-    }
-
-    var title = "LOTE — " + (forceKind === "RECEITA" ? "Receitas" : "Despesas");
-    var m = modal(
-      '<div class="fin-modal-head">' +
-        '<div class="fin-modal-title">' + esc(title) + '</div>' +
-        '<div class="fin-row" style="gap:8px">' +
-          '<button class="fin-btn" id="batch-back">Voltar</button>' +
-          '<button class="fin-x" data-close="1">×</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="fin-modal-body"><div id="batch-host"></div></div>',
-      true
-    );
-
-    m.q("#batch-back").addEventListener("click", function(){ m.close(); });
-    renderTable(m.q("#batch-host"));
-  }
-
-  function openReserveModal() {
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Fundo de Reserva</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-field"><label>Saldo atual</label><input id="rv" value="' + esc(String(S.reserve.balance || 0).replace(".", ",")) + '" placeholder="Ex.: 5000,00"></div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="rsave" data-busylock="1">Salvar</button>' +
-        '</div>' +
-      '</div>'
-    );
-    m.q("#rsave").addEventListener("click", function () {
-      var val = parseMoneyBR(m.q("#rv").value || "");
-      S.reserve.balance = val;
-      saveReserve();
-      toast("Reserva atualizada ✅");
-      m.close();
-      renderTotals();
-    });
-  }
-
-  function renderSaldoCentroList() {
-    var host = el("#fin-saldo-centros");
-    if (!host) return;
-
-    var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
-    if (!items.length) { host.innerHTML = '<div class="fin-muted">Sem centros.</div>'; return; }
-
-    var html = '<div class="fin-muted" style="font-weight:900;margin-bottom:8px">Saldo (realizado) por Centro</div>';
-    html += '<div class="fin-side-list" style="max-height:220px">';
-    for (var i = 0; i < items.length; i++) {
-      var id = String(items[i].ID);
-      var nm = String(items[i].VALUE);
-      var saldo = calcSaldoCentroRealizado(id);
-      html +=
-        '<button class="fin-side-item" data-adj="'+esc(id)+'" style="justify-content:space-between">' +
-          '<span style="display:flex;gap:10px;align-items:center"><span class="fin-dot"></span><span class="fin-side-label">'+esc(nm)+'</span></span>' +
-          '<span class="fin-side-label">'+esc(moneyBR(saldo))+'</span>' +
-        '</button>';
-    }
-    html += '</div>';
-    html += '<div class="fin-muted" style="margin-top:8px">Clique em um centro para ajustar saldo inicial/manual.</div>';
-
-    host.innerHTML = html;
-
-    var btns = host.querySelectorAll("[data-adj]");
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener("click", function(){
-        var centroId = this.getAttribute("data-adj");
-        openCentroAdjustModal(centroId);
-      });
-    }
-  }
-
-  function openCentroAdjustModal(centroId) {
-    var nome = enumName(CFG.F.CENTRO_CUSTO, centroId) || ("Centro " + centroId);
-    var atual = Number(S.centroAdjust[String(centroId)] || 0) || 0;
-
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Ajuste manual — ' + esc(nome) + '</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-muted" style="font-weight:900;margin-bottom:10px">Esse ajuste é somado ao saldo realizado (Receitas Recebidas − Despesas Pagas).</div>' +
-        '<div class="fin-field"><label>Saldo inicial / ajuste</label><input id="adjv" value="' + esc(String(atual).replace(".", ",")) + '" placeholder="Ex.: 12000,00"></div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="adjsave" data-busylock="1">Salvar</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#adjsave").addEventListener("click", function(){
-      var val = parseMoneyBR(m.q("#adjv").value || "");
-      S.centroAdjust[String(centroId)] = val;
-      saveCentroAdjust();
-      toast("Ajuste salvo ✅");
-      m.close();
-      renderTotals();
-      renderSaldoCentroList();
-    });
-  }
-
-  /* ========= TRANSFERÊNCIA ========= */
-  function openTransferModal() {
-    var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "— Selecione —");
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Transferir valores entre Centros</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-row fin-wrap">' +
-          '<div class="fin-field" style="flex:1;min-width:260px"><label>Centro origem</label><select id="trf-from">' + ccOpts + '</select></div>' +
-          '<div class="fin-field" style="flex:1;min-width:260px"><label>Centro destino</label><select id="trf-to">' + ccOpts + '</select></div>' +
-        '</div>' +
-        '<div class="fin-row fin-wrap" style="margin-top:10px">' +
-          '<div class="fin-field" style="flex:1;min-width:200px"><label>Valor</label><input id="trf-val" placeholder="Ex.: 2500,00"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:200px"><label>Data</label><input id="trf-date" placeholder="YYYY-MM-DD"></div>' +
-        '</div>' +
-        '<div class="fin-field" style="margin-top:10px"><label>Observação (opcional)</label><input id="trf-obs" placeholder="Motivo / referência..."></div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="trf-ok" data-busylock="1">Transferir</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#trf-ok").addEventListener("click", function(){
-      var from = m.q("#trf-from").value || "";
-      var to = m.q("#trf-to").value || "";
-      var val = parseMoneyBR(m.q("#trf-val").value || "");
-      var dt = toISODate(m.q("#trf-date").value || "");
-      var obs = String(m.q("#trf-obs").value || "").trim();
-
-      if (!from || !to) { toast("Selecione origem e destino.", "err"); return; }
-      if (from === to) { toast("Origem e destino não podem ser iguais.", "err"); return; }
-      if (!dt) { toast("Informe a data.", "err"); return; }
-
-      var link = CFG.TRF_PREFIX + Date.now();
-
-      // cria 2 deals vinculados
-      setLoading(true);
-
-      var desp = {};
-      desp.TITLE = "FIN • TRANSFERÊNCIA → " + enumName(CFG.F.CENTRO_CUSTO, to);
-      desp.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-      desp.STAGE_ID = CFG.STAGES.DESP_PAGA; // transferência executada já “paga”
-      desp[CFG.F.TIPO_FIN] = tipoEnumForKind("DESPESA");
-      desp[CFG.F.CENTRO_CUSTO] = from;
-      desp[CFG.F.DATA_REAL] = dt;
-      desp[CFG.F.VALOR_REAL] = val;
-      desp[CFG.F.FAVORECIDO] = "TRANSFERÊNCIA";
-      desp[CFG.F.OBS] = [obs, link].filter(Boolean).join(" | ");
-
-      var rec = {};
-      rec.TITLE = "FIN • TRANSFERÊNCIA ← " + enumName(CFG.F.CENTRO_CUSTO, from);
-      rec.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-      rec.STAGE_ID = CFG.STAGES.REC_RECEBIDA; // recebida
-      rec[CFG.F.TIPO_FIN] = tipoEnumForKind("RECEITA");
-      rec[CFG.F.CENTRO_CUSTO] = to;
-      rec[CFG.F.DATA_REAL] = dt;
-      rec[CFG.F.VALOR_REAL] = val;
-      rec[CFG.F.FAVORECIDO] = "TRANSFERÊNCIA";
-      rec[CFG.F.OBS] = [obs, link].filter(Boolean).join(" | ");
-
-      createDeal(desp)
-        .then(function(){ return createDeal(rec); })
-        .then(function(){
-          toast("Transferência criada ✅");
-          m.close();
-          return refresh();
-        })
-        .catch(function(e){
-          toast("Falha: " + (e.message || String(e)), "err");
-        })
-        .finally(function(){ setLoading(false); });
-    });
-  }
-
-  /* ========= CARTÕES ========= */
-  function openCardsModal() {
-    var html = '<div class="fin-modal-head"><div class="fin-modal-title">Cartões de Crédito</div>' +
-      '<div class="fin-row" style="gap:8px"><button class="fin-btn" id="cards-back">Voltar</button><button class="fin-x" data-close="1">×</button></div></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-muted" style="font-weight:900;margin-bottom:10px">Clique em um cartão para lançar compras (à vista ou parceladas).</div>' +
-        '<div class="fin-side-list" id="cards-list" style="max-height:70vh"></div>' +
-      '</div>';
-
-    var m = modal(html, true);
-    m.q("#cards-back").addEventListener("click", function(){ m.close(); });
-
-    var list = m.q("#cards-list");
-    var out = "";
-    for (var i = 0; i < CFG.CARDS.length; i++) {
-      var c = CFG.CARDS[i];
-      out +=
-        '<button class="fin-side-item" data-card="'+esc(c.name)+'" style="justify-content:space-between">' +
-          '<span style="display:flex;gap:10px;align-items:center"><span class="fin-dot"></span><span class="fin-side-label">'+esc(c.name)+'</span></span>' +
-          '<span class="fin-side-label">Venc: '+esc(String(c.dueDay).padStart(2,"0"))+' • Melhor dia: '+esc(String(c.bestDay).padStart(2,"0"))+'</span>' +
-        '</button>';
-    }
-    list.innerHTML = out;
-
-    var btns = list.querySelectorAll("[data-card]");
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener("click", function(){
-        var name = this.getAttribute("data-card");
-        m.close();
-        openCardLaunchModal(name);
-      });
-    }
-  }
-
-  function nextCardDueDate(card, purchaseISO) {
-    // regra simples (Brasil): compra até melhor dia entra na fatura do vencimento “do próximo ciclo”
-    // Se compra > melhor dia, pula um ciclo.
-    purchaseISO = toISODate(purchaseISO);
-    var m = purchaseISO.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return "";
-    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
-
-    var best = Number(card.bestDay || 1);
-    var due = Number(card.dueDay || 1);
-
-    // define mês do vencimento:
-    // compra dia <= best => vence no mês seguinte
-    // compra dia > best => vence em 2 meses
-    var addM = (d <= best) ? 1 : 2;
-
-    // cria data base no mesmo mês e ajusta
-    var base = y + "-" + String(mo).padStart(2,"0") + "-" + String(d).padStart(2,"0");
-    var dueISO = addMonthsISO(base, addM, due);
-    return dueISO;
-  }
-
-  function openCardLaunchModal(cardName) {
-    var card = null;
-    for (var i = 0; i < CFG.CARDS.length; i++) if (CFG.CARDS[i].name === cardName) card = CFG.CARDS[i];
-    if (!card) { toast("Cartão não encontrado.", "err"); return; }
-
-    var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "— Selecione —");
-    var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—");
-
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Lançar compra — ' + esc(card.name) + '</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-row fin-wrap">' +
-          '<div class="fin-field" style="flex:1;min-width:260px"><label>Centro de custo</label><select id="c-cc">' + ccOpts + '</select></div>' +
-          '<div class="fin-field" style="flex:1;min-width:260px"><label>Categoria</label><select id="c-cat">' + catOpts + '</select></div>' +
-        '</div>' +
-        '<div class="fin-row fin-wrap" style="margin-top:10px">' +
-          '<div class="fin-field" style="flex:1;min-width:260px"><label>Favorecido</label><input id="c-fav" placeholder="Ex.: Mercado, Apple, etc"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:200px"><label>Valor total (opcional)</label><input id="c-val" placeholder="Ex.: 1200,00"></div>' +
-        '</div>' +
-        '<div class="fin-row fin-wrap" style="margin-top:10px">' +
-          '<div class="fin-field" style="flex:1;min-width:220px"><label>Data da compra</label><input id="c-buy" placeholder="YYYY-MM-DD"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:220px"><label>Parcelas</label><input id="c-n" value="1" placeholder="1, 2, 3..."></div>' +
-        '</div>' +
-        '<div class="fin-field" style="margin-top:10px"><label>Observações (opcional)</label><input id="c-obs" placeholder="Ex.: NF, detalhes..."></div>' +
-        '<div class="fin-muted" style="margin-top:10px;font-weight:900">Vencimento: dia ' + esc(String(card.dueDay)) + ' • Melhor dia: ' + esc(String(card.bestDay)) + '</div>' +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="c-ok" data-busylock="1">Criar lançamentos</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#c-ok").addEventListener("click", function(){
-      var cc = m.q("#c-cc").value || "";
-      var cat = m.q("#c-cat").value || "";
-      var fav = String(m.q("#c-fav").value || "").trim();
-      var total = parseMoneyBR(m.q("#c-val").value || "");
-      var buy = toISODate(m.q("#c-buy").value || "");
-      var n = Math.max(1, parseInt(m.q("#c-n").value || "1", 10) || 1);
-      var obs = String(m.q("#c-obs").value || "").trim();
-
-      if (!cc) { toast("Selecione o centro de custo.", "err"); return; }
-      if (!fav) { toast("Informe o favorecido.", "err"); return; }
-      if (!buy) { toast("Informe a data da compra.", "err"); return; }
-
-      var contaId = enumIdByValue(CFG.F.CONTA, card.name); // se existir enum com o mesmo nome do cartão
-      var tipoDesp = tipoEnumForKind("DESPESA");
-      if (!tipoDesp) { toast("Tipo Financeiro DESPESA não encontrado.", "err"); return; }
-
-      var firstDue = nextCardDueDate(card, buy);
-      if (!firstDue) { toast("Não consegui calcular vencimento.", "err"); return; }
-
-      var link = "CARD:" + card.name + ":" + Date.now();
-
-      setLoading(true);
-
-      var per = (n > 0) ? (total / n) : 0;
-
-      var seq = Promise.resolve();
-      for (var i = 0; i < n; i++) (function(idx){
-        seq = seq.then(function(){
-          var due = addMonthsISO(firstDue, idx, card.dueDay);
-
-          // divide com ajuste na última parcela pra fechar centavos
-          var v = per;
-          if (idx === n - 1) {
-            var prevSum = per * (n - 1);
-            v = Math.max(0, total - prevSum);
-          }
-
-          var fields = {};
-          fields.TITLE = "FIN • CARTÃO • " + card.name + " • " + fav + (n > 1 ? (" • Parc " + (idx+1) + "/" + n) : "");
-          fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-          fields.STAGE_ID = CFG.STAGES.DESP_A_PAGAR;
-
-          fields[CFG.F.TIPO_FIN] = tipoDesp;
-          fields[CFG.F.CENTRO_CUSTO] = cc;
-          if (cat) fields[CFG.F.CATEGORIA] = cat;
-          if (contaId) fields[CFG.F.CONTA] = contaId;
-
-          fields[CFG.F.DATA_PREV] = due;
-          fields[CFG.F.VALOR_PREV] = v; // 0 se não informou
-
-          fields[CFG.F.FAVORECIDO] = fav;
-
-          var comp = guessCompetenciaIdFromISO(due);
-          if (comp) fields[CFG.F.COMPETENCIA] = comp;
-
-          var finalObs = [obs, link].filter(Boolean).join(" | ");
-          if (finalObs) fields[CFG.F.OBS] = finalObs;
-
-          return createDeal(fields);
-        });
-      })(i);
-
-      seq.then(function(){
-        toast("Cartão: lançamentos criados ✅ (" + n + ")", "ok");
-        m.close();
-        return refresh();
-      }).catch(function(e){
-        toast("Falha: " + (e.message || String(e)), "err");
-      }).finally(function(){
-        setLoading(false);
+        }, 50);
       });
     });
   }
 
-  function renderTable() {
-    var tb = el("#fin-tbody");
-    if (!tb) return;
+  // =========================
+  // SALDOS / TRANSFERÊNCIA (manual)
+  // =========================
+  function openBalancesModal(){
+    const rows = S.enums.centro.map(c=>{
+      const v = getBalance(c.id);
+      return `
+        <div style="display:grid;grid-template-columns:1fr 180px 120px;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel)">
+          <div style="font-weight:1000">${esc(c.name)}</div>
+          <input data-centro="${esc(c.id)}" class="bal-in" value="${esc(fmtBRL(v))}" />
+          <button class="fin-mini-btn" data-save-centro="${esc(c.id)}">Salvar</button>
+        </div>
+      `;
+    }).join("");
 
-    var list = S.filtered || [];
-    if (!list.length) {
-      tb.innerHTML = '<tr><td colspan="12" class="fin-muted">Nenhum item encontrado.</td></tr>';
-      return;
-    }
+    openModal(
+      "SALDOS por Centro de Custo (manual)",
+      `<button class="fin-btn" data-act="close">VOLTAR</button>`,
+      `
+        <div class="fin-card" style="border-radius:12px">
+          <div style="font-size:11px;font-weight:900;color:var(--muted);margin-bottom:10px">
+            Você pode colocar saldo inicial e ajustar depois caso dê diferença.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${rows}
+          </div>
+        </div>
+      `
+    );
 
-    var rows = [];
-    for (var i = 0; i < list.length && i < CFG.PAGE_SIZE; i++) {
-      var d = list[i];
-      var fav = d[CFG.F.FAVORECIDO] || d.TITLE || "";
-
-      var st = String(d.STAGE_ID || "");
-      var canCheck = (st === CFG.STAGES.DESP_A_PAGAR) || (st === CFG.STAGES.REC_A_RECEBER);
-      var chkLabel = (st === CFG.STAGES.DESP_A_PAGAR) ? "Pagar" : ((st === CFG.STAGES.REC_A_RECEBER) ? "Receber" : "");
-      var chk = canCheck
-        ? '<span class="fin-rowchk"><input type="checkbox" data-act="chk" data-id="' + esc(d.ID) + '"><span>' + esc(chkLabel) + '</span></span>'
-        : '<span class="fin-muted">—</span>';
-
-      rows.push(
-        "<tr>" +
-          '<td class="fin-mono">#' + esc(d.ID) + "</td>" +
-          "<td><div class=\"fin-strong\">" + esc(fav) + "</div><div class=\"fin-small fin-muted\">" + esc(enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA]) || "") + "</div></td>" +
-          "<td>" + esc(enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]) || "") + "</td>" +
-          "<td>" + esc(enumName(CFG.F.CONTA, d[CFG.F.CONTA]) || "") + "</td>" +
-          "<td>" + esc(enumName(CFG.F.TIPO_FIN, d[CFG.F.TIPO_FIN]) || "") + "</td>" +
-          "<td>" + esc(enumName(CFG.F.COMPETENCIA, d[CFG.F.COMPETENCIA]) || "") + "</td>" +
-          '<td class="fin-mono">' + esc(toISODate(d[CFG.F.DATA_PREV] || "")) + "</td>" +
-          '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_PREV])) + "</td>" +
-          '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_REAL])) + "</td>" +
-          "<td>" + esc(stageName(d.STAGE_ID)) + "</td>" +
-          "<td>" +
-            '<div class="fin-actions-row">' +
-              chk +
-              '<button class="fin-mini fin-mini--danger" data-act="del" data-id="' + esc(d.ID) + '">Excluir</button>' +
-            "</div>" +
-          "</td>" +
-        "</tr>"
-      );
-    }
-
-    tb.innerHTML = rows.join("");
-
-    var btns = tb.querySelectorAll("[data-act]");
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener("click", function () {
-        var id = this.getAttribute("data-id");
-        var act = this.getAttribute("data-act");
-        var deal = null;
-        for (var x = 0; x < S.deals.length; x++) if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
-        if (!deal) return;
-
-        if (act === "del") return confirmDelete(deal);
-        if (act === "chk") {
-          try { this.checked = false; } catch(_) {}
-          return openPayReceiveModal(deal);
-        }
+    $$("#fin-modal-body button[data-save-centro]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const id = btn.getAttribute("data-save-centro");
+        const inp = $(`#fin-modal-body input[data-centro="${CSS.escape(id)}"]`);
+        const v = moneyToNumber(inp.value);
+        if(v==null){ alert("Valor inválido."); return; }
+        setBalance(id, v);
+        inp.value = fmtBRL(v);
       });
+    });
+  }
+
+  function openTransferModal(){
+    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+    openModal(
+      "TRANSFERIR entre Centros de Custo (manual)",
+      `<button class="fin-btn" data-act="close">VOLTAR</button><button class="fin-btn" id="btn-do-transfer">TRANSFERIR</button>`,
+      `
+        <div class="fin-card" style="border-radius:12px">
+          <div class="fin-filters" style="border-radius:12px">
+            <div class="fin-field">
+              <label>De</label>
+              <select id="tr-from">${centroOpts}</select>
+            </div>
+            <div class="fin-field">
+              <label>Para</label>
+              <select id="tr-to">${centroOpts}</select>
+            </div>
+            <div class="fin-field">
+              <label>Valor</label>
+              <input id="tr-val" placeholder="0,00"/>
+            </div>
+            <div class="fin-field" style="flex:1">
+              <label>Obs</label>
+              <input id="tr-obs" placeholder="Opcional"/>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
+            Isso ajusta os saldos manuais. Se você quiser, depois podemos registrar também como lançamento no Financeiro.
+          </div>
+        </div>
+      `
+    );
+
+    $("#btn-do-transfer").addEventListener("click", ()=>{
+      const from = $("#tr-from").value;
+      const to = $("#tr-to").value;
+      if(from===to){ alert("Escolha centros diferentes."); return; }
+      const v = moneyToNumber($("#tr-val").value);
+      if(v==null || v<=0){ alert("Informe um valor válido."); return; }
+
+      setBalance(from, getBalance(from) - v);
+      setBalance(to, getBalance(to) + v);
+
+      closeModal();
+      alert("Transferência aplicada nos saldos manuais.");
+    });
+  }
+
+  // =========================
+  // CSV Export (todos filtros)
+  // =========================
+  function exportCSV(list){
+    const rows = [
+      ["ID","Stage","Centro","Categoria","Favorecido","ValorPrev","ValorReal","DataPrev","DataReal","Conta","Obs"]
+    ];
+
+    for(const d of list){
+      rows.push([
+        d.ID,
+        d.STAGE_ID,
+        dealCentroLabel(d),
+        dealCategoriaLabel(d),
+        d[F.favorecido]||"",
+        d[F.valorPrev]||"",
+        d[F.valorReal]||"",
+        (d[F.dataPrev]||"").slice(0,10),
+        (d[F.dataReal]||"").slice(0,10),
+        dealContaLabel(d)||"",
+        (d[F.obs]||"").replace(/\r?\n/g," ")
+      ]);
     }
+
+    const csv = rows.map(r=>r.map(v=>{
+      const s = String(v??"");
+      return `"${s.replace(/"/g,'""')}"`;
+    }).join(";")).join("\n");
+
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "financeiro_export.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
   }
 
-  function render() {
-    root.innerHTML =
-      '<div class="fin-page">' +
-
-        '<header class="fin-topbar">' +
-          '<div class="fin-top-left">' +
-            '<img class="fin-top-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
-            '<div>' +
-              '<div class="fin-top-title">Financeiro CGD</div>' +
-              '<div class="fin-top-sub"><span id="fin-lastsync">—</span> <span id="fin-loading" class="fin-loading" style="display:none">Carregando…</span></div>' +
-            '</div>' +
-          '</div>' +
-
-          '<div class="fin-top-actions">' +
-            '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
-            '<button class="fin-btn" id="btn-cards" data-busylock="1">CARTÕES</button>' +
-            '<button class="fin-btn" id="btn-transfer" data-busylock="1">TRANSFERIR</button>' +
-            '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
-            '<button class="fin-btn fin-btn--primary" id="btn-batch-d" data-busylock="1">LOTE DESPESAS</button>' +
-            '<button class="fin-btn fin-btn--primary" id="btn-batch-r" data-busylock="1">LOTE RECEITAS</button>' +
-            '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
-          '</div>' +
-        '</header>' +
-
-        '<div class="fin-shell">' +
-          '<div class="fin-body">' +
-            '<aside class="fin-side">' +
-              '<div class="fin-side-brand">' +
-                '<div class="fin-brand-title">Financeiro CGD</div>' +
-                '<div class="fin-brand-sub">Deals • Pipeline 27</div>' +
-              '</div>' +
-              '<div class="fin-side-block">' +
-                '<div class="fin-side-h">Centro de custo</div>' +
-                '<div id="fin-side-centers" class="fin-side-list"></div>' +
-              '</div>' +
-              '<div class="fin-side-block" id="fin-saldo-centros"></div>' +
-            '</aside>' +
-
-            '<main>' +
-              '<section class="fin-panel"><div class="fin-panel-inner">' +
-
-                '<div class="fin-kpis">' +
-                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
-                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
-                  '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
-                  '<div class="fin-kpi"><div class="fin-kpi-k">Saldo do Centro (selecionado)</div><div class="fin-kpi-v" id="saldo-centro">—</div></div>' +
-                '</div>' +
-
-                '<div class="fin-filters">' +
-                  '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-                  '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-                  '<div class="fin-field"><label>Etapa</label><select id="f-stage">' +
-                    '<option value="">(Padrão: sem CONCLUÍDO)</option>' +
-                    '<option value="'+esc(CFG.STAGES.DESP_A_PAGAR)+'">DESPESA - A PAGAR</option>' +
-                    '<option value="'+esc(CFG.STAGES.DESP_PAGA)+'">DESPESA - PAGA</option>' +
-                    '<option value="'+esc(CFG.STAGES.REC_A_RECEBER)+'">RECEITA - A RECEBER</option>' +
-                    '<option value="'+esc(CFG.STAGES.REC_RECEBIDA)+'">RECEITA RECEBIDA</option>' +
-                    '<option value="'+esc(CFG.STAGES.CANCELADO)+'">CANCELADO</option>' +
-                    '<option value="'+esc(CFG.STAGES.CONCLUIDO)+'">CONCLUÍDO</option>' +
-                  '</select></div>' +
-
-                  '<div style="flex-basis:100%; height:0"></div>' +
-
-                  '<div class="fin-toggles">' +
-                    '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas</span></label>' +
-                    '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas</span></label>' +
-                    '<div class="fin-check" style="margin-left:auto"><span class="fin-muted">Qtd. Itens:</span> <span id="tot-count" class="fin-strong">0</span></div>' +
-                  '</div>' +
-
-                  '<div class="fin-charts" style="flex-basis:100%">' +
-                    '<div id="chart-cat"></div>' +
-                    '<div id="chart-evo"></div>' +
-                  '</div>' +
-                '</div>' +
-
-                '<div class="fin-table-wrap" style="margin-top:12px">' +
-                  '<table class="fin-table">' +
-                    '<thead><tr>' +
-                      '<th style="width:76px">ID</th>' +
-                      '<th>Favorecido</th>' +
-                      '<th style="width:170px">Centro</th>' +
-                      '<th style="width:170px">Conta</th>' +
-                      '<th style="width:140px">Tipo</th>' +
-                      '<th style="width:130px">Competência</th>' +
-                      '<th style="width:120px">Data Prev.</th>' +
-                      '<th style="width:140px">Previsto</th>' +
-                      '<th style="width:140px">Realizado</th>' +
-                      '<th style="width:160px">Etapa</th>' +
-                      '<th style="width:320px">Ações</th>' +
-                    '</tr></thead>' +
-                    '<tbody id="fin-tbody"><tr><td colspan="12" class="fin-muted">Carregando…</td></tr></tbody>' +
-                  '</table>' +
-                '</div>' +
-
-                '<div id="fin-toast-host" class="fin-toast-host"></div>' +
-
-              '</div></section>' +
-            '</main>' +
-          '</div>' +
-        '</div>' +
-
-        '<div class="fin-footerbar">' +
-          '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + '</div></div>' +
-          '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + '</div>' +
-          '<div class="fin-footer-right">' +
-            CFG.FOOTER.companies.map(function (c) {
-              return '<div class="fin-footer-box"><div class="t">' + esc(c.name) + '</div><div class="s">' + esc(c.meta) + '</div></div>';
-            }).join("") +
-          '</div>' +
-          '<div class="fin-footer-avatars" id="fin-avatars"></div>' +
-        '</div>' +
-
-      '</div>';
-
-    // handlers
-    el("#btn-cards").addEventListener("click", function(){ openCardsModal(); });
-    el("#btn-transfer").addEventListener("click", function(){ openTransferModal(); });
-    el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
-
-    el("#btn-batch-d").addEventListener("click", function(){ openBatchTableModal("DESPESA"); });
-    el("#btn-batch-r").addEventListener("click", function(){ openBatchTableModal("RECEITA"); });
-
-    el("#btn-refresh").addEventListener("click", function () { refresh(); });
-
-    el("#f-q").addEventListener("input", function (e) { S.filters.q = e.target.value || ""; applyFilters(); });
-    el("#f-comp").addEventListener("change", function () { S.filters.competencia = el("#f-comp").value || ""; applyFilters(); });
-    el("#f-conta").addEventListener("change", function () { S.filters.conta = el("#f-conta").value || ""; applyFilters(); });
-    el("#f-stage").addEventListener("change", function () { S.filters.stageId = el("#f-stage").value || ""; applyFilters(); });
-
-    el("#tog-exp").addEventListener("change", function () { S.filters.showPayables = !!el("#tog-exp").checked; applyFilters(); });
-    el("#tog-rec").addEventListener("change", function () { S.filters.showReceivables = !!el("#tog-rec").checked; applyFilters(); });
-
-    renderSidebarCenters();
-    renderChartsPlaceholders();
-    renderSaldoCentroList();
-  }
-
-  function refresh() {
-    setLoading(true);
-    return listDealsAll()
-      .then(function (deals) {
-        S.deals = deals || [];
-        S.lastSyncAt = nowBR();
-        applyFilters();
-      })
-      .catch(function (e) {
-        toast("Falha ao carregar: " + (e.message || String(e)), "err");
-        var tb = el("#fin-tbody");
-        if (tb) tb.innerHTML = '<tr><td colspan="12" class="fin-muted">Erro: ' + esc(e.message || String(e)) + '</td></tr>';
-      })
-      .finally(function () { setLoading(false); });
-  }
-
-  // Promise.finally fallback
-  if (!Promise.prototype.finally) {
-    Promise.prototype.finally = function (cb) {
-      var P = this.constructor;
-      return this.then(
-        function (v) { return P.resolve(cb()).then(function () { return v; }); },
-        function (e) { return P.resolve(cb()).then(function () { throw e; }); }
-      );
-    };
-  }
-
-  function boot() {
-    loadLocal();
-    return loadMeta()
-      .then(function () {
-        render();
-        return loadPartners();
-      })
-      .then(function () {
-        renderPartnersAvatars();
-        return refresh();
-      })
-      .catch(function (e) {
-        toast("Erro ao iniciar: " + (e.message || String(e)), "err");
-        root.innerHTML = '<div style="padding:16px">Falha ao iniciar. Veja console.</div>';
+  // =========================
+  // NAV / EVENTS
+  // =========================
+  function bindGlobal(){
+    // nav buttons
+    $$(".fin-nav button").forEach(b=>{
+      b.addEventListener("click", ()=>{
+        $$(".fin-nav button").forEach(x=>x.classList.remove("active"));
+        b.classList.add("active");
+        renderOverview(); // por enquanto mantendo overview como principal
       });
+    });
+
+    $("#btn-refresh").addEventListener("click", refresh);
+
+    $("#btn-lote-desp").addEventListener("click", ()=> openBatchModal("DESP"));
+    $("#btn-lote-rec").addEventListener("click", ()=> openBatchModal("REC"));
+    $("#btn-cartoes").addEventListener("click", openCardsModal);
+    $("#btn-saldos").addEventListener("click", openBalancesModal);
+    $("#btn-transfer").addEventListener("click", openTransferModal);
+
+    $("#fin-q").addEventListener("input", ()=>{
+      S.filter.q = $("#fin-q").value || "";
+      renderOverview();
+    });
+
+    $("#fin-centro").addEventListener("change", renderOverview);
+    $("#fin-stage-mode").addEventListener("change", renderOverview);
+
+    // reserve change
+    $("#fin-reserve").addEventListener("blur", ()=>{
+      const v = moneyToNumber($("#fin-reserve").value);
+      reserveSet(v || 0);
+      renderOverview();
+    });
+
+    // modal background click to close
+    $("#fin-modal").addEventListener("click", (e)=>{
+      if(e.target && e.target.id==="fin-modal") closeModal();
+    });
   }
 
-  boot();
+  // =========================
+  // REFRESH
+  // =========================
+  async function refresh(){
+    // simples: recarrega deals e rerender
+    await loadDeals();
+    renderOverview();
+  }
+
+  // =========================
+  // INIT
+  // =========================
+  async function init(){
+    // monta UI
+    mountBase();
+
+    // balances
+    loadBalances();
+    reserveSet(reserveGet());
+
+    // sidebar month
+    buildMonthOptions();
+
+    // carrega fields/enums
+    await loadFields();
+
+    // users footer
+    await loadUsers();
+
+    // deals
+    await loadDeals();
+
+    // binds
+    bindGlobal();
+
+    // render
+    renderOverview();
+
+    // segurança: some sentinel se existir (você pediu)
+    const sentinel = document.getElementById("fin-sentinel");
+    if(sentinel) sentinel.style.display = "none";
+  }
+
+  // fallback fatal UI
+  function showFatal(err){
+    const root = document.getElementById("fin-root") || document.body;
+    root.innerHTML = `
+      <div style="padding:14px;font-family:system-ui">
+        <div style="font-weight:1000;font-size:14px;margin-bottom:10px">Falha ao carregar o painel</div>
+        <pre style="white-space:pre-wrap;background:#fff;border:1px solid #ddd;border-radius:12px;padding:12px">${esc(err && (err.stack||err.message||err) || "Erro")}</pre>
+        <div style="margin-top:10px;font-size:12px;color:#666;font-weight:800">
+          Dica: se você não configurou FINANCEIRO_CFG.WEBHOOK_URL no HTML e seu Worker não tem /bx, vai dar erro de integração.
+        </div>
+      </div>
+    `;
+  }
+
+  window.addEventListener("error", (e)=> showFatal(e.error || e.message || e));
+  window.addEventListener("unhandledrejection", (e)=> showFatal(e.reason || e));
+
+  init().catch(showFatal);
 })();
