@@ -5,7 +5,10 @@
   var API_BASE = WORKER_BASE.replace(/\/$/, "") + "/api";
 
   var CFG = {
-    DEAL_CATEGORY_ID: 27,
+    DEAL_CATEGORY_ID: 27,        // Financeiro
+    REMINDER_CATEGORY_ID: 17,    // Pipeline 17 (assumido)
+    REMINDER_ASSIGNED_ID: 813,   // User 813
+
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w",
 
     FOOTER: {
@@ -18,16 +21,6 @@
       ],
       partnersUserIds: [1, 27, 15]
     },
-
-    CARDS: [
-      { name:"CT ITAÚ PJ", venc:"02", melhor:"21" },
-      { name:"CT PORTO PF", venc:"10", melhor:"04" },
-      { name:"CT C6 PJ", venc:"15", melhor:"09" },
-      { name:"CT XP PF", venc:"15", melhor:"11" },
-      { name:"CT ITAÚ PF", venc:"21", melhor:"13" },
-      { name:"CT CORA CGD BARRA", venc:"23", melhor:"17" },
-      { name:"CT PORTO PJ", venc:"30", melhor:"25" }
-    ],
 
     F: {
       TIPO_FIN: "UF_CRM_1771208061",
@@ -54,7 +47,11 @@
       CONCLUIDO: "C27:UC_LP2NSK"
     },
 
-    PAGE_SIZE: 300
+    PAGE_SIZE: 300,
+
+    // vínculo dos lembretes da pipeline 17 gravado na OBS do financeiro:
+    // ex: "... | REL_P17:123,124,130"
+    REL_PREFIX: "REL_P17:"
   };
 
   var root = document.getElementById("fin-root") || document.body;
@@ -64,8 +61,7 @@
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
-
-  function parseJson(text) { try { return JSON.parse(text); } catch (_) { return null; } }
+  function parseJson(t) { try { return JSON.parse(t); } catch (_) { return null; } }
 
   function apiCall(method, payload) {
     var body = JSON.stringify(payload || {});
@@ -89,7 +85,6 @@
   }
 
   function el(q) { return root.querySelector(q); }
-  function els(q) { return Array.prototype.slice.call(root.querySelectorAll(q)); }
 
   function nowBR() {
     var dt = new Date();
@@ -168,13 +163,6 @@
     }, 3200);
   }
 
-  function setLoading(v) {
-    S.loading = !!v;
-    var badge = el("#fin-loading");
-    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
-    els("[data-busylock='1']").forEach(function (b) { b.disabled = S.loading; });
-  }
-
   function modal(html) {
     var wrap = document.createElement("div");
     wrap.className = "fin-modal-wrap";
@@ -197,7 +185,6 @@
     };
   }
 
-  // ====== Estado ======
   var S = {
     enums: {},
     stages: [],
@@ -216,8 +203,6 @@
       conta: "",
       statusFin: "",
       stageId: "",
-
-      // checkbox globais (visibilidade)
       showPayables: true,
       showReceivables: true
     },
@@ -225,7 +210,14 @@
     reserve: { balance: 0 }
   };
 
-  // ====== Helpers de enums ======
+  function setLoading(v) {
+    S.loading = !!v;
+    var badge = el("#fin-loading");
+    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
+    var btns = root.querySelectorAll("[data-busylock='1']");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = S.loading;
+  }
+
   function buildOptions(items, includeBlank, blankText) {
     if (includeBlank !== false) includeBlank = true;
     blankText = blankText || "— Todos —";
@@ -256,43 +248,10 @@
     return false;
   }
 
-  function isExpenseStage(stageId) {
-    stageId = String(stageId || "");
-    return stageId === CFG.STAGES.DESP_A_PAGAR || stageId === CFG.STAGES.DESP_PAGA;
-  }
-  function isRevenueStage(stageId) {
-    stageId = String(stageId || "");
-    return stageId === CFG.STAGES.REC_A_RECEBER || stageId === CFG.STAGES.REC_RECEBIDA;
-  }
+  function updateDeal(id, fields) { return apiCall("crm.deal.update", { id: String(id), fields: fields || {} }); }
+  function createDeal(fields) { return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) { return r && r.result ? r.result : null; }); }
+  function deleteDeal(id) { return apiCall("crm.deal.delete", { id: String(id) }); }
 
-  function initialStageForTipo(tipoEnumId) {
-    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
-    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_A_PAGAR;
-    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_A_RECEBER;
-    return CFG.STAGES.DESP_A_PAGAR;
-  }
-
-  function paidStageForTipo(tipoEnumId) {
-    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
-    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_PAGA;
-    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_RECEBIDA;
-    return "";
-  }
-
-  // ====== Bitrix CRUD ======
-  function updateDeal(id, fields) {
-    return apiCall("crm.deal.update", { id: String(id), fields: fields || {} });
-  }
-  function createDeal(fields) {
-    return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) {
-      return r && r.result ? r.result : null;
-    });
-  }
-  function deleteDeal(id) {
-    return apiCall("crm.deal.delete", { id: String(id) });
-  }
-
-  // ====== Reserva (local) ======
   function loadReserve() {
     try {
       var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
@@ -300,11 +259,8 @@
       if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
     } catch (_) { S.reserve.balance = 0; }
   }
-  function saveReserve() {
-    try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {}
-  }
+  function saveReserve() { try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {} }
 
-  // ====== Load Meta + Stages ======
   function loadMeta() {
     return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
       var fields = (fieldsRes && fieldsRes.result) ? fieldsRes.result : {};
@@ -313,9 +269,7 @@
         if (!fields.hasOwnProperty(k)) continue;
         var v = fields[k];
         if (v && Array.isArray(v.items)) {
-          S.enums[k] = v.items.map(function (it) {
-            return { ID: String(it.ID), VALUE: String(it.VALUE) };
-          });
+          S.enums[k] = v.items.map(function (it) { return { ID: String(it.ID), VALUE: String(it.VALUE) }; });
         }
       }
       return apiCall("crm.status.list", { filter: { ENTITY_ID: "DEAL_STAGE_" + CFG.DEAL_CATEGORY_ID } });
@@ -335,7 +289,6 @@
     });
   }
 
-  // ====== Deals list (somente etapas permitidas) ======
   function listDealsAll() {
     var out = [];
     var start = 0;
@@ -347,6 +300,7 @@
       CFG.STAGES.CANCELADO,
       CFG.STAGES.CONCLUIDO
     ];
+
     function loop() {
       return apiCall("crm.deal.list", {
         select: [
@@ -368,7 +322,58 @@
     return loop();
   }
 
-  // ====== Avatars ======
+  /* ======== Pipeline 17 Lembretes (6) ========
+     - cria negócio na Pipeline 17 para ASSIGNED_BY_ID=813
+     - grava IDs criados na OBS do financeiro: " ... | REL_P17:123,124"
+     - ao excluir o financeiro recorrente, deleta também esses IDs.
+     Campos específicos do seu lembrete na pipeline 17 não foram informados,
+     então usamos: TITLE, CATEGORY_ID, ASSIGNED_BY_ID e (se existir) BEGINDATE/UF... depois ajustamos.
+  */
+  function parseRelP17Ids(obs) {
+    var s = String(obs || "");
+    var idx = s.indexOf(CFG.REL_PREFIX);
+    if (idx === -1) return [];
+    var tail = s.slice(idx + CFG.REL_PREFIX.length);
+    var m = tail.match(/^\s*([0-9,\s]+)/);
+    if (!m) return [];
+    return m[1].split(",").map(function (x) { return String(x).trim(); }).filter(Boolean);
+  }
+
+  function upsertRelP17InObs(obs, ids) {
+    obs = String(obs || "").trim();
+    ids = (ids || []).map(String).filter(Boolean);
+    // remove existente
+    var p = obs.indexOf(CFG.REL_PREFIX);
+    if (p !== -1) obs = obs.slice(0, p).trim().replace(/\|\s*$/, "").trim();
+    if (!ids.length) return obs;
+    var add = CFG.REL_PREFIX + ids.join(",");
+    return obs ? (obs + " | " + add) : add;
+  }
+
+  function createReminderP17(finDeal, dueISO) {
+    var fav = (finDeal && finDeal[CFG.F.FAVORECIDO]) ? finDeal[CFG.F.FAVORECIDO] : (finDeal.TITLE || "Lembrete");
+    var title = "LEMBRETE • Venc " + dueISO + " • " + fav;
+
+    var fields = {
+      TITLE: title,
+      CATEGORY_ID: String(CFG.REMINDER_CATEGORY_ID),
+      ASSIGNED_BY_ID: String(CFG.REMINDER_ASSIGNED_ID)
+    };
+
+    // Se você tiver um campo de data no Pipeline 17 (ex.: UF_CRM_xxx), me passe e eu coloco aqui.
+    // Por enquanto, o vencimento fica no título + pode ficar na OBS do próprio P17 se quiser.
+    return createDeal(fields);
+  }
+
+  function deleteReminderP17Ids(ids) {
+    ids = (ids || []).map(String).filter(Boolean);
+    var p = Promise.resolve();
+    for (var i = 0; i < ids.length; i++) (function (id) {
+      p = p.then(function () { return deleteDeal(id).catch(function () { /* ignora se já apagou */ }); });
+    })(ids[i]);
+    return p;
+  }
+
   function initialsFromName(name) {
     var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
     var a = parts[0] ? parts[0].charAt(0) : "";
@@ -407,7 +412,6 @@
     host.innerHTML = html.join("");
   }
 
-  // ====== Sidebar (Centro de custo) ======
   function renderSidebarCenters() {
     var host = el("#fin-side-centers");
     if (!host) return;
@@ -438,7 +442,6 @@
     }
   }
 
-  // ====== Totais ======
   function renderTotals() {
     var list = S.filtered || [];
     var prev = 0, real = 0;
@@ -458,7 +461,6 @@
     }
   }
 
-  // ====== Gráficos (placeholders; já posicionados abaixo dos checkboxes) ======
   function renderChartsPlaceholders() {
     var a = el("#chart-cat");
     var b = el("#chart-evo");
@@ -466,7 +468,6 @@
     if (b) b.innerHTML = '<div class="fin-chart-box">Linha: Evolução Receitas x Despesas (próximo passo)</div>';
   }
 
-  // ====== Aplicar filtros ======
   function applyFilters() {
     var q = String(S.filters.q || "").trim().toLowerCase();
 
@@ -479,7 +480,6 @@
       if (S.filters.conta && String(d[CFG.F.CONTA] || "") !== String(S.filters.conta)) return false;
       if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
 
-      // Etapa: default esconde CONCLUÍDO
       if (S.filters.stageId) {
         if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
       } else {
@@ -487,8 +487,12 @@
       }
 
       // checkbox globais (visibilidade)
-      if (!S.filters.showPayables && isExpenseStage(d.STAGE_ID)) return false;
-      if (!S.filters.showReceivables && isRevenueStage(d.STAGE_ID)) return false;
+      var st = String(d.STAGE_ID || "");
+      var isExp = (st === CFG.STAGES.DESP_A_PAGAR || st === CFG.STAGES.DESP_PAGA);
+      var isRec = (st === CFG.STAGES.REC_A_RECEBER || st === CFG.STAGES.REC_RECEBIDA);
+
+      if (!S.filters.showPayables && isExp) return false;
+      if (!S.filters.showReceivables && isRec) return false;
 
       if (q) {
         var hay = [
@@ -509,11 +513,22 @@
     renderChartsPlaceholders();
   }
 
-  // ====== Modal “Realizar/Receber” (usado pelo checkbox por linha) ======
-  function openPayReceiveModal(deal) {
-    var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
-    var isRec = String(deal.STAGE_ID) === CFG.STAGES.REC_A_RECEBER;
+  /* (9) mover etapa sem depender do “Tipo” */
+  function nextStageByCurrent(stageId) {
+    stageId = String(stageId || "");
+    if (stageId === CFG.STAGES.DESP_A_PAGAR) return CFG.STAGES.DESP_PAGA;
+    if (stageId === CFG.STAGES.REC_A_RECEBER) return CFG.STAGES.REC_RECEBIDA;
+    return "";
+  }
 
+  function openPayReceiveModal(deal) {
+    var stageTo = nextStageByCurrent(deal.STAGE_ID);
+    if (!stageTo) {
+      toast("Este item não está em A PAGAR / A RECEBER.", "err");
+      return;
+    }
+
+    var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
     var title = isDesp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
 
     var m = modal(
@@ -535,12 +550,11 @@
 
       var v = parseMoneyBR(m.q("#pr-val").value || "");
       var dt = toISODate(m.q("#pr-date").value || "");
-      var paidStage = paidStageForTipo(deal[CFG.F.TIPO_FIN]);
 
       var fields = {};
       fields[CFG.F.VALOR_REAL] = v;
       fields[CFG.F.DATA_REAL] = dt;
-      if (paidStage) fields.STAGE_ID = paidStage;
+      fields.STAGE_ID = stageTo;
 
       updateDeal(deal.ID, fields)
         .then(function () { toast("Atualizado ✅"); m.close(); return refresh(); })
@@ -549,12 +563,14 @@
     });
   }
 
-  // ====== Excluir ======
   function confirmDelete(deal) {
+    var ids = parseRelP17Ids(deal[CFG.F.OBS] || "");
+    var extra = ids.length ? ("<br><br><b>ATENÇÃO:</b> este lançamento tem " + ids.length + " lembretes vinculados na Pipeline 17 (User 813). Eles também serão apagados.") : "";
+
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">Excluir lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
-        '<div class="fin-hint">Tem certeza que deseja <b>EXCLUIR</b> o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?<br>Isso remove o negócio do Bitrix.</div>' +
+        '<div class="fin-hint">Tem certeza que deseja <b>EXCLUIR</b> o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?<br>Isso remove o negócio do Bitrix.' + extra + '</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
           '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
@@ -564,216 +580,98 @@
 
     m.q("#del-ok").addEventListener("click", function () {
       setLoading(true);
-      deleteDeal(deal.ID)
+
+      // (6) se tiver REL_P17, apaga os lembretes também
+      deleteReminderP17Ids(ids)
+        .then(function () { return deleteDeal(deal.ID); })
         .then(function () { toast("Excluído ✅"); m.close(); return refresh(); })
         .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
         .finally(function () { setLoading(false); });
     });
   }
 
-  // ====== Edit/Novo simples ======
-  function openEditModal(deal) {
-    var isEdit = !!deal;
-    function v(k) { return deal ? (deal[k] == null ? "" : deal[k]) : ""; }
-
+  /* (7) NOVO LANÇAMENTO: avulsa / recorr semanal / recorr mensal
+     - para recorrência mensal de DESPESA: cria também lembretes na pipeline 17 (6)
+  */
+  function openNewModal() {
     var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">' + (isEdit ? "Editar lançamento" : "Novo lançamento") + '</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-grid">' +
-
-          '<div class="fin-field"><label>Tipo Financeiro</label>' +
-            '<select id="m-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Competência</label>' +
-            '<select id="m-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Centro de custo</label>' +
-            '<select id="m-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Conta / Origem</label>' +
-            '<select id="m-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Data Prevista</label>' +
-            '<input id="m-dprev" placeholder="YYYY-MM-DD" value="' + esc(toISODate(v(CFG.F.DATA_PREV))) + '">' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Valor Previsto</label>' +
-            '<input id="m-vprev" placeholder="Ex.: 1500,00" value="' + esc(v(CFG.F.VALOR_PREV)) + '">' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Favorecido / Pagador</label>' +
-            '<input id="m-fav" placeholder="Ex.: Light, Vivo, Cliente..." value="' + esc(v(CFG.F.FAVORECIDO)) + '">' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Categoria</label>' +
-            '<select id="m-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Status Financeiro</label>' +
-            '<select id="m-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Forma de pagamento</label>' +
-            '<select id="m-forma">' + buildOptions(S.enums[CFG.F.FORMA_PGTO] || [], true, "—") + '</select>' +
-          '</div>' +
-
-        '</div>' +
-
-        '<div class="fin-field" style="margin-top:10px"><label>Observações</label>' +
-          '<textarea id="m-obs" rows="3">' + esc(v(CFG.F.OBS)) + '</textarea>' +
-        '</div>' +
-
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="m-save" data-busylock="1">' + (isEdit ? "Salvar" : "Criar") + '</button>' +
-        '</div>' +
-      '</div>'
-    );
-
-    m.q("#m-tipo").value = String(v(CFG.F.TIPO_FIN) || "");
-    m.q("#m-comp").value = String(v(CFG.F.COMPETENCIA) || "");
-    m.q("#m-cc").value = String(v(CFG.F.CENTRO_CUSTO) || "");
-    m.q("#m-conta").value = String(v(CFG.F.CONTA) || "");
-    m.q("#m-cat").value = String(v(CFG.F.CATEGORIA) || "");
-    m.q("#m-status").value = String(v(CFG.F.STATUS_FIN) || "");
-    m.q("#m-forma").value = String(v(CFG.F.FORMA_PGTO) || "");
-
-    m.q("#m-save").addEventListener("click", function () {
-      setLoading(true);
-      try {
-        var tipo = m.q("#m-tipo").value;
-        if (!tipo) throw new Error("Selecione o Tipo Financeiro.");
-
-        var fields = {};
-        fields[CFG.F.TIPO_FIN] = tipo;
-        fields[CFG.F.COMPETENCIA] = m.q("#m-comp").value || "";
-        fields[CFG.F.CENTRO_CUSTO] = m.q("#m-cc").value || "";
-        fields[CFG.F.CONTA] = m.q("#m-conta").value || "";
-        fields[CFG.F.DATA_PREV] = toISODate(m.q("#m-dprev").value || "");
-        fields[CFG.F.VALOR_PREV] = parseMoneyBR(m.q("#m-vprev").value || "");
-        fields[CFG.F.FAVORECIDO] = String(m.q("#m-fav").value || "").trim();
-        fields[CFG.F.CATEGORIA] = m.q("#m-cat").value || "";
-        fields[CFG.F.STATUS_FIN] = m.q("#m-status").value || "";
-        fields[CFG.F.FORMA_PGTO] = m.q("#m-forma").value || "";
-        fields[CFG.F.OBS] = String(m.q("#m-obs").value || "").trim();
-
-        if (isBadFav(fields[CFG.F.FAVORECIDO])) throw new Error("Favorecido inválido (parece FILA/QUEUE).");
-
-        if (isEdit) {
-          updateDeal(deal.ID, fields)
-            .then(function () { toast("Atualizado ✅"); m.close(); return refresh(); })
-            .catch(function (e) { toast(e.message || String(e), "err"); })
-            .finally(function () { setLoading(false); });
-        } else {
-          var tipoTxt = enumName(CFG.F.TIPO_FIN, tipo) || "FIN";
-          var fav = fields[CFG.F.FAVORECIDO] || "";
-          var st = initialStageForTipo(tipo);
-
-          var addFields = {};
-          addFields.TITLE = "FIN • " + tipoTxt + (fav ? " • " + fav : "");
-          addFields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-          addFields.STAGE_ID = st;
-
-          for (var k in fields) if (fields.hasOwnProperty(k)) addFields[k] = fields[k];
-
-          createDeal(addFields)
-            .then(function (newId) { toast("Criado ✅ (ID " + newId + ")"); m.close(); return refresh(); })
-            .catch(function (e) { toast(e.message || String(e), "err"); })
-            .finally(function () { setLoading(false); });
-        }
-      } catch (err) {
-        toast(err.message || String(err), "err");
-        setLoading(false);
-      }
-    });
-  }
-
-  // ====== Lote (mensal/semanal/avulsa/cartão) ======
-  function openBatchModal() {
-    var cardOpts = ['<option value="">—</option>'];
-    for (var i = 0; i < CFG.CARDS.length; i++) cardOpts.push('<option value="' + esc(CFG.CARDS[i].name) + '">' + esc(CFG.CARDS[i].name) + "</option>");
-
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Criar em lote</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-head"><div class="fin-modal-title">Novo lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
 
         '<div class="fin-grid">' +
-          '<div class="fin-field"><label>Tipo Financeiro</label><select id="b-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select></div>' +
-          '<div class="fin-field"><label>Periodicidade</label>' +
-            '<select id="b-per">' +
+          '<div class="fin-field"><label>Tipo Financeiro</label><select id="n-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select></div>' +
+          '<div class="fin-field"><label>Competência</label><select id="n-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+
+          '<div class="fin-field"><label>Centro de custo</label><select id="n-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
+          '<div class="fin-field"><label>Conta / Origem</label><select id="n-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+
+          '<div class="fin-field"><label>Data Prevista (1ª)</label><input id="n-date" placeholder="YYYY-MM-DD"></div>' +
+          '<div class="fin-field"><label>Valor Previsto</label><input id="n-val" placeholder="Ex.: 1500,00"></div>' +
+
+          '<div class="fin-field"><label>Favorecido / Pagador</label><input id="n-fav" placeholder="Ex.: Light, Vivo, Cliente..."></div>' +
+          '<div class="fin-field"><label>Categoria</label><select id="n-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
+
+          '<div class="fin-field"><label>Recorrência</label>' +
+            '<select id="n-rec">' +
               '<option value="once">Avulsa (1x)</option>' +
               '<option value="weekly">Semanal</option>' +
               '<option value="monthly">Mensal</option>' +
-              '<option value="card">No cartão</option>' +
             '</select>' +
           '</div>' +
 
-          '<div class="fin-field"><label>Quantidade</label><input id="b-qtd" value="1" placeholder="Ex.: 12"></div>' +
-          '<div class="fin-field"><label>Primeira data prevista</label><input id="b-date" placeholder="YYYY-MM-DD"></div>' +
-
-          '<div class="fin-field"><label>Valor previsto</label><input id="b-val" placeholder="Ex.: 1500,00"></div>' +
-          '<div class="fin-field"><label>Competência</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-
-          '<div class="fin-field"><label>Centro de custo</label><select id="b-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
-          '<div class="fin-field"><label>Conta / Origem</label><select id="b-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-
-          '<div class="fin-field"><label>Categoria</label><select id="b-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
-          '<div class="fin-field"><label>Forma de pagamento</label><select id="b-forma">' + buildOptions(S.enums[CFG.F.FORMA_PGTO] || [], true, "—") + '</select></div>' +
-
-          '<div class="fin-field"><label>Cartão (se "No cartão")</label><select id="b-card">' + cardOpts.join("") + '</select></div>' +
-          '<div class="fin-field"><label>Favorecido/Pagador</label><input id="b-fav" placeholder="Ex.: Light, Vivo, Cliente..."></div>' +
+          '<div class="fin-field"><label>Qtd. ocorrências</label><input id="n-qtd" value="1" placeholder="Ex.: 12"></div>' +
         '</div>' +
 
-        '<div class="fin-field" style="margin-top:10px"><label>Observações</label><textarea id="b-obs" rows="2"></textarea></div>' +
+        '<div class="fin-field" style="margin-top:10px"><label>Observações</label><textarea id="n-obs" rows="2"></textarea></div>' +
 
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="b-go" data-busylock="1">Criar em lote</button>' +
+          '<button class="fin-btn fin-btn--primary" id="n-go" data-busylock="1">Criar</button>' +
         '</div>' +
 
       '</div>'
     );
 
-    m.q("#b-go").addEventListener("click", function () {
+    m.q("#n-go").addEventListener("click", function () {
       setLoading(true);
       try {
-        var tipo = m.q("#b-tipo").value;
+        var tipo = m.q("#n-tipo").value;
         if (!tipo) throw new Error("Selecione o Tipo Financeiro.");
 
-        var per = m.q("#b-per").value;
-        var qtd = Math.max(1, parseInt(m.q("#b-qtd").value || "1", 10) || 1);
-        var first = toISODate(m.q("#b-date").value || "");
-        if (!first) throw new Error("Informe a primeira data prevista (YYYY-MM-DD).");
+        var comp = m.q("#n-comp").value || "";
+        var cc = m.q("#n-cc").value || "";
+        var conta = m.q("#n-conta").value || "";
+        var date0 = toISODate(m.q("#n-date").value || "");
+        if (!date0) throw new Error("Informe a Data Prevista (YYYY-MM-DD).");
 
-        var vprev = parseMoneyBR(m.q("#b-val").value || "");
-        var comp = m.q("#b-comp").value || "";
-        var cc = m.q("#b-cc").value || "";
-        var conta = m.q("#b-conta").value || "";
-        var cat = m.q("#b-cat").value || "";
-        var forma = m.q("#b-forma").value || "";
-        var card = m.q("#b-card").value || "";
-        var fav = String(m.q("#b-fav").value || "").trim();
-        var obs = String(m.q("#b-obs").value || "").trim();
+        var vprev = parseMoneyBR(m.q("#n-val").value || "");
+        var fav = String(m.q("#n-fav").value || "").trim();
+        var cat = m.q("#n-cat").value || "";
+        var obs = String(m.q("#n-obs").value || "").trim();
 
         if (isBadFav(fav)) throw new Error("Favorecido inválido (parece FILA/QUEUE).");
 
-        var stage = initialStageForTipo(tipo);
+        var rec = m.q("#n-rec").value;
+        var qtd = Math.max(1, parseInt(m.q("#n-qtd").value || "1", 10) || 1);
 
-        var i;
-        var ops = Promise.resolve();
-        var created = 0;
+        // define etapa inicial por texto do tipo (melhor: se no seu enum tiver "DESPESA"/"RECEITA")
+        var tipoTxt = (enumName(CFG.F.TIPO_FIN, tipo) || "").toUpperCase();
+        var isDesp = (tipoTxt.indexOf("DESP") > -1);
+        var isRec = (tipoTxt.indexOf("REC") > -1);
+
+        var stage = isRec ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
 
         function calcDate(idx) {
-          if (per === "weekly") return addDaysISO(first, idx * 7);
-          if (per === "monthly") return addMonthsISO(first, idx);
-          return first;
+          if (rec === "weekly") return addDaysISO(date0, idx * 7);
+          if (rec === "monthly") return addMonthsISO(date0, idx);
+          return date0;
         }
 
-        for (i = 0; i < qtd; i++) (function (idx) {
+        var ops = Promise.resolve();
+        var created = 0;
+        var reminderIds = [];
+
+        for (var i = 0; i < qtd; i++) (function (idx) {
           ops = ops.then(function () {
             var dt = calcDate(idx);
 
@@ -790,17 +688,202 @@
             fields[CFG.F.VALOR_PREV] = vprev;
             fields[CFG.F.FAVORECIDO] = fav;
             fields[CFG.F.CATEGORIA] = cat;
-            fields[CFG.F.FORMA_PGTO] = (per === "card" && card) ? "" : forma;
             fields[CFG.F.OBS] = obs;
 
-            if (per === "card" && card) {
-              // “No cartão”: registra o nome do cartão na OBS e/ou Forma de Pagto (se preferir, depois fazemos campo dedicado)
-              fields[CFG.F.OBS] = (obs ? (obs + " | ") : "") + "CARTÃO: " + card;
-            }
+            return createDeal(fields).then(function (newId) {
+              created++;
 
-            return createDeal(fields).then(function () { created++; });
+              // (6) somente “recorrência mensal de DESPESA” cria lembretes na pipeline 17
+              if (rec === "monthly" && isDesp) {
+                return createReminderP17({ TITLE: fields.TITLE, UF: fields }, dt).then(function (rid) {
+                  if (rid) reminderIds.push(String(rid));
+                  // grava o vínculo no próprio deal financeiro recém criado
+                  if (rid) {
+                    var newObs = upsertRelP17InObs(obs, [rid]);
+                    var upd = {}; upd[CFG.F.OBS] = newObs;
+                    return updateDeal(newId, upd);
+                  }
+                });
+              }
+            });
           });
         })(i);
+
+        ops.then(function () {
+          toast("Criado ✅ (" + created + " item(ns))");
+          m.close();
+          return refresh();
+        }).catch(function (e) {
+          toast("Falha: " + (e.message || String(e)), "err");
+        }).finally(function () {
+          setLoading(false);
+        });
+
+      } catch (err) {
+        toast(err.message || String(err), "err");
+        setLoading(false);
+      }
+    });
+  }
+
+  /* (8) LOTE: modal em lista (várias linhas)
+     - com botões “Criar DESPESAS” e “Criar RECEITAS”
+     - cada linha pode ser avulsa/semanal/mensal
+  */
+  function openBatchListModal() {
+    var rows = [{ fav:"", val:"", date:"", rec:"once", qtd:"1" }];
+
+    function renderRows(host) {
+      var html = "";
+      for (var i = 0; i < rows.length; i++) {
+        html +=
+          '<div class="fin-grid" style="margin-bottom:10px;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--off)">' +
+            '<div class="fin-field"><label>Favorecido/Pagador</label><input data-k="fav" data-i="'+i+'" value="'+esc(rows[i].fav)+'" placeholder="Ex.: Light, Cliente..."></div>' +
+            '<div class="fin-field"><label>Valor</label><input data-k="val" data-i="'+i+'" value="'+esc(rows[i].val)+'" placeholder="Ex.: 1500,00"></div>' +
+            '<div class="fin-field"><label>Data 1ª</label><input data-k="date" data-i="'+i+'" value="'+esc(rows[i].date)+'" placeholder="YYYY-MM-DD"></div>' +
+            '<div class="fin-field"><label>Recorrência</label>' +
+              '<select data-k="rec" data-i="'+i+'">' +
+                '<option value="once" '+(rows[i].rec==="once"?"selected":"")+'>Avulsa</option>' +
+                '<option value="weekly" '+(rows[i].rec==="weekly"?"selected":"")+'>Semanal</option>' +
+                '<option value="monthly" '+(rows[i].rec==="monthly"?"selected":"")+'>Mensal</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="fin-field"><label>Qtd</label><input data-k="qtd" data-i="'+i+'" value="'+esc(rows[i].qtd)+'" placeholder="Ex.: 12"></div>' +
+            '<div class="fin-field"><label>Ações</label><button class="fin-btn fin-btn--danger" data-del="'+i+'">Remover</button></div>' +
+          '</div>';
+      }
+      host.innerHTML = html;
+
+      var inputs = host.querySelectorAll("input[data-k],select[data-k]");
+      for (var j = 0; j < inputs.length; j++) {
+        inputs[j].addEventListener("input", function () {
+          var k = this.getAttribute("data-k");
+          var idx = parseInt(this.getAttribute("data-i") || "0", 10);
+          rows[idx][k] = this.value;
+        });
+        inputs[j].addEventListener("change", function () {
+          var k = this.getAttribute("data-k");
+          var idx = parseInt(this.getAttribute("data-i") || "0", 10);
+          rows[idx][k] = this.value;
+        });
+      }
+
+      var dels = host.querySelectorAll("[data-del]");
+      for (var d = 0; d < dels.length; d++) {
+        dels[d].addEventListener("click", function () {
+          var idx = parseInt(this.getAttribute("data-del") || "0", 10);
+          rows.splice(idx, 1);
+          if (!rows.length) rows.push({ fav:"", val:"", date:"", rec:"once", qtd:"1" });
+          renderRows(host);
+        });
+      }
+    }
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Lote (preencher várias linhas)</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+
+        '<div class="fin-grid">' +
+          '<div class="fin-field"><label>Centro de custo</label><select id="b-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
+          '<div class="fin-field"><label>Conta / Origem</label><select id="b-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+          '<div class="fin-field"><label>Competência</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+          '<div class="fin-field"><label>Categoria</label><select id="b-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
+        '</div>' +
+
+        '<div class="fin-field" style="margin-top:10px"><label>Observações (aplica a todas)</label><textarea id="b-obs" rows="2"></textarea></div>' +
+
+        '<div style="margin-top:10px" id="b-rows"></div>' +
+
+        '<div class="fin-row" style="margin-top:10px;justify-content:space-between">' +
+          '<button class="fin-btn" id="b-add">+ Adicionar linha</button>' +
+          '<div class="fin-row fin-row--right" style="gap:8px">' +
+            '<button class="fin-btn fin-btn--primary" id="b-exp" data-busylock="1">Criar DESPESAS</button>' +
+            '<button class="fin-btn fin-btn--primary" id="b-rec" data-busylock="1">Criar RECEITAS</button>' +
+          '</div>' +
+        '</div>' +
+
+      '</div>'
+    );
+
+    var host = m.q("#b-rows");
+    renderRows(host);
+
+    m.q("#b-add").addEventListener("click", function () {
+      rows.push({ fav:"", val:"", date:"", rec:"once", qtd:"1" });
+      renderRows(host);
+    });
+
+    function createBatch(kind) {
+      setLoading(true);
+      try {
+        var cc = m.q("#b-cc").value || "";
+        var conta = m.q("#b-conta").value || "";
+        var comp = m.q("#b-comp").value || "";
+        var cat = m.q("#b-cat").value || "";
+        var obsAll = String(m.q("#b-obs").value || "").trim();
+
+        // achar tipo enum por texto (despesa/receita). Se você preferir fixar ID, me diga o ID do enum.
+        var tipoEnum = "";
+        var items = S.enums[CFG.F.TIPO_FIN] || [];
+        for (var i = 0; i < items.length; i++) {
+          var t = String(items[i].VALUE || "").toUpperCase();
+          if (kind === "EXP" && t.indexOf("DESP") > -1) { tipoEnum = String(items[i].ID); break; }
+          if (kind === "REC" && t.indexOf("REC") > -1) { tipoEnum = String(items[i].ID); break; }
+        }
+        if (!tipoEnum) throw new Error("Não achei um 'Tipo Financeiro' com texto de " + (kind==="EXP"?"DESPESA":"RECEITA") + ". Me diga qual enum usar.");
+
+        var stage = (kind === "REC") ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
+
+        function calcDate(base, rec, idx) {
+          if (rec === "weekly") return addDaysISO(base, idx * 7);
+          if (rec === "monthly") return addMonthsISO(base, idx);
+          return base;
+        }
+
+        var ops = Promise.resolve();
+        var created = 0;
+
+        for (var r = 0; r < rows.length; r++) (function (row) {
+          ops = ops.then(function () {
+            var fav = String(row.fav || "").trim();
+            if (!fav) throw new Error("Tem linha sem Favorecido.");
+            if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
+
+            var vprev = parseMoneyBR(row.val || "");
+            var d0 = toISODate(row.date || "");
+            if (!d0) throw new Error("Linha sem Data 1ª (YYYY-MM-DD).");
+
+            var rec = row.rec || "once";
+            var qtd = Math.max(1, parseInt(row.qtd || "1", 10) || 1);
+
+            var p = Promise.resolve();
+
+            for (var j = 0; j < qtd; j++) (function (idx) {
+              p = p.then(function () {
+                var dt = calcDate(d0, rec, idx);
+
+                var fields = {};
+                fields.TITLE = "FIN • " + (kind === "REC" ? "RECEITA" : "DESPESA") + " • " + fav;
+                fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
+                fields.STAGE_ID = stage;
+
+                fields[CFG.F.TIPO_FIN] = tipoEnum;
+                fields[CFG.F.COMPETENCIA] = comp;
+                fields[CFG.F.CENTRO_CUSTO] = cc;
+                fields[CFG.F.CONTA] = conta;
+                fields[CFG.F.DATA_PREV] = dt;
+                fields[CFG.F.VALOR_PREV] = vprev;
+                fields[CFG.F.FAVORECIDO] = fav;
+                fields[CFG.F.CATEGORIA] = cat;
+                fields[CFG.F.OBS] = obsAll;
+
+                return createDeal(fields).then(function () { created++; });
+              });
+            })(j);
+
+            return p;
+          });
+        })(rows[r]);
 
         ops.then(function () {
           toast("Lote criado ✅ (" + created + " itens)");
@@ -816,10 +899,12 @@
         toast(err.message || String(err), "err");
         setLoading(false);
       }
-    });
+    }
+
+    m.q("#b-exp").addEventListener("click", function () { createBatch("EXP"); });
+    m.q("#b-rec").addEventListener("click", function () { createBatch("REC"); });
   }
 
-  // ====== Reserva ======
   function openReserveModal() {
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">Fundo de Reserva</div><button class="fin-x" data-close="1">×</button></div>' +
@@ -841,7 +926,6 @@
     });
   }
 
-  // ====== Tabela (com checkbox por linha + excluir) ======
   function renderTable() {
     var tb = el("#fin-tbody");
     if (!tb) return;
@@ -857,8 +941,9 @@
       var d = list[i];
       var fav = d[CFG.F.FAVORECIDO] || d.TITLE || "";
 
-      var canCheck = (String(d.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR) || (String(d.STAGE_ID) === CFG.STAGES.REC_A_RECEBER);
-      var chkLabel = (String(d.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR) ? "Pagar" : ((String(d.STAGE_ID) === CFG.STAGES.REC_A_RECEBER) ? "Receber" : "");
+      var st = String(d.STAGE_ID || "");
+      var canCheck = (st === CFG.STAGES.DESP_A_PAGAR) || (st === CFG.STAGES.REC_A_RECEBER);
+      var chkLabel = (st === CFG.STAGES.DESP_A_PAGAR) ? "Pagar" : ((st === CFG.STAGES.REC_A_RECEBER) ? "Receber" : "");
       var chk = canCheck
         ? '<span class="fin-rowchk"><input type="checkbox" data-act="chk" data-id="' + esc(d.ID) + '"><span>' + esc(chkLabel) + '</span></span>'
         : '<span class="fin-muted">—</span>';
@@ -897,10 +982,9 @@
         for (var x = 0; x < S.deals.length; x++) if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
         if (!deal) return;
 
-        if (act === "edit") return openEditModal(deal);
+        if (act === "edit") return toast("Editar (próximo passo: edição completa)"); // você pediu foco em recorrência/fluxo; deixo o edit completo no próximo ajuste
         if (act === "del") return confirmDelete(deal);
         if (act === "chk") {
-          // evita “marcar” visualmente; usa só como gatilho
           try { this.checked = false; } catch(_) {}
           return openPayReceiveModal(deal);
         }
@@ -908,7 +992,6 @@
     }
   }
 
-  // ====== CSV ======
   function exportCSV() {
     var list = S.filtered || [];
     if (!list.length) { toast("Nada para exportar.", "err"); return; }
@@ -917,10 +1000,7 @@
     var csv = [];
     csv.push(headers.join(";"));
 
-    function q(s) {
-      s = String(s == null ? "" : s).replace(/"/g, '""');
-      return '"' + s + '"';
-    }
+    function q(s) { s = String(s == null ? "" : s).replace(/"/g, '""'); return '"' + s + '"'; }
 
     for (var i = 0; i < list.length; i++) {
       var d = list[i];
@@ -953,7 +1033,6 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1200);
   }
 
-  // ====== Render (layout corrigido: header/footer full width) ======
   function render() {
     root.innerHTML =
       '<div class="fin-page">' +
@@ -977,73 +1056,75 @@
           '</div>' +
         '</header>' +
 
-        '<div class="fin-body">' +
-          '<aside class="fin-side">' +
-            '<div class="fin-side-brand">' +
-              '<img class="fin-brand-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
-              '<div><div class="fin-brand-title">Financeiro CGD</div><div class="fin-brand-sub">Deals • Pipeline 27</div></div>' +
-            '</div>' +
-
-            '<div class="fin-side-block">' +
-              '<div class="fin-side-h">Centro de custo</div>' +
-              '<div id="fin-side-centers" class="fin-side-list"></div>' +
-            '</div>' +
-          '</aside>' +
-
-          '<main>' +
-            '<section class="fin-panel"><div class="fin-panel-inner">' +
-
-              '<div class="fin-kpis">' +
-                '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
-                '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
-                '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
+        '<div class="fin-shell">' +
+          '<div class="fin-body">' +
+            '<aside class="fin-side">' +
+              '<div class="fin-side-brand">' +
+                '<img class="fin-brand-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
+                '<div><div class="fin-brand-title">Financeiro CGD</div><div class="fin-brand-sub">Deals • Pipeline 27</div></div>' +
               '</div>' +
+              '<div class="fin-side-block">' +
+                '<div class="fin-side-h">Centro de custo</div>' +
+                '<div id="fin-side-centers" class="fin-side-list"></div>' +
+              '</div>' +
+            '</aside>' +
 
-              '<div class="fin-filters">' +
-                '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-                '<div class="fin-field"><label>Tipo</label><select id="f-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || []) + '</select></div>' +
-                '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-                '<div class="fin-field"><label>Status</label><select id="f-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select></div>' +
-                '<div class="fin-field"><label>Etapa</label><select id="f-stage"><option value="">— Todos (exceto CONCLUÍDO) —</option>' +
-                  (S.stages || []).map(function (s) { return '<option value="' + esc(s.STATUS_ID) + '">' + esc(s.NAME) + '</option>'; }).join("") +
-                '</select></div>' +
+            '<main>' +
+              '<section class="fin-panel"><div class="fin-panel-inner">' +
 
-                '<div style="flex-basis:100%; height:0"></div>' +
-
-                '<div class="fin-toggles">' +
-                  '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas (A PAGAR + PAGAS)</span></label>' +
-                  '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas (A RECEBER + RECEBIDAS)</span></label>' +
+                '<div class="fin-kpis">' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
+                  '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
                 '</div>' +
 
-                '<div class="fin-charts" style="flex-basis:100%">' +
-                  '<div id="chart-cat"></div>' +
-                  '<div id="chart-evo"></div>' +
+                '<div class="fin-filters">' +
+                  '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+                  '<div class="fin-field"><label>Tipo</label><select id="f-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || []) + '</select></div>' +
+                  '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+                  '<div class="fin-field"><label>Status</label><select id="f-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select></div>' +
+                  '<div class="fin-field"><label>Etapa</label><select id="f-stage"><option value="">— Todos (exceto CONCLUÍDO) —</option>' +
+                    (S.stages || []).map(function (s) { return '<option value="' + esc(s.STATUS_ID) + '">' + esc(s.NAME) + '</option>'; }).join("") +
+                  '</select></div>' +
+
+                  '<div style="flex-basis:100%; height:0"></div>' +
+
+                  '<div class="fin-toggles">' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas (A PAGAR + PAGAS)</span></label>' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas (A RECEBER + RECEBIDAS)</span></label>' +
+                    '<div class="fin-check" style="margin-left:auto"><span class="fin-muted">Qtd. Itens:</span> <span id="tot-count" class="fin-strong">0</span></div>' +
+                  '</div>' +
+
+                  '<div class="fin-charts" style="flex-basis:100%">' +
+                    '<div id="chart-cat"></div>' +
+                    '<div id="chart-evo"></div>' +
+                  '</div>' +
                 '</div>' +
-              '</div>' +
 
-              '<div class="fin-table-wrap" style="margin-top:12px">' +
-                '<table class="fin-table">' +
-                  '<thead><tr>' +
-                    '<th style="width:76px">ID</th>' +
-                    '<th>Favorecido</th>' +
-                    '<th style="width:170px">Centro</th>' +
-                    '<th style="width:170px">Conta</th>' +
-                    '<th style="width:140px">Tipo</th>' +
-                    '<th style="width:130px">Competência</th>' +
-                    '<th style="width:120px">Data Prev.</th>' +
-                    '<th style="width:140px">Previsto</th>' +
-                    '<th style="width:140px">Realizado</th>' +
-                    '<th style="width:160px">Etapa</th>' +
-                    '<th style="width:320px">Ações</th>' +
-                  '</tr></thead>' +
-                  '<tbody id="fin-tbody"><tr><td colspan="11" class="fin-muted">Carregando…</td></tr></tbody>' +
-                '</table>' +
-              '</div>' +
+                '<div class="fin-table-wrap" style="margin-top:12px">' +
+                  '<table class="fin-table">' +
+                    '<thead><tr>' +
+                      '<th style="width:76px">ID</th>' +
+                      '<th>Favorecido</th>' +
+                      '<th style="width:170px">Centro</th>' +
+                      '<th style="width:170px">Conta</th>' +
+                      '<th style="width:140px">Tipo</th>' +
+                      '<th style="width:130px">Competência</th>' +
+                      '<th style="width:120px">Data Prev.</th>' +
+                      '<th style="width:140px">Previsto</th>' +
+                      '<th style="width:140px">Realizado</th>' +
+                      '<th style="width:160px">Etapa</th>' +
+                      '<th style="width:320px">Ações</th>' +
+                    '</tr></thead>' +
+                    '<tbody id="fin-tbody"><tr><td colspan="11" class="fin-muted">Carregando…</td></tr></tbody>' +
+                  '</table>' +
+                '</div>' +
 
-              '<div id="fin-toast-host" class="fin-toast-host"></div>' +
+                '<div id="fin-toast-host" class="fin-toast-host"></div>' +
 
-            '</div></section>' +
-          '</main>' +
+              '</div></section>' +
+            '</main>' +
+          '</div>' +
         '</div>' +
 
         '<footer class="fin-footerbar">' +
@@ -1059,9 +1140,8 @@
 
       '</div>';
 
-    // Events
-    el("#btn-new").addEventListener("click", function () { openEditModal(null); });
-    el("#btn-batch").addEventListener("click", function () { openBatchModal(); });
+    el("#btn-new").addEventListener("click", function () { openNewModal(); });
+    el("#btn-batch").addEventListener("click", function () { openBatchListModal(); });
     el("#btn-refresh").addEventListener("click", function () { refresh(); });
     el("#btn-csv").addEventListener("click", function () { exportCSV(); });
     el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
@@ -1080,7 +1160,6 @@
     renderChartsPlaceholders();
   }
 
-  // ====== Refresh ======
   function refresh() {
     setLoading(true);
     return listDealsAll()
@@ -1097,7 +1176,6 @@
       .finally(function () { setLoading(false); });
   }
 
-  // finally polyfill
   if (!Promise.prototype.finally) {
     Promise.prototype.finally = function (cb) {
       var P = this.constructor;
@@ -1108,15 +1186,9 @@
     };
   }
 
-  // ====== Boot ======
   function boot() {
-    try {
-      var s = document.getElementById("fin-sentinel");
-      if (s) s.textContent = "JS iniciou ✅";
-    } catch (_) {}
-
+    // (3) não mexe no sentinel, não exibe “JS iniciou ✅”
     loadReserve();
-
     return loadMeta()
       .then(function () {
         render();
@@ -1128,12 +1200,12 @@
       })
       .catch(function (e) {
         toast("Erro ao iniciar: " + (e.message || String(e)), "err");
-        root.innerHTML = '<div style="padding:16px;color:#fff">Falha ao iniciar. Veja console.</div>';
+        root.innerHTML = '<div style="padding:16px">Falha ao iniciar. Veja console.</div>';
       });
   }
 
-  window.addEventListener("error", function () { /* erros já aparecem via console; UI usa toasts */ });
-  window.addEventListener("unhandledrejection", function () { /* idem */ });
+  window.addEventListener("error", function () {});
+  window.addEventListener("unhandledrejection", function () {});
 
   boot();
 })();
