@@ -1,1522 +1,1322 @@
-/* cgd-assets/financeiro/financeiro.js */
 (function(){
-  // =========================
-  // CONFIG
-  // =========================
-  const WORKER_BASE = "https://financeiro199702.cgdseguros.workers.dev";
+  // ========= CONFIG =========
+  // ⚠️ Preencha seu webhook (com barra no final)
+  // Ex.: https://b24-xxxx.bitrix24.com.br/rest/1/SEU_TOKEN/
+  const WEBHOOK_BASE = "COLE_AQUI_SEU_WEBHOOK_COM_BARRA_NO_FINAL";
 
-  // Campos (Pipeline 27)
-  const F = {
-    tipo: "UF_CRM_1771208061",
-    competencia: "UF_CRM_1771163661",
-    valorPrev: "UF_CRM_1770769991",
-    valorReal: "UF_CRM_1770770017",
-    dataReal: "UF_CRM_1770771170",
-    favorecido: "UF_CRM_1770775760",
-    formaPgto: "UF_CRM_1769351652",
-    obs: "UF_CRM_691385BE7D33D",
-    categoria: "UF_CRM_1770770570",
-    dataPrev: "UF_CRM_1770769767",
-    statusFin: "UF_CRM_1770770088",
-    conta: "UF_CRM_1770770758",
-    centroCusto: "UF_CRM_1771801157",
+  const PIPELINE_FIN = 27;   // financeiro
+  const PIPELINE_REM = 17;   // lembretes
+  const REMINDER_USER_ID = 813; // Manuela (coluna MANUELA)
+
+  // Stage IDs (pipeline 27)
+  const STAGES = {
+    EXP_PAY: "C27:NEW",                 // DESPESA - A PAGAR
+    EXP_PAID: "C27:PREPARATION",        // DESPESA - PAGA
+    REV_REC: "C27:UC_EQAFD7",           // RECEITA - A RECEBER
+    REV_GOT: "C27:PREPAYMENT_INVOIC",   // RECEITA RECEBIDA
+    CANCELED: "C27:EXECUTING",          // CANCELADO
+    DONE: "C27:UC_LP2NSK",              // CONCLUÍDO (oculto default)
   };
 
-  // Stages Pipeline 27
-  const ST27 = {
-    queueJson: "C27:UC_SVUYIO",
-    despesaAPagar: "C27:NEW",
-    despesaPaga: "C27:PREPARATION",
-    receitaAReceber: "C27:UC_EQAFD7",
-    receitaRecebida: "C27:PREPAYMENT_INVOIC",
-    cancelado: "C27:EXECUTING",
-    concluido: "C27:UC_LP2NSK",
+  // Stage (pipeline 17) - coluna MANUELA
+  const STAGE_REM_MANUELA = "C17:PREPARATION";
+
+  // UF fields (deals)
+  const UF = {
+    TIPO: "UF_CRM_1771208061",
+    COMP: "UF_CRM_1771163661",
+    VAL_PREV: "UF_CRM_1770769991",
+    VAL_REAL: "UF_CRM_1770770017",
+    DATA_REAL: "UF_CRM_1770771170",
+    FAV: "UF_CRM_1770775760",
+    FORMA: "UF_CRM_1769351652",
+    OBS: "UF_CRM_691385BE7D33D",
+    CAT: "UF_CRM_1770770570",
+    DATA_PREV: "UF_CRM_1770769767",
+    STATUS: "UF_CRM_1770770088",
+    CONTA: "UF_CRM_1770770758",
+    CC: "UF_CRM_1771801157",
   };
 
-  // Pipeline 17 (lembretes)
-  const P17 = {
-    categoryId: 17,
-    stageManuela: "C17:PREPARATION",  // MANUELA
-    assigned813: 813
-  };
-
-  // UI defaults
-  const DEFAULT_BATCH_ROWS = 15;
-  const HIDE_STAGE_DEFAULT = new Set([ST27.concluido]); // ocultar “CONCLUÍDO” na listagem padrão
-
-  // Cartões (config fornecida)
-  const CARDS = [
-    { name:"CT ITAÚ PJ", venc:"02", melhor:"21" },
-    { name:"CT PORTO PF", venc:"10", melhor:"04" },
-    { name:"CT C6 PJ", venc:"15", melhor:"09" },
-    { name:"CT XP PF", venc:"15", melhor:"11" },
-    { name:"CT ITAÚ PF", venc:"21", melhor:"13" },
-    { name:"CT CORA CGD BARRA", venc:"23", melhor:"17" },
-    { name:"CT PORTO PJ", venc:"30", melhor:"25" },
-  ];
-
-  // Logo (Bitrix public)
+  // UI constants
   const LOGO_URL = "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w";
 
-  // Sócios p/ rodapé (USER IDs)
-  const SOCIOS = [
-    { id: 1, label: "User 1" },
-    { id: 27, label: "User 27" },
-    { id: 15, label: "User 15" },
-  ];
-
-  // =========================
-  // HELPERS
-  // =========================
-  const $ = (sel, root=document)=> root.querySelector(sel);
-  const $$ = (sel, root=document)=> Array.from(root.querySelectorAll(sel));
-  const esc = (s)=> String(s??"").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
-  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
-
-  function moneyToNumber(v){
-    if(v==null || v==="") return null;
-    const s = String(v).trim().replace(/\./g,"").replace(",",".").replace(/[^\d.-]/g,"");
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  }
-  function fmtBRL(n){
-    const x = Number(n||0);
-    try{ return x.toLocaleString("pt-BR",{ style:"currency", currency:"BRL" }); }
-    catch(_){ return "R$ " + x.toFixed(2).replace(".",","); }
-  }
-  function fmtDateISO(d){
-    // d: Date
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2,"0");
-    const da = String(d.getDate()).padStart(2,"0");
-    return `${y}-${m}-${da}`;
-  }
-  function todayISO(){ return fmtDateISO(new Date()); }
-
-  function getCfg(){
-    return (window.FINANCEIRO_CFG || {});
-  }
-
-  // =========================
-  // BITRIX CALL (Webhook OR Worker proxy)
-  // =========================
-  async function bx(method, params={}){
-    const cfg = getCfg();
-
-    // 1) Se o HTML definiu WEBHOOK_URL, chama direto
-    if(cfg.WEBHOOK_URL){
-      const url = cfg.WEBHOOK_URL.replace(/\/?$/,"/") + method + ".json";
-      const res = await fetch(url, {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify(params)
-      });
-      const j = await res.json();
-      if(!res.ok || j.error) throw new Error(j.error_description || j.error || ("HTTP "+res.status));
-      return j.result;
-    }
-
-    // 2) Senão, tenta via Worker: /bx/<method>
-    const url = WORKER_BASE.replace(/\/$/,"") + "/bx/" + method;
-    const res = await fetch(url, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(params)
-    });
-
-    // Se o Worker não tiver esse endpoint, vai falhar — mensagem clara
-    if(!res.ok){
-      const t = await res.text().catch(()=> "");
-      throw new Error("Falha ao chamar Worker proxy (/bx). Configure FINANCEIRO_CFG.WEBHOOK_URL no HTML OU implemente /bx no Worker. Detalhe: " + (t||("HTTP "+res.status)));
-    }
-
-    const j = await res.json();
-    if(j.error) throw new Error(j.error_description || j.error);
-    return j.result;
-  }
-
-  // =========================
-  // STATE
-  // =========================
-  const S = {
-    fields: null,
-    enums: {
-      centro: [],
-      categoria: [],
-      formaPgto: [],
-      tipo: [],
-      conta: [],
-    },
-    filter: {
-      month: null,
-      centro: "ALL",
-      stage: "DEFAULT", // DEFAULT = oculta CONCLUÍDO
-      q: "",
-    },
-    deals: [],
-    users: {}, // userId -> {PHOTO, NAME}
-    balances: {}, // centroId/name -> number (manual)
+  // Footer content
+  const FOOT = {
+    endereco: "Av Ayrton Senna, 2500, SS109, Barra da Tijuca",
+    center: "System created by GRUPO CGD",
+    rightA: "CGD CORRETORA",
+    rightA2: "CNPJ 01.654.471/0001-86 • SUSEP 202031791",
+    rightB: "CGD BARRA",
+    rightB2: "CNPJ 53.013.848/0001-11 • SUSEP 242158650",
+    users: [1,27,15],
   };
 
-  const LS_BAL = "FIN_BALANCES_V1";
+  // ========= HELPERS =========
+  const $ = (sel, root=document)=> root.querySelector(sel);
+  const $$ = (sel, root=document)=> Array.from(root.querySelectorAll(sel));
+  const esc = (s)=> String(s ?? "").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
+  const money = (n)=>{
+    const v = Number(String(n||"").replace(",", "."));
+    if (!isFinite(v)) return "";
+    return v.toLocaleString("pt-BR", { style:"currency", currency:"BRL" });
+  };
+  const toNum = (s)=>{
+    if (s==null) return null;
+    const t = String(s).trim();
+    if (!t) return null;
+    const v = Number(t.replace(/\./g,"").replace(",", "."));
+    return isFinite(v) ? v : null;
+  };
+  const ymd = (d)=>{
+    if(!d) return "";
+    // accepts yyyy-mm-dd already
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    // accepts dd/mm/yyyy
+    const m = String(d).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return "";
+  };
+  const fmtDMY = (iso)=>{
+    const m = String(iso||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(!m) return "";
+    return `${m[3]}/${m[2]}/${m[1]}`;
+  };
 
-  function loadBalances(){
-    try{
-      const raw = localStorage.getItem(LS_BAL);
-      S.balances = raw ? JSON.parse(raw) : {};
-    }catch(_){
-      S.balances = {};
+  function assertConfig(){
+    if(!WEBHOOK_BASE || WEBHOOK_BASE.includes("COLE_AQUI")){
+      throw new Error("Configure WEBHOOK_BASE no financeiro.js (com barra no final).");
     }
   }
-  function saveBalances(){
-    try{ localStorage.setItem(LS_BAL, JSON.stringify(S.balances||{})); }catch(_){}
+
+  async function bx(method, params={}){
+    assertConfig();
+    const base = WEBHOOK_BASE.endsWith("/") ? WEBHOOK_BASE : (WEBHOOK_BASE + "/");
+    const url = base + method + ".json";
+    const r = await fetch(url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(params || {})
+    });
+    const t = await r.text();
+    let j;
+    try{ j = JSON.parse(t); }catch(e){ throw new Error("Resposta não-JSON do Bitrix: " + t.slice(0,200)); }
+    if(!r.ok || j.error){
+      throw new Error((j.error_description || j.error || ("HTTP "+r.status)) + " @ " + method);
+    }
+    return j;
   }
 
-  // =========================
-  // UI - BASE STRUCTURE
-  // =========================
-  function mountBase(){
+  function mount(){
     const root = document.getElementById("fin-root") || document.body;
     root.innerHTML = `
-      <div id="fin-app">
+      <div class="fin-shell">
         <header class="fin-header">
-          <div class="fin-brand">
-            <img class="fin-logo" src="${esc(LOGO_URL)}" alt="CGD"/>
+          <div class="left">
+            <img class="fin-logo" alt="CGD" src="${esc(LOGO_URL)}"/>
             <div>
-              <div class="title">Financeiro CGD</div>
-              <div class="subtitle">Pipeline 27 • Controle Financeiro</div>
+              <div class="fin-title">Financeiro CGD</div>
+              <div class="fin-subtitle">PIPELINE 27 • Deals</div>
             </div>
           </div>
 
-          <div class="fin-top-actions">
+          <div class="center">
+            <button class="fin-tab active" data-tab="geral">Visão Geral</button>
+            <button class="fin-tab" data-tab="despesas">A Pagar / Pagas</button>
+            <button class="fin-tab" data-tab="receitas">A Receber / Recebidas</button>
+            <button class="fin-tab" data-tab="lanc">Lançamentos</button>
+          </div>
+
+          <div class="right">
             <div class="fin-search">
-              <span class="ico">🔎</span>
+              <span aria-hidden="true">🔎</span>
               <input id="fin-q" placeholder="Buscar por favorecido, categoria, valor..." />
             </div>
-
-            <button class="fin-btn" id="btn-novo">NOVO</button>
-            <button class="fin-btn" id="btn-lote-desp">LOTE DESPESAS</button>
-            <button class="fin-btn" id="btn-lote-rec">LOTE RECEITAS</button>
-            <button class="fin-btn" id="btn-cartoes">CARTÕES</button>
-            <button class="fin-btn" id="btn-saldos">SALDOS</button>
-            <button class="fin-btn" id="btn-transfer">TRANSFERIR</button>
-            <button class="fin-btn" id="btn-refresh">ATUALIZAR</button>
+            <button class="fin-btn" id="fin-new">NOVO</button>
+            <button class="fin-btn" id="fin-lote-exp">LOTE DESPESAS</button>
+            <button class="fin-btn" id="fin-lote-rev">LOTE RECEITAS</button>
+            <button class="fin-btn" id="fin-cards">CARTÕES</button>
           </div>
         </header>
 
-        <aside class="fin-sidebar">
-          <div class="fin-sidebox">
-            <div class="label">Mês (Competência)</div>
-            <select id="fin-month"></select>
-          </div>
+        <div class="fin-body">
+          <aside class="fin-sidebar">
+            <div class="fin-side-title">CENTROS DE CUSTO</div>
+            <div class="fin-side-list" id="fin-cc-list"></div>
 
-          <div class="fin-sidebox">
-            <div class="label">Centro de custo</div>
-            <select id="fin-centro"></select>
-          </div>
+            <div style="height:12px"></div>
 
-          <div class="fin-sidebox">
-            <div class="label">Exibir</div>
-            <select id="fin-stage-mode">
-              <option value="DEFAULT">Padrão (oculta CONCLUÍDO)</option>
-              <option value="ALL">Todas as etapas</option>
-            </select>
-          </div>
-
-          <div class="fin-sidebox">
-            <div class="label">Atalhos</div>
-            <div class="fin-nav">
-              <button class="active" data-view="overview">Visão Geral</button>
-              <button data-view="despesas">Despesas</button>
-              <button data-view="receitas">Receitas</button>
-              <button data-view="lancamentos">Lançamentos</button>
+            <div class="fin-side-title">AÇÕES</div>
+            <div class="fin-side-list">
+              <div class="fin-side-item" id="fin-transfer">
+                <span>Transferir entre Centros</span>
+                <span class="fin-side-meta">➜</span>
+              </div>
+              <div class="fin-side-item" id="fin-saldo">
+                <span>Saldo inicial / ajuste</span>
+                <span class="fin-side-meta">➜</span>
+              </div>
+              <div class="fin-side-item" id="fin-reserva">
+                <span>Fundo de Reserva</span>
+                <span class="fin-side-meta">➜</span>
+              </div>
             </div>
-          </div>
 
-          <div class="fin-sidebox">
-            <div class="label">Fundo de Reserva</div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input id="fin-reserve" placeholder="R$ 0,00" />
+            <div class="fin-note" style="margin-top:10px; opacity:.9">
+              * Menu não mostra cartões (por pedido). Cartões ficam no botão “CARTÕES”.
             </div>
-            <div style="margin-top:6px;font-size:11px;font-weight:900;opacity:.85">
-              (Saldo manual — você pode ajustar quando quiser)
-            </div>
-          </div>
-        </aside>
+          </aside>
 
-        <main class="fin-main">
-          <section class="fin-panel">
-            <div class="fin-panel-inner" id="fin-view"></div>
-          </section>
-        </main>
+          <main class="fin-main">
+            <section class="fin-panel">
+              <div class="fin-panel-inner">
+
+                <div class="fin-filters">
+                  <div class="fin-field">
+                    <label>Mês</label>
+                    <select id="fin-month"></select>
+                  </div>
+                  <div class="fin-field">
+                    <label>Categoria</label>
+                    <select id="fin-cat">
+                      <option value="">Todas</option>
+                    </select>
+                  </div>
+                  <div class="fin-field">
+                    <label>Status</label>
+                    <select id="fin-status">
+                      <option value="">Todos</option>
+                      <option value="open">Pendente</option>
+                      <option value="done">Pago/Recebido</option>
+                      <option value="canceled">Cancelado</option>
+                    </select>
+                  </div>
+
+                  <div class="fin-spacer"></div>
+
+                  <button class="fin-mini" id="fin-refresh">Atualizar</button>
+                </div>
+
+                <!-- CHECKBOXES -->
+                <div class="fin-checkblocks">
+                  <div class="fin-checkcard">
+                    <h3>DESPESAS</h3>
+                    <div id="fin-exp-list"></div>
+                    <div class="fin-muted" style="margin-top:8px">
+                      Marque para mover “A PAGAR → PAGA” (vai pedir data/valor).
+                    </div>
+                  </div>
+
+                  <div class="fin-checkcard">
+                    <h3>RECEITAS</h3>
+                    <div id="fin-rev-list"></div>
+                    <div class="fin-muted" style="margin-top:8px">
+                      Marque para mover “A RECEBER → RECEBIDA” (vai pedir data/valor).
+                    </div>
+                  </div>
+                </div>
+
+                <!-- GRÁFICOS (abaixo do checkbox) -->
+                <div class="fin-graphs">
+                  <div class="fin-card">
+                    <h3>Despesas por Categoria (mock visual)</h3>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                      <div class="fin-donut">
+                        <div class="fin-donut-center" id="fin-donut-center">—</div>
+                      </div>
+                      <div style="flex:1; min-width:240px;">
+                        <div class="fin-muted">* Neste momento é mock (visual). Depois eu ligo no real.</div>
+                        <div class="fin-muted" id="fin-donut-legend" style="margin-top:8px"></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="fin-card">
+                    <h3>Evolução (mock visual)</h3>
+                    <div class="fin-linechart" aria-label="Gráfico (mock)">
+                      <svg viewBox="0 0 600 200" preserveAspectRatio="none">
+                        <path class="a" d="M10,130 C120,90 180,110 240,70 C300,40 360,85 420,60 C480,45 540,50 590,30"/>
+                        <path class="b" d="M10,150 C120,130 180,140 240,120 C300,95 360,125 420,105 C480,110 540,105 590,95"/>
+                      </svg>
+                    </div>
+                    <div class="fin-muted" style="margin-top:8px">Receitas (verde) • Despesas (vermelho)</div>
+                  </div>
+                </div>
+
+                <!-- LISTAGEM -->
+                <div class="fin-tablewrap">
+                  <table class="fin-table">
+                    <thead>
+                      <tr>
+                        <th>Data</th>
+                        <th>Tipo</th>
+                        <th>Valor</th>
+                        <th>Centro de Custo</th>
+                        <th>Favorecido</th>
+                        <th>Categoria</th>
+                        <th>Status</th>
+                        <th style="text-align:right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody id="fin-tbody"></tbody>
+                  </table>
+                </div>
+
+              </div>
+            </section>
+          </main>
+        </div>
 
         <footer class="fin-footer">
-          <div class="left">
-            <div class="fin-avatars" id="fin-avatars"></div>
-            <div class="addr">Av Ayrton Senna, 2500, SS109, Barra da Tijuca</div>
-          </div>
-          <div class="center">System created by GRUPO CGD</div>
-          <div class="right">
-            <div class="block">CGD CORRETORA<br/>CNPJ 01.654.471/0001-86 • SUSEP 202031791</div>
-            <div class="block">CGD BARRA<br/>CNPJ 53.013.848/0001-11 • SUSEP 242158650</div>
+          <div class="fin-foot-inner">
+            <div class="fin-foot-left">
+              <div class="fin-avatars" id="fin-avatars"></div>
+              <div style="font-weight:900; font-size:12px; line-height:1.2">
+                <div style="opacity:.95">Endereço</div>
+                <div style="opacity:.85">${esc(FOOT.endereco)}</div>
+              </div>
+            </div>
+            <div class="fin-foot-center">${esc(FOOT.center)}</div>
+            <div class="fin-foot-right">
+              <div>
+                <div>${esc(FOOT.rightA)}</div>
+                <div class="muted">${esc(FOOT.rightA2)}</div>
+              </div>
+              <div>
+                <div>${esc(FOOT.rightB)}</div>
+                <div class="muted">${esc(FOOT.rightB2)}</div>
+              </div>
+            </div>
           </div>
         </footer>
       </div>
-
-      <!-- MODAL (reutilizado para NOVO / LOTE / MOVIMENTOS) -->
-      <div class="fin-modal" id="fin-modal">
-        <div class="fin-modal-card">
-          <div class="fin-modal-top">
-            <div class="title" id="fin-modal-title">Modal</div>
-            <div class="actions" id="fin-modal-actions"></div>
-          </div>
-          <div class="fin-modal-body" id="fin-modal-body"></div>
-        </div>
-      </div>
     `;
   }
 
-  // =========================
-  // UI - MODAL
-  // =========================
-  function openModal(title, actionsHTML, bodyHTML){
-    $("#fin-modal-title").textContent = title;
-    $("#fin-modal-actions").innerHTML = actionsHTML;
-    $("#fin-modal-body").innerHTML = bodyHTML;
-    $("#fin-modal").classList.add("show");
+  // ========= STATE =========
+  const S = {
+    fields: null,
+    ccOptions: [],       // {id, name}
+    catOptions: [],      // from deal fields
+    monthOptions: [],    // from competence list
+    selectedCC: "",      // centro de custo
+    tab: "geral",
+    deals: [],
+  };
 
-    // binds close
-    const close = ()=> closeModal();
-    const btnClose = $("#fin-modal-actions [data-act='close']");
-    if(btnClose) btnClose.addEventListener("click", close);
-  }
-  function closeModal(){
-    $("#fin-modal").classList.remove("show");
-    $("#fin-modal-body").innerHTML = "";
-    $("#fin-modal-actions").innerHTML = "";
+  function setSentinelHidden(){
+    const s = document.getElementById("fin-sentinel");
+    if(s) s.style.display = "none"; // pedido: ocultar “JS iniciou ✅”
   }
 
-  // =========================
-  // LOAD ENUMS FROM crm.deal.fields
-  // =========================
-  function findFieldByKey(fieldsObj, fieldKey){
-    // fieldKey is UF_...
-    return fieldsObj && fieldsObj[fieldKey] ? fieldsObj[fieldKey] : null;
-  }
-  function enumFromField(field){
-    // Bitrix: field.items might exist; otherwise field 'items' in crm.deal.fields response
-    if(!field) return [];
-    const items = field.items || field.ITEMS || field.values || field.VALUES;
-    if(Array.isArray(items)) return items.map(x=>({ id: String(x.ID ?? x.id ?? x.VALUE ?? x.value ?? ""), name: String(x.VALUE ?? x.value ?? x.NAME ?? x.name ?? "") })).filter(x=>x.name);
-    // Sometimes crm.deal.fields returns "items" as object map
-    if(items && typeof items==="object"){
-      return Object.keys(items).map(k=>({ id:String(k), name:String(items[k]) }));
-    }
-    return [];
-  }
+  function bindUI(){
+    // Tabs
+    $$(".fin-tab").forEach(b=>{
+      b.addEventListener("click", ()=>{
+        $$(".fin-tab").forEach(x=>x.classList.remove("active"));
+        b.classList.add("active");
+        S.tab = b.dataset.tab || "geral";
+        renderTable();
+      });
+    });
 
-  // =========================
-  // USERS (rodapé)
-  // =========================
-  async function loadUsers(){
-    for(const u of SOCIOS){
-      try{
-        const r = await bx("user.get", { filter:{ ID: u.id } });
-        const one = Array.isArray(r) ? r[0] : null;
-        if(one){
-          S.users[u.id] = {
-            id: u.id,
-            name: one.NAME ? (one.NAME + (one.LAST_NAME ? (" "+one.LAST_NAME) : "")) : ("User "+u.id),
-            photo: one.PERSONAL_PHOTO || one.PERSONAL_PHOTO_URL || one.PERSONAL_PHOTO_FILE || ""
-          };
-        }
-      }catch(_){
-        // ignore
-      }
-    }
-    renderFooterAvatars();
+    $("#fin-refresh").addEventListener("click", ()=> refresh());
+
+    $("#fin-q").addEventListener("input", ()=> renderTable());
+    $("#fin-month").addEventListener("change", ()=> refresh());
+    $("#fin-cat").addEventListener("change", ()=> renderTable());
+    $("#fin-status").addEventListener("change", ()=> renderTable());
+
+    $("#fin-new").addEventListener("click", ()=> openNewModal());
+    $("#fin-lote-exp").addEventListener("click", ()=> openLoteModal("DESPESA"));
+    $("#fin-lote-rev").addEventListener("click", ()=> openLoteModal("RECEITA"));
+    $("#fin-cards").addEventListener("click", ()=> openCardsModal());
+
+    $("#fin-transfer").addEventListener("click", ()=> openTransferModal());
+    $("#fin-saldo").addEventListener("click", ()=> openSaldoModal());
+    $("#fin-reserva").addEventListener("click", ()=> openReservaModal());
   }
 
-  function renderFooterAvatars(){
-    const wrap = $("#fin-avatars");
-    if(!wrap) return;
-    wrap.innerHTML = "";
-
-    for(const u of SOCIOS){
-      const info = S.users[u.id];
-      if(info && info.photo){
-        const img = document.createElement("img");
-        img.className = "fin-avatar";
-        img.src = info.photo;
-        img.alt = info.name || ("User "+u.id);
-        wrap.appendChild(img);
-      }else{
-        const div = document.createElement("div");
-        div.className = "fin-avatar fallback";
-        div.textContent = String(u.id);
-        wrap.appendChild(div);
-      }
-    }
-  }
-
-  // =========================
-  // MONTH OPTIONS
-  // =========================
-  function buildMonthOptions(){
-    const sel = $("#fin-month");
-    if(!sel) return;
-
-    const now = new Date();
-    const opts = [];
-    for(let i=0;i<18;i++){
-      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-      const y = d.getFullYear();
-      const m = String(d.getMonth()+1).padStart(2,"0");
-      const key = `${y}-${m}`;
-      const label = d.toLocaleString("pt-BR",{ month:"long", year:"numeric" }).replace(/^\w/, c=>c.toUpperCase());
-      opts.push({ key, label });
-    }
-
-    sel.innerHTML = opts.map(o=>`<option value="${esc(o.key)}">${esc(o.label)}</option>`).join("");
-    S.filter.month = opts[0].key;
-  }
-
-  // =========================
-  // BALANCE UI (manual)
-  // =========================
-  function reserveGet(){
-    const v = $("#fin-reserve")?.value ?? "";
-    return moneyToNumber(v) || 0;
-  }
-  function reserveSet(n){
-    const el = $("#fin-reserve");
-    if(el) el.value = fmtBRL(n || 0);
-  }
-
-  function getCentroLabelById(id){
-    const it = S.enums.centro.find(x=>String(x.id)===String(id));
-    return it ? it.name : (id ? String(id) : "Sem Centro");
-  }
-
-  function balanceKeyForCentro(centroId){
-    // store by "id" if exists, else by name
-    return centroId ? ("ID:"+String(centroId)) : "ID:__NONE__";
-  }
-
-  function getBalance(centroId){
-    const k = balanceKeyForCentro(centroId);
-    return Number(S.balances[k] || 0);
-  }
-  function setBalance(centroId, value){
-    const k = balanceKeyForCentro(centroId);
-    S.balances[k] = Number(value || 0);
-    saveBalances();
-  }
-
-  // =========================
-  // LOAD DATA (Deals)
-  // =========================
+  // ========= LOAD METADATA =========
   async function loadFields(){
-    const fields = await bx("crm.deal.fields", {});
-    S.fields = fields;
+    // fields + lists
+    const j = await bx("crm.deal.fields", {});
+    S.fields = j.result || {};
 
-    // enums
-    S.enums.centro = enumFromField(findFieldByKey(fields, F.centroCusto));
-    S.enums.categoria = enumFromField(findFieldByKey(fields, F.categoria));
-    S.enums.formaPgto = enumFromField(findFieldByKey(fields, F.formaPgto));
-    S.enums.tipo = enumFromField(findFieldByKey(fields, F.tipo));
-    S.enums.conta = enumFromField(findFieldByKey(fields, F.conta));
+    // categorias (lista)
+    const cat = S.fields[UF.CAT];
+    if (cat && cat.items) {
+      S.catOptions = cat.items.map(i=>({ id:i.ID, name:i.VALUE })).filter(x=>x.name && x.name !== "__QUEUE__CGD__ FILA ATENDIMENTO");
+    }
 
-    // sidebar selects
-    const centroSel = $("#fin-centro");
-    if(centroSel){
-      const all = [{ id:"ALL", name:"Todos" }, ...S.enums.centro];
-      centroSel.innerHTML = all.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
-      centroSel.value = "ALL";
+    // centros de custo (lista)
+    const cc = S.fields[UF.CC];
+    if (cc && cc.items) {
+      S.ccOptions = cc.items.map(i=>({ id:i.ID, name:i.VALUE })).filter(x=>x.name && !x.name.includes("__QUEUE__"));
+    }
+
+    // competencia (mês) (lista)
+    const comp = S.fields[UF.COMP];
+    if (comp && comp.items) {
+      S.monthOptions = comp.items.map(i=>({ id:i.ID, name:i.VALUE }));
+    } else {
+      // fallback: últimos 12 meses
+      const now = new Date();
+      const arr=[];
+      for(let k=0;k<12;k++){
+        const d = new Date(now.getFullYear(), now.getMonth()-k, 1);
+        const name = d.toLocaleDateString("pt-BR",{month:"long", year:"numeric"});
+        arr.push({ id: name, name });
+      }
+      S.monthOptions = arr;
     }
   }
 
-  function buildDealFilter(){
-    // filtro por categoria/pipeline 27 + estágio permitido
-    const stageMode = $("#fin-stage-mode")?.value || "DEFAULT";
-    const allowAll = stageMode === "ALL";
+  function fillSelects(){
+    // month
+    const mSel = $("#fin-month");
+    mSel.innerHTML = S.monthOptions.map(o=>`<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("");
+    // cat
+    const cSel = $("#fin-cat");
+    cSel.innerHTML = `<option value="">Todas</option>` + S.catOptions.map(o=>`<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("");
 
-    const allowedStages = [
-      ST27.despesaAPagar,
-      ST27.despesaPaga,
-      ST27.receitaAReceber,
-      ST27.receitaRecebida,
-      ST27.cancelado,
-      ST27.concluido,
-    ];
+    // sidebar cc list
+    const ccList = $("#fin-cc-list");
+    ccList.innerHTML = `
+      <div class="fin-side-item ${S.selectedCC===""?"active":""}" data-cc="">
+        <span>TODOS</span><span class="fin-side-meta">•</span>
+      </div>
+      ${S.ccOptions.map(o=>`
+        <div class="fin-side-item ${S.selectedCC===String(o.id)?"active":""}" data-cc="${esc(o.id)}">
+          <span>${esc(o.name)}</span><span class="fin-side-meta">➜</span>
+        </div>
+      `).join("")}
+    `;
+    $$(".fin-side-item[data-cc]", ccList).forEach(el=>{
+      el.addEventListener("click", ()=>{
+        S.selectedCC = el.dataset.cc || "";
+        fillSelects();
+        renderTable();
+        renderChecklists();
+      });
+    });
+  }
 
-    const stages = allowAll ? allowedStages : allowedStages.filter(s=>!HIDE_STAGE_DEFAULT.has(s));
-
-    // Centro
-    const centro = $("#fin-centro")?.value || "ALL";
-
-    // Busca
-    const q = (S.filter.q || "").toLowerCase().trim();
-
-    return { stages, centro, q };
+  // ========= DEALS =========
+  function stageIsAllowed(stageId){
+    // bloquear QUEUE_JSON e outros stages fora da lista permitida
+    return [STAGES.EXP_PAY, STAGES.EXP_PAID, STAGES.REV_REC, STAGES.REV_GOT, STAGES.CANCELED, STAGES.DONE].includes(stageId);
   }
 
   async function loadDeals(){
-    // Busca “compacta”: pega deals na categoria 27
-    // Paginação simples (até 500 por padrão; dá para ampliar depois)
-    const all = [];
-    let start = 0;
-    const limit = 50;
+    // lista básica (poderíamos paginar depois)
+    const month = $("#fin-month").value || "";
+    const filter = {
+      "CATEGORY_ID": PIPELINE_FIN,
+      // ocultar CONCLUÍDO por padrão: não filtra aqui; filtra na renderização (para manter no filtro)
+    };
 
-    for(let page=0; page<10; page++){
-      const r = await bx("crm.deal.list", {
-        order: { "ID": "DESC" },
-        filter: { "CATEGORY_ID": 27 },
-        select: [
-          "ID","TITLE","STAGE_ID","CATEGORY_ID","ASSIGNED_BY_ID","DATE_CREATE","DATE_MODIFY",
-          F.tipo, F.competencia, F.valorPrev, F.valorReal, F.dataReal, F.favorecido, F.formaPgto, F.obs,
-          F.categoria, F.dataPrev, F.statusFin, F.conta, F.centroCusto
-        ],
-        start
-      });
+    // competência: você perguntou. Aqui:
+    // - Para recorrentes, você pode deixar competência vazia.
+    // - Para a visão mensal, a gente filtra se existir competência.
+    // Vou filtrar pelo mês SOMENTE se o usuário escolheu um mês.
+    if (month) filter[UF.COMP] = month;
 
-      if(Array.isArray(r)) all.push(...r);
-      // Bitrix pode retornar array + next; como estamos usando "start", se vier vazio, para
-      if(!Array.isArray(r) || r.length < limit) break;
-      start += limit;
-      await sleep(50);
+    const j = await bx("crm.deal.list", {
+      order: { "ID":"DESC" },
+      filter,
+      select: ["ID","TITLE","STAGE_ID",UF.TIPO,UF.VAL_PREV,UF.VAL_REAL,UF.DATA_PREV,UF.DATA_REAL,UF.FAV,UF.CAT,UF.CC,UF.OBS,UF.CONTA,UF.COMP]
+    });
+
+    const list = (j.result || []).filter(d => stageIsAllowed(d.STAGE_ID));
+    // limpar “__QUEUE__...” em favorecido
+    list.forEach(d=>{
+      if (String(d[UF.FAV]||"").includes("__QUEUE__")) d[UF.FAV] = "";
+    });
+    S.deals = list;
+  }
+
+  function dealTypeLabel(d){
+    const t = String(d[UF.TIPO]||"").toUpperCase();
+    if (t.includes("RECE")) return "Receita";
+    if (t.includes("DESP")) return "Despesa";
+    // fallback por stage
+    if ([STAGES.REV_REC, STAGES.REV_GOT].includes(d.STAGE_ID)) return "Receita";
+    return "Despesa";
+  }
+
+  function dealStatusLabel(d){
+    if (d.STAGE_ID === STAGES.EXP_PAY) return "A pagar";
+    if (d.STAGE_ID === STAGES.EXP_PAID) return "Paga";
+    if (d.STAGE_ID === STAGES.REV_REC) return "A receber";
+    if (d.STAGE_ID === STAGES.REV_GOT) return "Recebida";
+    if (d.STAGE_ID === STAGES.CANCELED) return "Cancelado";
+    if (d.STAGE_ID === STAGES.DONE) return "Concluído";
+    return d.STAGE_ID || "";
+  }
+
+  function shouldShowDeal(d){
+    const q = ($("#fin-q").value || "").trim().toLowerCase();
+    const cat = $("#fin-cat").value || "";
+    const status = $("#fin-status").value || "";
+
+    // sidebar CC filter
+    if (S.selectedCC && String(d[UF.CC]||"") !== String(S.selectedCC)) return false;
+
+    // default hide CONCLUÍDO, mas acessível no filtro:
+    // regra: se status estiver vazio, não mostra concluído
+    if (!status && d.STAGE_ID === STAGES.DONE) return false;
+
+    if (cat && String(d[UF.CAT]||"") !== String(cat)) return false;
+
+    if (status === "open") {
+      if (![STAGES.EXP_PAY, STAGES.REV_REC].includes(d.STAGE_ID)) return false;
+    } else if (status === "done") {
+      if (![STAGES.EXP_PAID, STAGES.REV_GOT, STAGES.DONE].includes(d.STAGE_ID)) return false;
+    } else if (status === "canceled") {
+      if (d.STAGE_ID !== STAGES.CANCELED) return false;
     }
 
-    S.deals = all;
+    if (q) {
+      const hay = [
+        d.TITLE, d[UF.FAV], d[UF.OBS],
+        getNameById(S.catOptions, d[UF.CAT]),
+        getNameById(S.ccOptions, d[UF.CC]),
+        String(d[UF.VAL_PREV]||""), String(d[UF.VAL_REAL]||"")
+      ].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+
+    return true;
   }
 
-  // =========================
-  // VIEW RENDERING
-  // =========================
-  function dealTypeLabel(d){
-    const v = d[F.tipo];
-    const it = S.enums.tipo.find(x=>String(x.id)===String(v));
-    return it ? it.name : (v ? String(v) : "");
-  }
-  function enumLabel(list, id){
-    const it = list.find(x=>String(x.id)===String(id));
-    return it ? it.name : (id ? String(id) : "");
-  }
-  function dealCentroLabel(d){ return enumLabel(S.enums.centro, d[F.centroCusto]); }
-  function dealCategoriaLabel(d){ return enumLabel(S.enums.categoria, d[F.categoria]); }
-  function dealContaLabel(d){ return enumLabel(S.enums.conta, d[F.conta]); }
-  function dealFormaLabel(d){ return enumLabel(S.enums.formaPgto, d[F.formaPgto]); }
+  function renderTable(){
+    const tb = $("#fin-tbody");
+    const list = S.deals.filter(shouldShowDeal);
 
-  function dealAmountPrev(d){
-    const n = moneyToNumber(d[F.valorPrev]);
-    return n || 0;
-  }
-  function dealAmountReal(d){
-    const n = moneyToNumber(d[F.valorReal]);
-    return n || 0;
-  }
-
-  function applyClientFilters(list){
-    const { stages, centro, q } = buildDealFilter();
-
-    return list.filter(d=>{
-      if(String(d.CATEGORY_ID) !== "27") return false;
-      if(!stages.includes(d.STAGE_ID)) return false;
-      if(centro !== "ALL" && String(d[F.centroCusto]) !== String(centro)) return false;
-
-      if(q){
-        const hay = [
-          d.TITLE, d[F.favorecido], dealCategoriaLabel(d), dealCentroLabel(d), dealContaLabel(d)
-        ].map(x=>String(x||"").toLowerCase()).join(" ");
-        if(!hay.includes(q)) return false;
-      }
+    // Tab filter
+    const tab = S.tab;
+    const filtered = list.filter(d=>{
+      if (tab === "despesas") return ["Despesa"].includes(dealTypeLabel(d));
+      if (tab === "receitas") return ["Receita"].includes(dealTypeLabel(d));
+      if (tab === "lanc") return true;
       return true;
     });
-  }
 
-  function splitByStage(list){
-    const by = {
-      aPagar: [],
-      pagas: [],
-      aReceber: [],
-      recebidas: [],
-      cancelado: [],
-      concluido: [],
-    };
-    for(const d of list){
-      if(d.STAGE_ID === ST27.despesaAPagar) by.aPagar.push(d);
-      else if(d.STAGE_ID === ST27.despesaPaga) by.pagas.push(d);
-      else if(d.STAGE_ID === ST27.receitaAReceber) by.aReceber.push(d);
-      else if(d.STAGE_ID === ST27.receitaRecebida) by.recebidas.push(d);
-      else if(d.STAGE_ID === ST27.cancelado) by.cancelado.push(d);
-      else if(d.STAGE_ID === ST27.concluido) by.concluido.push(d);
-    }
-    return by;
-  }
+    tb.innerHTML = filtered.map(d=>{
+      const tipo = dealTypeLabel(d);
+      const dt = fmtDMY(d[UF.DATA_PREV] || d[UF.DATA_REAL] || "");
+      const val = money(d[UF.VAL_PREV] || d[UF.VAL_REAL] || "");
+      const cc = getNameById(S.ccOptions, d[UF.CC]);
+      const fav = d[UF.FAV] || d.TITLE || "";
+      const cat = getNameById(S.catOptions, d[UF.CAT]);
+      const st = dealStatusLabel(d);
 
-  function calcKpis(list){
-    const receitas = list.filter(d=>d.STAGE_ID===ST27.receitaAReceber || d.STAGE_ID===ST27.receitaRecebida);
-    const despesas = list.filter(d=>d.STAGE_ID===ST27.despesaAPagar || d.STAGE_ID===ST27.despesaPaga);
-
-    const rec = receitas.reduce((s,d)=> s + (dealAmountReal(d) || dealAmountPrev(d)), 0);
-    const des = despesas.reduce((s,d)=> s + (dealAmountReal(d) || dealAmountPrev(d)), 0);
-    const lucro = rec - des;
-
-    // saldos manuais por centro (somatório)
-    const totalSaldoManual = Object.values(S.balances||{}).reduce((a,b)=>a+Number(b||0),0);
-
-    return { rec, des, lucro, totalSaldoManual };
-  }
-
-  function renderOverview(){
-    const filtered = applyClientFilters(S.deals);
-    const by = splitByStage(filtered);
-    const k = calcKpis(filtered);
-
-    const view = $("#fin-view");
-    view.innerHTML = `
-      <div class="fin-filters">
-        <div class="fin-field">
-          <label>Centro</label>
-          <div style="font-weight:1000">${esc($("#fin-centro")?.selectedOptions?.[0]?.textContent || "Todos")}</div>
-        </div>
-        <div class="fin-field">
-          <label>Exibição</label>
-          <div style="font-weight:1000">${esc($("#fin-stage-mode")?.value==="ALL" ? "Todas as etapas" : "Padrão")}</div>
-        </div>
-        <div class="fin-spacer"></div>
-        <button class="fin-mini-btn" id="btn-export">Exportar CSV (tudo)</button>
-      </div>
-
-      <div class="fin-kpis">
-        <div class="fin-kpi">
-          <div class="icon">💰</div>
-          <div>
-            <div class="value">${esc(fmtBRL(k.rec))}</div>
-            <div class="label">Receitas (prev/real)</div>
-          </div>
-        </div>
-        <div class="fin-kpi">
-          <div class="icon">📉</div>
-          <div>
-            <div class="value">${esc(fmtBRL(k.des))}</div>
-            <div class="label">Despesas (prev/real)</div>
-          </div>
-        </div>
-        <div class="fin-kpi">
-          <div class="icon">📈</div>
-          <div>
-            <div class="value">${esc(fmtBRL(k.lucro))}</div>
-            <div class="label">Lucro (mês)</div>
-          </div>
-        </div>
-        <div class="fin-kpi">
-          <div class="icon">🏦</div>
-          <div>
-            <div class="value">${esc(fmtBRL(reserveGet()))}</div>
-            <div class="label">Fundo de Reserva</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="fin-lists">
-        <div class="fin-card">
-          <h3>Despesas — A Pagar → Pagas (checkbox)</h3>
-          <ul class="fin-list" id="list-apagar">
-            ${by.aPagar.slice(0,8).map(d=>itemHTML(d,"pagar")).join("")}
-          </ul>
-          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
-            Marque para mover para <b>DESPESA - PAGA</b> e informar data/valor realizado.
-          </div>
-        </div>
-
-        <div class="fin-card">
-          <h3>Receitas — A Receber → Recebidas (checkbox)</h3>
-          <ul class="fin-list" id="list-areceber">
-            ${by.aReceber.slice(0,8).map(d=>itemHTML(d,"receber")).join("")}
-          </ul>
-          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
-            Marque para mover para <b>RECEITA RECEBIDA</b> e informar data/valor realizado.
-          </div>
-        </div>
-      </div>
-
-      <!-- GRÁFICOS ABAIXO DO CHECKBOX (você pediu) -->
-      <div class="fin-charts">
-        <div class="fin-chartbox">
-          <h3>Despesas por Categoria (mock visual)</h3>
-          <div class="fin-chart-row">
-            <div class="fin-donut">
-              <div class="fin-donut-center">${esc(fmtBRL(k.des))}</div>
+      return `
+        <tr data-id="${esc(d.ID)}">
+          <td>${esc(dt)}</td>
+          <td>${esc(tipo)}</td>
+          <td>${esc(val)}</td>
+          <td>${esc(cc)}</td>
+          <td>${esc(fav)}</td>
+          <td>${esc(cat)}</td>
+          <td>${esc(st)}</td>
+          <td>
+            <div class="fin-row-actions">
+              <button class="fin-mini" data-act="view">Ver</button>
+              <button class="fin-mini" data-act="edit">Editar</button>
+              <button class="fin-mini fin-danger" data-act="del">Excluir</button>
             </div>
-            <div class="fin-legend" id="legend-desp"></div>
-          </div>
-          <div style="margin-top:8px;font-size:11px;font-weight:900;color:var(--muted)">
-            *Visual mock — depois podemos renderizar por dados reais (agora já temos os dados).
-          </div>
-        </div>
+          </td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="8" style="padding:14px; color:var(--muted); font-weight:900">Sem itens para os filtros atuais.</td></tr>`;
 
-        <div class="fin-chartbox">
-          <h3>Evolução de Receitas x Despesas (mock visual)</h3>
-          <div class="fin-linechart">
-            <div class="fin-spark">
-              <svg viewBox="0 0 600 200" preserveAspectRatio="none">
-                <path class="a" d="M10,130 C120,90 180,110 240,70 C300,40 360,85 420,60 C480,45 540,50 590,30"/>
-                <path class="b" d="M10,150 C120,130 180,140 240,120 C300,95 360,125 420,105 C480,110 540,105 590,95"/>
-                <circle class="p" cx="10" cy="130" r="4"/><circle class="p" cx="240" cy="70" r="4"/><circle class="p" cx="590" cy="30" r="4"/>
-                <circle class="p" cx="10" cy="150" r="4"/><circle class="p" cx="240" cy="120" r="4"/><circle class="p" cx="590" cy="95" r="4"/>
-              </svg>
-            </div>
-          </div>
-          <div class="fin-chart-note">
-            <span class="fin-tag"><span class="sq" style="background:rgba(34,197,94,.90)"></span> Receitas</span>
-            <span class="fin-tag"><span class="sq" style="background:rgba(239,68,68,.88)"></span> Despesas</span>
-          </div>
-        </div>
-      </div>
-    `;
+    // bind row actions
+    $$("button[data-act]", tb).forEach(b=>{
+      b.addEventListener("click", ()=>{
+        const tr = b.closest("tr");
+        const id = tr?.dataset?.id;
+        const act = b.dataset.act;
+        const d = S.deals.find(x=>String(x.ID)===String(id));
+        if(!d) return;
+        if(act==="view") openViewModal(d);
+        if(act==="edit") openEditModal(d);
+        if(act==="del") confirmDelete(d);
+      });
+    });
 
-    // Legend real (top 6 categorias por soma)
-    const cats = {};
-    for(const d of filtered){
-      if(d.STAGE_ID===ST27.despesaAPagar || d.STAGE_ID===ST27.despesaPaga){
-        const c = dealCategoriaLabel(d) || "Sem categoria";
-        cats[c] = (cats[c]||0) + (dealAmountReal(d)||dealAmountPrev(d));
-      }
-    }
-    const entries = Object.entries(cats).sort((a,b)=>b[1]-a[1]).slice(0,6);
-    $("#legend-desp").innerHTML = `
-      <ul>
-        ${entries.map(([k,v],i)=>`
-          <li>
-            <span class="left"><span class="fin-sw" style="background:${["#60a5fa","#34d399","#fbbf24","#f87171","#a78bfa","#94a3b8"][i%6]}"></span>${esc(k)}</span>
-            <span>${esc(fmtBRL(v))}</span>
-          </li>
-        `).join("")}
-      </ul>
-    `;
-
-    bindOverviewActions();
+    renderDonutMock(list);
   }
 
-  function itemHTML(d, mode){
-    const id = String(d.ID);
-    const favorecido = d[F.favorecido] || d.TITLE || ("Deal "+id);
-    const centro = dealCentroLabel(d) || "Sem centro";
-    const cat = dealCategoriaLabel(d) || "Sem categoria";
-    const valor = dealAmountReal(d) || dealAmountPrev(d);
+  function renderChecklists(){
+    const expBox = $("#fin-exp-list");
+    const revBox = $("#fin-rev-list");
 
-    // checkbox identifica ação
-    const cbId = `cb_${mode}_${id}`;
+    const list = S.deals.filter(d=>{
+      if (!S.selectedCC) return true;
+      return String(d[UF.CC]||"") === String(S.selectedCC);
+    });
 
-    return `
-      <li class="fin-item" data-id="${esc(id)}" data-mode="${esc(mode)}">
-        <div class="left">
-          <input type="checkbox" id="${esc(cbId)}"/>
-          <div style="min-width:0">
-            <div class="name">${esc(favorecido)}</div>
-            <div class="meta">${esc(centro)} • ${esc(cat)}</div>
-          </div>
-        </div>
-        <div class="actions">
-          <span class="amt">${esc(fmtBRL(valor))}</span>
-          <button class="fin-mini-btn" data-act="ver">Ver</button>
-          <button class="fin-mini-btn" data-act="editar">Editar</button>
-          <button class="fin-mini-btn" data-act="excluir" style="color:#b91c1c">Excluir</button>
-        </div>
-      </li>
-    `;
-  }
+    const exps = list.filter(d=> d.STAGE_ID === STAGES.EXP_PAY).slice(0, 8);
+    const revs = list.filter(d=> d.STAGE_ID === STAGES.REV_REC).slice(0, 8);
 
-  function bindOverviewActions(){
-    // Checkbox -> abrir modal de confirmação com data/valor realizado
-    $$("#fin-view .fin-item input[type='checkbox']").forEach(cb=>{
+    expBox.innerHTML = exps.map(d=> checkboxRow(d, "EXP") ).join("") || `<div class="fin-muted">Nada em “A PAGAR”.</div>`;
+    revBox.innerHTML = revs.map(d=> checkboxRow(d, "REV") ).join("") || `<div class="fin-muted">Nada em “A RECEBER”.</div>`;
+
+    $$("input[type=checkbox][data-move]", expBox).forEach(cb=>{
       cb.addEventListener("change", async ()=>{
-        if(!cb.checked) return;
-        const li = cb.closest(".fin-item");
-        const id = li?.getAttribute("data-id");
-        const mode = li?.getAttribute("data-mode");
-        if(!id) return;
-
-        try{
-          await openRealizeModal(id, mode);
-        }finally{
-          cb.checked = false;
-        }
+        cb.checked = false;
+        const id = cb.dataset.id;
+        const deal = S.deals.find(x=>String(x.ID)===String(id));
+        if(!deal) return;
+        await openMarkDoneModal(deal, "EXP");
       });
     });
 
-    // Ver/Editar/Excluir
-    $$("#fin-view .fin-item button[data-act]").forEach(btn=>{
-      btn.addEventListener("click", async ()=>{
-        const li = btn.closest(".fin-item");
-        const id = li?.getAttribute("data-id");
-        const act = btn.getAttribute("data-act");
-        if(!id) return;
-
-        if(act==="excluir"){
-          const ok = confirm("Excluir este lançamento? (isso apaga o negócio no Bitrix)");
-          if(!ok) return;
-          await bx("crm.deal.delete", { id });
-          await refresh();
-          return;
-        }
-
-        if(act==="ver" || act==="editar"){
-          const d = S.deals.find(x=>String(x.ID)===String(id));
-          if(!d) return;
-          openModal(
-            act==="ver" ? "Ver lançamento" : "Editar lançamento",
-            `<button class="fin-btn" data-act="close">VOLTAR</button>` + (act==="editar" ? `<button class="fin-btn" id="btn-save-edit">SALVAR</button>` : ""),
-            renderEditForm(d, act==="editar")
-          );
-
-          if(act==="editar"){
-            $("#btn-save-edit").addEventListener("click", async ()=>{
-              const payload = readEditForm();
-              await bx("crm.deal.update", { id, fields: payload });
-              closeModal();
-              await refresh();
-            });
-          }
-        }
+    $$("input[type=checkbox][data-move]", revBox).forEach(cb=>{
+      cb.addEventListener("change", async ()=>{
+        cb.checked = false;
+        const id = cb.dataset.id;
+        const deal = S.deals.find(x=>String(x.ID)===String(id));
+        if(!deal) return;
+        await openMarkDoneModal(deal, "REV");
       });
-    });
-
-    $("#btn-export")?.addEventListener("click", ()=>{
-      exportCSV(applyClientFilters(S.deals));
     });
   }
 
-  async function openRealizeModal(id, mode){
-    const title = (mode==="pagar") ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
-    const d = S.deals.find(x=>String(x.ID)===String(id));
-    if(!d) return;
-
-    const prev = dealAmountPrev(d);
-    const fav = d[F.favorecido] || d.TITLE || ("Deal "+id);
-
-    openModal(
-      title,
-      `<button class="fin-btn" data-act="close">VOLTAR</button><button class="fin-btn" id="btn-confirm-realize">CONFIRMAR</button>`,
-      `
-        <div class="fin-card" style="border-radius:12px">
-          <div style="font-weight:1000;margin-bottom:6px">${esc(fav)}</div>
-          <div style="font-size:12px;font-weight:900;color:var(--muted);margin-bottom:10px">
-            Previsto: <b>${esc(fmtBRL(prev))}</b>
-          </div>
-
-          <div class="fin-filters" style="border-radius:12px">
-            <div class="fin-field">
-              <label>Data realizada</label>
-              <input id="real-date" type="date" value="${esc(todayISO())}"/>
-            </div>
-            <div class="fin-field">
-              <label>Valor realizado</label>
-              <input id="real-value" placeholder="R$ 0,00" value="${esc(fmtBRL(prev))}"/>
-            </div>
-          </div>
-
-          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
-            Isso vai mover o negócio de etapa e preencher Data/Valor Realizado.
+  function checkboxRow(d, kind){
+    const dt = fmtDMY(d[UF.DATA_PREV] || "");
+    const val = money(d[UF.VAL_PREV] || "");
+    const name = d[UF.FAV] || d.TITLE || "(sem favorecido)";
+    const cc = getNameById(S.ccOptions, d[UF.CC]);
+    return `
+      <div class="fin-checkrow">
+        <div class="left">
+          <input type="checkbox" data-move="1" data-kind="${esc(kind)}" data-id="${esc(d.ID)}"/>
+          <div>
+            <div class="name">${esc(name)}</div>
+            <div class="meta">${esc(dt)} • ${esc(cc)}</div>
           </div>
         </div>
+        <div class="amt">${esc(val)}</div>
+      </div>
+    `;
+  }
+
+  function getNameById(arr, id){
+    const it = arr.find(x=>String(x.id)===String(id));
+    return it ? it.name : "";
+  }
+
+  // ========= MODALS =========
+  function openModal({title, full=false, bodyHTML="", footerHTML="", onMount}){
+    const bd = document.createElement("div");
+    bd.className = "fin-modal-backdrop";
+    bd.innerHTML = `
+      <div class="fin-modal ${full?"full":""}">
+        <div class="fin-modal-head">
+          <div class="fin-modal-title">${esc(title)}</div>
+          <div style="display:flex; gap:8px; align-items:center">
+            <button class="fin-mini" data-close>Voltar</button>
+          </div>
+        </div>
+        <div class="fin-modal-body">${bodyHTML}</div>
+        ${footerHTML ? `<div class="fin-modal-foot">${footerHTML}</div>` : ``}
+      </div>
+    `;
+    bd.addEventListener("click", (e)=>{
+      if(e.target === bd) bd.remove();
+    });
+    $("[data-close]", bd).addEventListener("click", ()=> bd.remove());
+    document.body.appendChild(bd);
+    onMount && onMount(bd);
+    return bd;
+  }
+
+  function openViewModal(d){
+    openModal({
+      title: `Ver • #${d.ID}`,
+      bodyHTML: `
+        <div class="fin-gridform">
+          ${fieldRO("Favorecido", d[UF.FAV] || d.TITLE || "")}
+          ${fieldRO("Tipo", dealTypeLabel(d))}
+          ${fieldRO("Status", dealStatusLabel(d))}
+          ${fieldRO("Centro de Custo", getNameById(S.ccOptions, d[UF.CC]))}
+          ${fieldRO("Categoria", getNameById(S.catOptions, d[UF.CAT]))}
+          ${fieldRO("Valor previsto", money(d[UF.VAL_PREV]))}
+          ${fieldRO("Data prevista", fmtDMY(d[UF.DATA_PREV]))}
+          ${fieldRO("Valor realizado", money(d[UF.VAL_REAL]))}
+          ${fieldRO("Data realizada", fmtDMY(d[UF.DATA_REAL]))}
+          ${fieldRO("Conta", d[UF.CONTA] || "")}
+          ${fieldRO("Obs", d[UF.OBS] || "")}
+        </div>
       `
-    );
-
-    $("#btn-confirm-realize").addEventListener("click", async ()=>{
-      const date = $("#real-date").value || todayISO();
-      const val = moneyToNumber($("#real-value").value);
-      if(val==null){
-        alert("Informe o valor realizado.");
-        return;
-      }
-
-      const fields = {};
-      fields[F.dataReal] = date;
-      fields[F.valorReal] = String(val);
-
-      if(mode==="pagar"){
-        await bx("crm.deal.update", { id, fields: { ...fields, STAGE_ID: ST27.despesaPaga } });
-      }else{
-        await bx("crm.deal.update", { id, fields: { ...fields, STAGE_ID: ST27.receitaRecebida } });
-      }
-
-      closeModal();
-      await refresh();
     });
   }
 
-  function renderEditForm(d, editable){
-    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.centroCusto])?" selected":""}>${esc(x.name)}</option>`).join("");
-    const catOpts = S.enums.categoria.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.categoria])?" selected":""}>${esc(x.name)}</option>`).join("");
-    const contaOpts = S.enums.conta.map(x=>`<option value="${esc(x.id)}"${String(x.id)===String(d[F.conta])?" selected":""}>${esc(x.name)}</option>`).join("");
-
-    // CONTA e OBS não obrigatórios: aqui deixo livres
+  function fieldRO(label, value){
     return `
-      <div class="fin-card" style="border-radius:12px">
-        <div class="fin-filters" style="border-radius:12px">
-          <div class="fin-field">
-            <label>Centro</label>
-            <select id="ef-centro" ${editable?"":"disabled"}>${centroOpts}</select>
-          </div>
-          <div class="fin-field">
-            <label>Categoria</label>
-            <select id="ef-cat" ${editable?"":"disabled"}>${catOpts}</select>
-          </div>
-          <div class="fin-field">
-            <label>Favorecido</label>
-            <input id="ef-fav" value="${esc(d[F.favorecido]||"")}" ${editable?"":"disabled"} />
-          </div>
-          <div class="fin-field">
-            <label>Valor Previsto</label>
-            <input id="ef-prev" value="${esc(d[F.valorPrev]||"")}" ${editable?"":"disabled"} />
-          </div>
-          <div class="fin-field">
-            <label>Data Prevista</label>
-            <input id="ef-date" type="date" value="${esc((d[F.dataPrev]||"").slice(0,10))}" ${editable?"":"disabled"} />
-          </div>
-          <div class="fin-field">
-            <label>Conta (opcional)</label>
-            <select id="ef-conta" ${editable?"":"disabled"}>
-              <option value="">(vazio)</option>
-              ${contaOpts}
+      <div class="fin-field" style="width:100%">
+        <label>${esc(label)}</label>
+        <input value="${esc(value||"")}" readonly/>
+      </div>
+    `;
+  }
+
+  function openEditModal(d){
+    openModal({
+      title: `Editar • #${d.ID}`,
+      bodyHTML: `
+        <div class="fin-gridform">
+          ${fieldInp("Favorecido", "fav", d[UF.FAV] || "")}
+          ${selectInp("Tipo", "tipo", [
+            {id:"RECEITA", name:"RECEITA"},
+            {id:"DESPESA", name:"DESPESA"}
+          ], String(d[UF.TIPO]||""))}
+          ${selectInp("Categoria", "cat", S.catOptions, String(d[UF.CAT]||""))}
+          ${selectInp("Centro de Custo", "cc", S.ccOptions, String(d[UF.CC]||""))}
+          ${fieldInp("Valor previsto", "vp", String(d[UF.VAL_PREV]||""))}
+          ${fieldInp("Data prevista", "dp", fmtDMY(d[UF.DATA_PREV]||""), "date")}
+          ${fieldInp("Conta (opcional)", "conta", String(d[UF.CONTA]||""))}
+          ${fieldInp("Obs (opcional)", "obs", String(d[UF.OBS]||""))}
+        </div>
+        <div class="fin-note" style="margin-top:10px">
+          * Valor/Data realizados são preenchidos no ato de pagar/receber (checkbox).
+        </div>
+      `,
+      footerHTML: `
+        <button class="fin-mini" data-save>Salvar</button>
+      `,
+      onMount: (bd)=>{
+        $("[data-save]", bd).addEventListener("click", async ()=>{
+          const body = {
+            id: d.ID,
+            fields: {
+              [UF.FAV]: $("#m-fav", bd).value.trim(),
+              [UF.TIPO]: $("#m-tipo", bd).value,
+              [UF.CAT]: $("#m-cat", bd).value || null,
+              [UF.CC]: $("#m-cc", bd).value || null,
+              [UF.VAL_PREV]: toNum($("#m-vp", bd).value),
+              [UF.DATA_PREV]: ymd($("#m-dp", bd).value),
+              [UF.CONTA]: $("#m-conta", bd).value.trim(),
+              [UF.OBS]: $("#m-obs", bd).value.trim(),
+            }
+          };
+          await bx("crm.deal.update", body);
+          bd.remove();
+          await refresh();
+        });
+      }
+    });
+  }
+
+  function fieldInp(label, id, value="", type="text"){
+    return `
+      <div class="fin-field" style="width:100%">
+        <label>${esc(label)}</label>
+        <input id="m-${esc(id)}" type="${esc(type)}" value="${esc(value||"")}" />
+      </div>
+    `;
+  }
+  function selectInp(label, id, arr, cur=""){
+    return `
+      <div class="fin-field" style="width:100%">
+        <label>${esc(label)}</label>
+        <select id="m-${esc(id)}">
+          <option value=""></option>
+          ${arr.map(o=>`<option value="${esc(o.id)}" ${String(cur)===String(o.id)?"selected":""}>${esc(o.name)}</option>`).join("")}
+        </select>
+      </div>
+    `;
+  }
+
+  async function confirmDelete(d){
+    const bd = openModal({
+      title: "Excluir lançamento",
+      bodyHTML: `
+        <div style="font-weight:950; margin-bottom:8px">Tem certeza que quer excluir?</div>
+        <div class="fin-note">ID #${esc(d.ID)} • ${esc(d[UF.FAV]||d.TITLE||"")}</div>
+      `,
+      footerHTML: `
+        <button class="fin-mini" data-ok>Sim, excluir</button>
+        <button class="fin-mini" data-no>Cancelar</button>
+      `,
+      onMount: (bd)=>{
+        $("[data-no]", bd).addEventListener("click", ()=> bd.remove());
+        $("[data-ok]", bd).addEventListener("click", async ()=>{
+          await bx("crm.deal.delete", { id: d.ID });
+          bd.remove();
+          await refresh();
+        });
+      }
+    });
+  }
+
+  async function openMarkDoneModal(d, kind){
+    const isExp = kind === "EXP";
+    const title = isExp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
+    const today = new Date().toISOString().slice(0,10);
+
+    const bd = openModal({
+      title,
+      bodyHTML: `
+        <div class="fin-gridform">
+          ${fieldInp("Data realizada", "realdate", today, "date")}
+          ${fieldInp("Valor realizado", "realval", String(d[UF.VAL_PREV]||""), "text")}
+          ${fieldInp("Obs (opcional)", "realobs", String(d[UF.OBS]||""))}
+        </div>
+        <div class="fin-note" style="margin-top:10px">
+          * Vai mover a etapa automaticamente e preencher Valor/Data realizados.
+        </div>
+      `,
+      footerHTML: `
+        <button class="fin-mini" data-ok>Confirmar</button>
+      `,
+      onMount: (bd)=>{
+        $("[data-ok]", bd).addEventListener("click", async ()=>{
+          const realDate = ymd($("#m-realdate", bd).value);
+          const realVal = toNum($("#m-realval", bd).value);
+          const realObs = $("#m-realobs", bd).value.trim();
+
+          const stageTo = isExp ? STAGES.EXP_PAID : STAGES.REV_GOT;
+
+          await bx("crm.deal.update", {
+            id: d.ID,
+            fields: {
+              STAGE_ID: stageTo,
+              [UF.DATA_REAL]: realDate || null,
+              [UF.VAL_REAL]: (realVal==null ? null : realVal),
+              [UF.OBS]: realObs,
+            }
+          });
+
+          bd.remove();
+          await refresh();
+        });
+      }
+    });
+  }
+
+  function openNewModal(){
+    openModal({
+      title: "Novo lançamento",
+      bodyHTML: `
+        <div class="fin-gridform">
+          ${selectInp("Tipo", "ntipo", [{id:"DESPESA",name:"DESPESA"},{id:"RECEITA",name:"RECEITA"}], "DESPESA")}
+          ${selectInp("Centro de Custo", "ncc", S.ccOptions, S.selectedCC||"")}
+          ${selectInp("Categoria", "ncat", S.catOptions, "")}
+          ${fieldInp("Favorecido", "nfav", "")}
+          ${fieldInp("Valor", "nval", "")}
+          ${fieldInp("Data prevista", "ndp", new Date().toISOString().slice(0,10), "date")}
+          ${fieldInp("Conta (opcional)", "nconta", "")}
+          ${fieldInp("Obs (opcional)", "nobs", "")}
+
+          <div class="fin-field" style="width:100%">
+            <label>Recorrência</label>
+            <select id="m-nrec">
+              <option value="AVULSO">Avulso</option>
+              <option value="SEMANAL">Semanal</option>
+              <option value="MENSAL">Mensal</option>
+              <option value="ANUAL">Anual</option>
             </select>
           </div>
-          <div class="fin-field" style="flex:1;min-width:260px">
-            <label>Obs (opcional)</label>
-            <input id="ef-obs" value="${esc(d[F.obs]||"")}" ${editable?"":"disabled"} />
+
+          <div class="fin-field" style="width:100%" id="rec-week-wrap" style="display:none">
+            <label>Dia da semana</label>
+            <select id="m-nweekday">
+              <option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option>
+              <option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option>
+            </select>
+          </div>
+
+          <div class="fin-field" style="width:100%" id="rec-month-wrap" style="display:none">
+            <label>Dia do mês</label>
+            <input id="m-nmonthday" type="number" min="1" max="31" value="1"/>
+          </div>
+
+          <div class="fin-field" style="width:100%" id="rec-year-wrap" style="display:none">
+            <label>Dia/Mês</label>
+            <input id="m-nyearmd" placeholder="ex: 15/04"/>
           </div>
         </div>
-      </div>
-    `;
+
+        <div class="fin-note" style="margin-top:10px">
+          Competência: você pode deixar vazio em recorrências. A visão mensal usa Competência quando existir.
+        </div>
+      `,
+      footerHTML: `
+        <button class="fin-mini" data-save>Salvar</button>
+      `,
+      onMount: (bd)=>{
+        const recSel = $("#m-nrec", bd);
+        const wk = $("#rec-week-wrap", bd);
+        const mo = $("#rec-month-wrap", bd);
+        const yr = $("#rec-year-wrap", bd);
+
+        function recUI(){
+          const v = recSel.value;
+          wk.style.display = (v==="SEMANAL") ? "" : "none";
+          mo.style.display = (v==="MENSAL") ? "" : "none";
+          yr.style.display = (v==="ANUAL") ? "" : "none";
+        }
+        recSel.addEventListener("change", recUI);
+        recUI();
+
+        $("[data-save]", bd).addEventListener("click", async ()=>{
+          const tipo = $("#m-ntipo", bd).value;
+          const cc = $("#m-ncc", bd).value || null;
+          const cat = $("#m-ncat", bd).value || null;
+          const fav = $("#m-nfav", bd).value.trim();
+          const val = toNum($("#m-nval", bd).value);
+          const dp = ymd($("#m-ndp", bd).value);
+          const conta = $("#m-nconta", bd).value.trim();
+          const obs = $("#m-nobs", bd).value.trim();
+
+          const stage = (tipo==="RECEITA") ? STAGES.REV_REC : STAGES.EXP_PAY;
+
+          const created = await bx("crm.deal.add", {
+            fields: {
+              TITLE: fav || (tipo==="RECEITA" ? "Receita" : "Despesa"),
+              CATEGORY_ID: PIPELINE_FIN,
+              STAGE_ID: stage,
+              [UF.TIPO]: tipo,
+              [UF.CC]: cc,
+              [UF.CAT]: cat,
+              [UF.FAV]: fav,
+              [UF.VAL_PREV]: val,
+              [UF.DATA_PREV]: dp || null,
+              [UF.CONTA]: conta,
+              [UF.OBS]: obs,
+            }
+          });
+
+          // Recorrência: neste momento eu só salvo o “modelo” no deal (sem automatizar criação futura),
+          // porque automatizar geração periódica sem Worker/automation server não roda sozinho.
+          // MAS: se você quiser, eu deixo “criar X ocorrências” agora (ex.: próximos 12 meses) — dá pra fazer só no JS.
+          // Como você pediu “negócio recorrente com lembretes na pipeline 17”, isso exige criar deals na 17 no ato.
+          // Então: se NÃO for avulso, eu crio um lembrete AGORA na pipeline 17 (coluna Manuela).
+          const rec = $("#m-nrec", bd).value;
+          if(rec !== "AVULSO"){
+            await createReminderForManuela({
+              baseDealId: created.result,
+              tipo, fav, val, dp,
+              rec,
+              weekday: $("#m-nweekday", bd)?.value,
+              monthday: $("#m-nmonthday", bd)?.value,
+              yearmd: $("#m-nyearmd", bd)?.value,
+            });
+          }
+
+          bd.remove();
+          await refresh();
+        });
+      }
+    });
   }
 
-  function readEditForm(){
-    const fields = {};
-    fields[F.centroCusto] = $("#ef-centro").value || null;
-    fields[F.categoria] = $("#ef-cat").value || null;
-    fields[F.favorecido] = $("#ef-fav").value || "";
-    fields[F.valorPrev] = $("#ef-prev").value || "";
-    fields[F.dataPrev] = $("#ef-date").value || "";
-    fields[F.conta] = $("#ef-conta").value || "";
-    fields[F.obs] = $("#ef-obs").value || "";
-    return fields;
+  async function createReminderForManuela(info){
+    const title = `LEMBRETE FINANCEIRO (${info.rec}) • ${info.tipo} • ${info.fav || "Sem favorecido"}`;
+    const desc = [
+      `Origem: Painel Financeiro`,
+      `Deal Financeiro: ${info.baseDealId}`,
+      `Tipo: ${info.tipo}`,
+      `Favorecido: ${info.fav || ""}`,
+      `Valor: ${info.val!=null ? money(info.val) : ""}`,
+      `Data prevista: ${info.dp ? fmtDMY(info.dp) : ""}`,
+      `Recorrência: ${info.rec}`,
+      info.rec==="SEMANAL" ? `Dia da semana: ${info.weekday}` : "",
+      info.rec==="MENSAL" ? `Dia do mês: ${info.monthday}` : "",
+      info.rec==="ANUAL" ? `Dia/Mês: ${info.yearmd}` : "",
+    ].filter(Boolean).join("\n");
+
+    await bx("crm.deal.add", {
+      fields: {
+        TITLE: title,
+        CATEGORY_ID: PIPELINE_REM,
+        STAGE_ID: STAGE_REM_MANUELA,
+        ASSIGNED_BY_ID: REMINDER_USER_ID,
+        COMMENTS: desc,
+      }
+    });
   }
 
-  // =========================
-  // BATCH (LOTE) FULLSCREEN - 15 linhas, sem scroll
-  // =========================
-  function openBatchModal(kind){
-    // kind: "DESP" or "REC"
-    const isRec = kind==="REC";
-    const title = isRec ? "LOTE RECEITAS (tela cheia)" : "LOTE DESPESAS (tela cheia)";
+  function openLoteModal(tipo){
+    const isRec = (tipo==="RECEITA");
+    const title = isRec ? "LOTE RECEITAS" : "LOTE DESPESAS";
 
-    const actions = `
-      <button class="fin-btn" data-act="close">VOLTAR</button>
-      <button class="fin-btn" id="btn-clean">LIMPAR VAZIAS</button>
-      <button class="fin-btn" id="btn-add-row">+ LINHA</button>
-      <button class="fin-btn" id="btn-save-batch">SALVAR</button>
-    `;
-
-    const csv = isRec ? `
-      <div class="fin-file">
-        <span class="hint">CSV (somente RECEITAS): Favorecido, Valor, Data</span>
-        <input id="csv-file" type="file" accept=".csv,text/csv"/>
-        <button class="fin-mini-btn" id="csv-load">IMPORTAR</button>
-      </div>
-    ` : "";
-
-    openModal(
+    const rows = 15;
+    const bd = openModal({
       title,
-      actions,
-      `
-        <div class="fin-batch-controls">
-          <div class="hint">15 linhas por padrão. CONTA e OBS são opcionais.</div>
-          ${csv}
+      full:true,
+      bodyHTML: `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">
+          <button class="fin-mini" data-add>+ linha</button>
+          <button class="fin-mini" data-clean>Limpar linhas vazias</button>
+          ${isRec ? `<button class="fin-mini" data-csv>Importar CSV (Favorecido, Valor, Data)</button>` : ``}
+          <div class="fin-note">CONTA e OBS são opcionais.</div>
         </div>
 
-        <div class="fin-grid" id="batch-grid">
-          <div class="head">
-            <div>Centro</div>
-            <div>Conta (opcional)</div>
-            <div>Categoria</div>
-            <div>Favorecido</div>
-            <div>Valor</div>
-            <div>Data</div>
-            <div>Recorrência</div>
-            <div>Dia</div>
-            <div>Obs (opcional)</div>
-          </div>
-          <div class="rows" id="batch-rows"></div>
-        </div>
+        <table class="fin-lote-table">
+          <thead>
+            <tr>
+              <th>Centro de Custo</th>
+              <th>Conta (opcional)</th>
+              <th>Categoria</th>
+              <th>Favorecido</th>
+              <th>Valor</th>
+              <th>Data Prevista</th>
+              <th>Obs (opcional)</th>
+              <th>Recorrência</th>
+              <th>Dia</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="lote-body"></tbody>
+        </table>
 
-        <div class="fin-card" style="border-radius:12px">
-          <div style="font-size:11px;font-weight:900;color:var(--muted)">
-            Recorrência cria também lembrete na PIPELINE 17 → coluna MANUELA (C17:PREPARATION) para a USER 813.
-          </div>
-        </div>
-      `
-    );
+        <input type="file" id="lote-file" accept=".csv" style="display:none"/>
+      `,
+      footerHTML: `
+        <button class="fin-mini" data-save>Criar lançamentos</button>
+      `,
+      onMount: (bd)=>{
+        const tb = $("#lote-body", bd);
 
-    // build 15 rows
-    const rowsWrap = $("#batch-rows");
-    rowsWrap.innerHTML = "";
-    for(let i=0;i<DEFAULT_BATCH_ROWS;i++){
-      rowsWrap.appendChild(buildBatchRow(i, isRec));
-    }
-
-    // binds
-    $("#btn-add-row").addEventListener("click", ()=>{
-      const n = $$("#batch-rows .row").length;
-      $("#batch-rows").appendChild(buildBatchRow(n, isRec));
-    });
-
-    $("#btn-clean").addEventListener("click", ()=>{
-      $$("#batch-rows .row").forEach(row=>{
-        const fav = $(".b-fav", row).value.trim();
-        const val = $(".b-val", row).value.trim();
-        const dt = $(".b-date", row).value.trim();
-        if(!fav && !val && !dt){
-          row.remove();
+        function rowTemplate(){
+          const ccSel = optSelect("cc", S.ccOptions, S.selectedCC||"");
+          const catSel = optSelect("cat", S.catOptions, "");
+          const recSel = `
+            <select data-k="rec">
+              <option value="AVULSO">Avulso</option>
+              <option value="SEMANAL">Semanal</option>
+              <option value="MENSAL">Mensal</option>
+              <option value="ANUAL">Anual</option>
+            </select>
+          `;
+          const dayField = `<input data-k="day" placeholder="ex: 2 (sem), 15 (mês), 15/04 (anual)"/>`;
+          return `
+            <tr>
+              <td>${ccSel}</td>
+              <td><input data-k="conta" placeholder="Conta"/></td>
+              <td>${catSel}</td>
+              <td><input data-k="fav" placeholder="Favorecido"/></td>
+              <td><input data-k="val" placeholder="0,00"/></td>
+              <td><input data-k="dp" type="date"/></td>
+              <td><input data-k="obs" placeholder="Obs"/></td>
+              <td>${recSel}</td>
+              <td>${dayField}</td>
+              <td><button class="fin-mini fin-danger" data-del>✕</button></td>
+            </tr>
+          `;
         }
-      });
-      // garante ao menos 1
-      if($$("#batch-rows .row").length===0){
-        $("#batch-rows").appendChild(buildBatchRow(0, isRec));
+
+        function addRow(n=1){
+          for(let i=0;i<n;i++){
+            const tr = document.createElement("tbody");
+            tr.innerHTML = rowTemplate();
+            const row = tr.firstElementChild;
+            tb.appendChild(row);
+
+            $("[data-del]", row).addEventListener("click", ()=>{
+              row.remove();
+            });
+
+            // rec enable guide
+            const rec = $("[data-k=rec]", row);
+            const day = $("[data-k=day]", row);
+            function hint(){
+              const v = rec.value;
+              day.disabled = (v==="AVULSO");
+              day.placeholder =
+                v==="SEMANAL" ? "0-6 (dom=0)" :
+                v==="MENSAL" ? "1-31" :
+                v==="ANUAL" ? "dd/mm (ex 15/04)" :
+                "—";
+            }
+            rec.addEventListener("change", hint);
+            hint();
+          }
+        }
+
+        addRow(rows);
+
+        $("[data-add]", bd).addEventListener("click", ()=> addRow(1));
+        $("[data-clean]", bd).addEventListener("click", ()=>{
+          $$("#lote-body tr", bd).forEach(tr=>{
+            const fav = ($("[data-k=fav]", tr)?.value||"").trim();
+            const val = ($("[data-k=val]", tr)?.value||"").trim();
+            const dp = ($("[data-k=dp]", tr)?.value||"").trim();
+            const cat = ($("[data-k=cat]", tr)?.value||"").trim();
+            if(!fav && !val && !dp && !cat) tr.remove();
+          });
+        });
+
+        if(isRec){
+          $("[data-csv]", bd).addEventListener("click", ()=> $("#lote-file", bd).click());
+          $("#lote-file", bd).addEventListener("change", async (e)=>{
+            const f = e.target.files?.[0];
+            if(!f) return;
+            const text = await f.text();
+            const lines = text.split(/\r?\n/).filter(Boolean);
+            // assume header
+            const rows = lines.slice(1).map(l=> l.split(";").length>1 ? l.split(";") : l.split(","));
+            // each: Favorecido, Valor, Data
+            // preenche nas primeiras linhas existentes
+            rows.slice(0, 60).forEach((cols, idx)=>{
+              const fav = (cols[0]||"").trim();
+              const val = (cols[1]||"").trim();
+              const dt = (cols[2]||"").trim();
+              let tr = $$("#lote-body tr", bd)[idx];
+              if(!tr){
+                addRow(1);
+                tr = $$("#lote-body tr", bd)[idx];
+              }
+              $("[data-k=fav]", tr).value = fav;
+              $("[data-k=val]", tr).value = val;
+              const iso = ymd(dt);
+              if(iso) $("[data-k=dp]", tr).value = iso;
+            });
+          });
+        }
+
+        $("[data-save]", bd).addEventListener("click", async ()=>{
+          const trs = $$("#lote-body tr", bd);
+          const tasks = [];
+          for(const tr of trs){
+            const cc = $("[data-k=cc]", tr).value || null;
+            const conta = $("[data-k=conta]", tr).value.trim();
+            const cat = $("[data-k=cat]", tr).value || null;
+            const fav = $("[data-k=fav]", tr).value.trim();
+            const val = toNum($("[data-k=val]", tr).value);
+            const dp = ymd($("[data-k=dp]", tr).value);
+            const obs = $("[data-k=obs]", tr).value.trim();
+            const rec = $("[data-k=rec]", tr).value;
+            const day = $("[data-k=day]", tr).value.trim();
+
+            // linha vazia
+            if(!fav && val==null && !dp && !cat) continue;
+
+            const stage = isRec ? STAGES.REV_REC : STAGES.EXP_PAY;
+            const tipoUF = isRec ? "RECEITA" : "DESPESA";
+
+            tasks.push(async ()=>{
+              const created = await bx("crm.deal.add", {
+                fields: {
+                  TITLE: fav || (isRec ? "Receita" : "Despesa"),
+                  CATEGORY_ID: PIPELINE_FIN,
+                  STAGE_ID: stage,
+                  [UF.TIPO]: tipoUF,
+                  [UF.CC]: cc,
+                  [UF.CONTA]: conta, // opcional
+                  [UF.CAT]: cat,
+                  [UF.FAV]: fav,
+                  [UF.VAL_PREV]: val,
+                  [UF.DATA_PREV]: dp || null,
+                  [UF.OBS]: obs, // opcional
+                }
+              });
+
+              if(rec !== "AVULSO"){
+                await createReminderForManuela({
+                  baseDealId: created.result,
+                  tipo: tipoUF, fav, val, dp,
+                  rec,
+                  weekday: day,
+                  monthday: day,
+                  yearmd: day,
+                });
+              }
+            });
+          }
+
+          // executa em série para não estourar limite
+          for(const fn of tasks) await fn();
+          bd.remove();
+          await refresh();
+        });
       }
     });
-
-    $("#btn-save-batch").addEventListener("click", async ()=>{
-      const entries = readBatchRows(isRec);
-      if(entries.length===0){
-        alert("Nada para salvar. Preencha ao menos 1 linha.");
-        return;
-      }
-      await saveBatch(entries, isRec);
-      closeModal();
-      await refresh();
-    });
-
-    // CSV only receipts
-    if(isRec){
-      $("#csv-load").addEventListener("click", async ()=>{
-        const f = $("#csv-file").files?.[0];
-        if(!f){ alert("Selecione um CSV."); return; }
-        const text = await f.text();
-        importCSVReceitas(text);
-      });
-    }
   }
 
-  function buildBatchRow(i, isRec){
-    const row = document.createElement("div");
-    row.className = "row";
-    row.setAttribute("data-i", String(i));
-
-    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
-    const contaOpts = S.enums.conta.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
-    const catOpts = S.enums.categoria.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
-
-    // recorrência
-    const recOpts = `
-      <option value="AVULSA">Avulsa</option>
-      <option value="SEMANAL">Semanal</option>
-      <option value="MENSAL">Mensal</option>
-      <option value="ANUAL">Anual</option>
-      <option value="CARTAO">Cartão</option>
-    `;
-
-    row.innerHTML = `
-      <select class="b-centro">${centroOpts}</select>
-      <select class="b-conta">
-        <option value="">(vazio)</option>
-        ${contaOpts}
+  function optSelect(key, arr, cur){
+    return `
+      <select data-k="${esc(key)}">
+        <option value=""></option>
+        ${arr.map(o=>`<option value="${esc(o.id)}" ${String(cur)===String(o.id)?"selected":""}>${esc(o.name)}</option>`).join("")}
       </select>
-      <select class="b-cat">${catOpts}</select>
-      <input class="b-fav" placeholder="${isRec ? "Pagador / Recebedor" : "Favorecido"}"/>
-      <input class="b-val" placeholder="0,00"/>
-      <input class="b-date" type="date" value="${esc(todayISO())}"/>
-      <select class="b-rec">${recOpts}</select>
-      <select class="b-dia"></select>
-      <input class="b-obs obs" placeholder="Opcional"/>
     `;
-
-    // dia depende recorrência
-    const recSel = $(".b-rec", row);
-    const diaSel = $(".b-dia", row);
-    function refreshDia(){
-      const v = recSel.value;
-      diaSel.innerHTML = "";
-
-      if(v==="SEMANAL"){
-        ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"].forEach((d,idx)=>{
-          const opt = document.createElement("option");
-          opt.value = String(idx+1); // 1=Seg ... 7=Dom
-          opt.textContent = d;
-          diaSel.appendChild(opt);
-        });
-      }else if(v==="MENSAL"){
-        for(let d=1; d<=31; d++){
-          const opt = document.createElement("option");
-          opt.value = String(d);
-          opt.textContent = String(d);
-          diaSel.appendChild(opt);
-        }
-      }else if(v==="ANUAL"){
-        // Dia do ano: "DD/MM"
-        for(let m=1; m<=12; m++){
-          for(let d=1; d<=28; d++){ // simplificado para caber; podemos expandir se quiser
-            const mm = String(m).padStart(2,"0");
-            const dd = String(d).padStart(2,"0");
-            const opt = document.createElement("option");
-            opt.value = `${dd}/${mm}`;
-            opt.textContent = `${dd}/${mm}`;
-            diaSel.appendChild(opt);
-          }
-        }
-      }else if(v==="CARTAO"){
-        // escolhe cartão pelo dia (lista de cartões)
-        CARDS.forEach((c,idx)=>{
-          const opt = document.createElement("option");
-          opt.value = c.name;
-          opt.textContent = `${c.name} (venc ${c.venc}, melhor ${c.melhor})`;
-          diaSel.appendChild(opt);
-        });
-      }else{
-        // Avulsa
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "-";
-        diaSel.appendChild(opt);
-      }
-    }
-    recSel.addEventListener("change", refreshDia);
-    refreshDia();
-
-    return row;
   }
 
-  function readBatchRows(isRec){
-    const out = [];
-    $$("#batch-rows .row").forEach(row=>{
-      const centro = $(".b-centro", row).value || "";
-      const conta = $(".b-conta", row).value || ""; // opcional
-      const cat = $(".b-cat", row).value || "";
-      const fav = $(".b-fav", row).value.trim();
-      const val = moneyToNumber($(".b-val", row).value);
-      const date = $(".b-date", row).value || "";
-      const rec = $(".b-rec", row).value || "AVULSA";
-      const dia = $(".b-dia", row).value || "";
-      const obs = $(".b-obs", row).value || "";
-
-      // ignora linha vazia
-      if(!fav && (val==null) && !date) return;
-
-      // valor é essencial: se não tiver, não salva (para evitar lixo no financeiro)
-      if(val==null){
-        throw new Error("Há linha com Favorecido preenchido mas sem Valor. Preencha o valor ou apague a linha.");
-      }
-
-      out.push({
-        centro, conta, cat, fav, val, date, rec, dia, obs,
-        isRec
-      });
-    });
-    return out;
-  }
-
-  function parseCSV(text){
-    // aceita ; ou ,
-    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    if(lines.length===0) return [];
-    const sep = lines[0].includes(";") ? ";" : ",";
-    const rows = lines.map(l=>{
-      const parts = l.split(sep).map(x=>x.trim().replace(/^"|"$/g,""));
-      return parts;
-    });
-    return rows;
-  }
-
-  function importCSVReceitas(text){
-    // Espera: Favorecido, Valor, Data
-    const rows = parseCSV(text);
-    if(rows.length===0) return;
-
-    // tenta detectar header
-    let start = 0;
-    const h = rows[0].map(x=>x.toLowerCase());
-    if(h.includes("favorecido") || h.includes("valor") || h.includes("data")){
-      start = 1;
-    }
-
-    const lines = rows.slice(start);
-    const gridRows = $$("#batch-rows .row");
-
-    for(let i=0;i<Math.min(lines.length, gridRows.length); i++){
-      const r = lines[i];
-      const fav = r[0] || "";
-      const val = r[1] || "";
-      const dt = r[2] || "";
-
-      $(".b-fav", gridRows[i]).value = fav;
-      $(".b-val", gridRows[i]).value = String(val).replace(".",",");
-      // data: aceita dd/mm/yyyy ou yyyy-mm-dd
-      const iso = normalizeDate(dt);
-      $(".b-date", gridRows[i]).value = iso || todayISO();
-    }
-  }
-
-  function normalizeDate(v){
-    const s = String(v||"").trim();
-    if(!s) return "";
-    if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if(m){
-      const dd = String(m[1]).padStart(2,"0");
-      const mm = String(m[2]).padStart(2,"0");
-      const yy = m[3];
-      return `${yy}-${mm}-${dd}`;
-    }
-    return "";
-  }
-
-  async function saveBatch(entries, isRec){
-    // cria deals no pipeline 27
-    for(const e of entries){
-      const fields = {};
-      fields[F.centroCusto] = e.centro || null;
-      fields[F.conta] = e.conta || ""; // opcional
-      fields[F.categoria] = e.cat || null;
-      fields[F.favorecido] = e.fav;
-      fields[F.valorPrev] = String(e.val);
-      fields[F.dataPrev] = e.date || todayISO();
-      fields[F.obs] = e.obs || "";
-
-      // tipo: receita/despesa (se tiver enum)
-      // Se você quiser forçar, podemos mapear pelo valor do enum — aqui deixo só pelo stage.
-      fields["CATEGORY_ID"] = 27;
-
-      // stage conforme lote
-      if(isRec){
-        fields["STAGE_ID"] = ST27.receitaAReceber;
-      }else{
-        fields["STAGE_ID"] = ST27.despesaAPagar;
-      }
-
-      // Recorrência: gravar no TITLE e criar lembrete pipeline 17
-      const recLabel = e.rec === "AVULSA" ? "AVULSA" :
-                       e.rec === "SEMANAL" ? ("SEMANAL("+e.dia+")") :
-                       e.rec === "MENSAL" ? ("MENSAL(dia "+e.dia+")") :
-                       e.rec === "ANUAL" ? ("ANUAL("+e.dia+")") :
-                       e.rec === "CARTAO" ? ("CARTAO("+e.dia+")") : e.rec;
-
-      const title = (isRec ? "RECEITA" : "DESPESA") + " • " + e.fav + (recLabel ? (" • "+recLabel) : "");
-      fields["TITLE"] = title;
-
-      const createdId = await bx("crm.deal.add", { fields });
-
-      // Se recorrente, cria lembrete na pipeline 17 (coluna MANUELA) para USER 813
-      if(e.rec !== "AVULSA"){
-        await createReminderP17({
-          isRec,
-          fav: e.fav,
-          val: e.val,
-          date: e.date,
-          rec: e.rec,
-          dia: e.dia,
-          sourceDealId: createdId
-        });
-      }
-    }
-  }
-
-  async function createReminderP17({isRec, fav, val, date, rec, dia, sourceDealId}){
-    const fields = {};
-    fields["CATEGORY_ID"] = P17.categoryId;
-    fields["STAGE_ID"] = P17.stageManuela;         // MANUELA
-    fields["ASSIGNED_BY_ID"] = P17.assigned813;    // USER 813
-
-    const txtRec = rec==="SEMANAL" ? ("Semanal • dia "+dia) :
-                   rec==="MENSAL" ? ("Mensal • dia "+dia) :
-                   rec==="ANUAL" ? ("Anual • "+dia) :
-                   rec==="CARTAO" ? ("Cartão • "+dia) : rec;
-
-    fields["TITLE"] = (isRec ? "LEMBRETE RECEITA" : "LEMBRETE DESPESA") + " • " + fav;
-    // usa OBS para amarrar
-    fields[F.obs] = `Gerado pelo Financeiro. Origem Deal27=${sourceDealId}. Previsto=${fmtBRL(val)}. Data=${date||""}. Recorrência=${txtRec}`;
-    await bx("crm.deal.add", { fields });
-  }
-
-  // =========================
-  // CARTÕES (modal)
-  // =========================
   function openCardsModal(){
-    openModal(
-      "CARTÕES (lançar compras e visualizar)",
-      `<button class="fin-btn" data-act="close">VOLTAR</button>`,
-      `
-        <div class="fin-card" style="border-radius:12px">
-          <div style="font-weight:1000;margin-bottom:8px">Selecione um cartão para lançar compras em lote:</div>
-          <div style="display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:10px">
-            ${CARDS.map(c=>`
-              <button class="fin-mini-btn" data-card="${esc(c.name)}" style="padding:12px;border-radius:12px;text-align:left">
-                <div style="font-weight:1000">${esc(c.name)}</div>
-                <div style="font-size:11px;font-weight:900;color:var(--muted)">Venc.: ${esc(c.venc)} • Melhor dia: ${esc(c.melhor)}</div>
-              </button>
-            `).join("")}
-          </div>
-
-          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
-            Ao escolher um cartão, abrimos o LOTE DESPESAS já com Recorrência = CARTÃO e “Dia” = cartão.
-          </div>
+    openModal({
+      title: "Cartões de Crédito",
+      bodyHTML: `
+        <div class="fin-note" style="margin-bottom:10px">
+          Aqui é o módulo de cartões (você pediu fora do menu lateral).  
+          Eu preciso que você me diga **onde os lançamentos de cartão ficam**:
+          - ficam também na PIPELINE 27 com algum campo “Forma de pagamento” = cartão?
+          - ou existe outro lugar?
+          <br><br>
+          (Sem isso, eu monto só o modal visual e não tenho como listar/filtrar certo.)
+        </div>
+        <div class="fin-card">
+          <h3>CT ITAÚ PJ</h3>
+          <div class="fin-muted">Venc: 02 • Melhor dia: 21</div>
+          <button class="fin-mini" style="margin-top:8px">Abrir</button>
+        </div>
+        <div class="fin-card" style="margin-top:10px">
+          <h3>CT PORTO PF</h3>
+          <div class="fin-muted">Venc: 10 • Melhor dia: 04</div>
+          <button class="fin-mini" style="margin-top:8px">Abrir</button>
         </div>
       `
-    );
-
-    $$("#fin-modal-body button[data-card]").forEach(btn=>{
-      btn.addEventListener("click", ()=>{
-        const card = btn.getAttribute("data-card");
-        // abre lote despesas e preenche primeira linha como cartão
-        openBatchModal("DESP");
-        // aguarda DOM
-        setTimeout(()=>{
-          const first = $("#batch-rows .row");
-          if(first){
-            $(".b-rec", first).value = "CARTAO";
-            $(".b-rec", first).dispatchEvent(new Event("change"));
-            $(".b-dia", first).value = card;
-          }
-        }, 50);
-      });
-    });
-  }
-
-  // =========================
-  // SALDOS / TRANSFERÊNCIA (manual)
-  // =========================
-  function openBalancesModal(){
-    const rows = S.enums.centro.map(c=>{
-      const v = getBalance(c.id);
-      return `
-        <div style="display:grid;grid-template-columns:1fr 180px 120px;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel)">
-          <div style="font-weight:1000">${esc(c.name)}</div>
-          <input data-centro="${esc(c.id)}" class="bal-in" value="${esc(fmtBRL(v))}" />
-          <button class="fin-mini-btn" data-save-centro="${esc(c.id)}">Salvar</button>
-        </div>
-      `;
-    }).join("");
-
-    openModal(
-      "SALDOS por Centro de Custo (manual)",
-      `<button class="fin-btn" data-act="close">VOLTAR</button>`,
-      `
-        <div class="fin-card" style="border-radius:12px">
-          <div style="font-size:11px;font-weight:900;color:var(--muted);margin-bottom:10px">
-            Você pode colocar saldo inicial e ajustar depois caso dê diferença.
-          </div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-            ${rows}
-          </div>
-        </div>
-      `
-    );
-
-    $$("#fin-modal-body button[data-save-centro]").forEach(btn=>{
-      btn.addEventListener("click", ()=>{
-        const id = btn.getAttribute("data-save-centro");
-        const inp = $(`#fin-modal-body input[data-centro="${CSS.escape(id)}"]`);
-        const v = moneyToNumber(inp.value);
-        if(v==null){ alert("Valor inválido."); return; }
-        setBalance(id, v);
-        inp.value = fmtBRL(v);
-      });
     });
   }
 
   function openTransferModal(){
-    const centroOpts = S.enums.centro.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
-    openModal(
-      "TRANSFERIR entre Centros de Custo (manual)",
-      `<button class="fin-btn" data-act="close">VOLTAR</button><button class="fin-btn" id="btn-do-transfer">TRANSFERIR</button>`,
-      `
-        <div class="fin-card" style="border-radius:12px">
-          <div class="fin-filters" style="border-radius:12px">
-            <div class="fin-field">
-              <label>De</label>
-              <select id="tr-from">${centroOpts}</select>
-            </div>
-            <div class="fin-field">
-              <label>Para</label>
-              <select id="tr-to">${centroOpts}</select>
-            </div>
-            <div class="fin-field">
-              <label>Valor</label>
-              <input id="tr-val" placeholder="0,00"/>
-            </div>
-            <div class="fin-field" style="flex:1">
-              <label>Obs</label>
-              <input id="tr-obs" placeholder="Opcional"/>
-            </div>
-          </div>
+    openModal({
+      title: "Transferir entre Centros de Custo",
+      bodyHTML: `
+        <div class="fin-gridform">
+          ${selectInp("De (Centro)", "tfrom", S.ccOptions, S.selectedCC||"")}
+          ${selectInp("Para (Centro)", "tto", S.ccOptions, "")}
+          ${fieldInp("Valor", "tval", "")}
+          ${fieldInp("Data", "tdp", new Date().toISOString().slice(0,10), "date")}
+          ${fieldInp("Obs (opcional)", "tobs", "Transferência entre centros")}
+        </div>
+        <div class="fin-note" style="margin-top:10px">
+          Isso cria 2 lançamentos: 1 despesa no “De” e 1 receita no “Para”.
+        </div>
+      `,
+      footerHTML: `<button class="fin-mini" data-ok>Transferir</button>`,
+      onMount:(bd)=>{
+        $("[data-ok]", bd).addEventListener("click", async ()=>{
+          const from = $("#m-tfrom", bd).value || null;
+          const to = $("#m-tto", bd).value || null;
+          const val = toNum($("#m-tval", bd).value);
+          const dp = ymd($("#m-tdp", bd).value);
+          const obs = $("#m-tobs", bd).value.trim();
 
-          <div style="margin-top:10px;font-size:11px;font-weight:900;color:var(--muted)">
-            Isso ajusta os saldos manuais. Se você quiser, depois podemos registrar também como lançamento no Financeiro.
-          </div>
+          if(!from || !to || from===to || val==null){
+            alert("Preencha centros diferentes e valor.");
+            return;
+          }
+
+          // despesa
+          await bx("crm.deal.add", {
+            fields:{
+              TITLE:"Transferência (Saída)",
+              CATEGORY_ID: PIPELINE_FIN,
+              STAGE_ID: STAGES.EXP_PAY,
+              [UF.TIPO]:"DESPESA",
+              [UF.CC]: from,
+              [UF.FAV]:"Transferência entre centros",
+              [UF.VAL_PREV]: val,
+              [UF.DATA_PREV]: dp||null,
+              [UF.OBS]: obs,
+            }
+          });
+
+          // receita
+          await bx("crm.deal.add", {
+            fields:{
+              TITLE:"Transferência (Entrada)",
+              CATEGORY_ID: PIPELINE_FIN,
+              STAGE_ID: STAGES.REV_REC,
+              [UF.TIPO]:"RECEITA",
+              [UF.CC]: to,
+              [UF.FAV]:"Transferência entre centros",
+              [UF.VAL_PREV]: val,
+              [UF.DATA_PREV]: dp||null,
+              [UF.OBS]: obs,
+            }
+          });
+
+          bd.remove();
+          await refresh();
+        });
+      }
+    });
+  }
+
+  function openSaldoModal(){
+    openModal({
+      title:"Saldo inicial / ajuste (manual)",
+      bodyHTML: `
+        <div class="fin-note">
+          Você pediu: “saldo inicial manual e poder ajustar depois”.
+          <br><br>
+          Para funcionar de verdade, a gente precisa decidir onde armazenar:
+          <b>Opção A</b> (mais simples): criar um DEAL de “SALDO INICIAL” por centro de custo na pipeline 27.
+          <br><br>
+          Eu já posso fazer isso aqui com 1 clique, mas preciso saber:
+          vai ser Receita ou um tipo especial?
         </div>
       `
-    );
-
-    $("#btn-do-transfer").addEventListener("click", ()=>{
-      const from = $("#tr-from").value;
-      const to = $("#tr-to").value;
-      if(from===to){ alert("Escolha centros diferentes."); return; }
-      const v = moneyToNumber($("#tr-val").value);
-      if(v==null || v<=0){ alert("Informe um valor válido."); return; }
-
-      setBalance(from, getBalance(from) - v);
-      setBalance(to, getBalance(to) + v);
-
-      closeModal();
-      alert("Transferência aplicada nos saldos manuais.");
     });
   }
 
-  // =========================
-  // CSV Export (todos filtros)
-  // =========================
-  function exportCSV(list){
-    const rows = [
-      ["ID","Stage","Centro","Categoria","Favorecido","ValorPrev","ValorReal","DataPrev","DataReal","Conta","Obs"]
-    ];
-
-    for(const d of list){
-      rows.push([
-        d.ID,
-        d.STAGE_ID,
-        dealCentroLabel(d),
-        dealCategoriaLabel(d),
-        d[F.favorecido]||"",
-        d[F.valorPrev]||"",
-        d[F.valorReal]||"",
-        (d[F.dataPrev]||"").slice(0,10),
-        (d[F.dataReal]||"").slice(0,10),
-        dealContaLabel(d)||"",
-        (d[F.obs]||"").replace(/\r?\n/g," ")
-      ]);
-    }
-
-    const csv = rows.map(r=>r.map(v=>{
-      const s = String(v??"");
-      return `"${s.replace(/"/g,'""')}"`;
-    }).join(";")).join("\n");
-
-    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "financeiro_export.csv";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  }
-
-  // =========================
-  // NAV / EVENTS
-  // =========================
-  function bindGlobal(){
-    // nav buttons
-    $$(".fin-nav button").forEach(b=>{
-      b.addEventListener("click", ()=>{
-        $$(".fin-nav button").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active");
-        renderOverview(); // por enquanto mantendo overview como principal
-      });
-    });
-
-    $("#btn-refresh").addEventListener("click", refresh);
-
-    $("#btn-lote-desp").addEventListener("click", ()=> openBatchModal("DESP"));
-    $("#btn-lote-rec").addEventListener("click", ()=> openBatchModal("REC"));
-    $("#btn-cartoes").addEventListener("click", openCardsModal);
-    $("#btn-saldos").addEventListener("click", openBalancesModal);
-    $("#btn-transfer").addEventListener("click", openTransferModal);
-
-    $("#fin-q").addEventListener("input", ()=>{
-      S.filter.q = $("#fin-q").value || "";
-      renderOverview();
-    });
-
-    $("#fin-centro").addEventListener("change", renderOverview);
-    $("#fin-stage-mode").addEventListener("change", renderOverview);
-
-    // reserve change
-    $("#fin-reserve").addEventListener("blur", ()=>{
-      const v = moneyToNumber($("#fin-reserve").value);
-      reserveSet(v || 0);
-      renderOverview();
-    });
-
-    // modal background click to close
-    $("#fin-modal").addEventListener("click", (e)=>{
-      if(e.target && e.target.id==="fin-modal") closeModal();
+  function openReservaModal(){
+    openModal({
+      title:"Fundo de Reserva",
+      bodyHTML: `
+        <div class="fin-note">
+          Você pediu inserir “Fundo de Reserva”.  
+          Pra isso ficar certo, eu trato como um “Centro de Custo” específico (recomendado) ou como um campo separado.  
+          <br><br>
+          Se você me disser qual Centro de Custo representa a Reserva (ou se quer criar um novo), eu ligo os cálculos.
+        </div>
+      `
     });
   }
 
-  // =========================
-  // REFRESH
-  // =========================
+  // ========= DONUT MOCK =========
+  function renderDonutMock(list){
+    // só mostra total despesas visíveis
+    const exp = list.filter(d=>["Despesa"].includes(dealTypeLabel(d)) && d.STAGE_ID !== STAGES.CANCELED);
+    const total = exp.reduce((a,d)=> a + (toNum(d[UF.VAL_PREV]) || toNum(d[UF.VAL_REAL]) || 0), 0);
+    $("#fin-donut-center").textContent = total ? money(total) : "—";
+    $("#fin-donut-legend").textContent = "Depois eu conecto por categoria (real).";
+  }
+
+  // ========= AVATARS =========
+  async function loadUsersFooter(){
+    const wrap = $("#fin-avatars");
+    wrap.innerHTML = "";
+    // sem user.get você não consegue foto; então deixo fallback
+    FOOT.users.forEach(id=>{
+      const img = document.createElement("img");
+      img.className = "fin-avatar";
+      img.alt = "User " + id;
+      // fallback (placeholder)
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <rect width="64" height="64" fill="#ffffff"/>
+          <circle cx="32" cy="26" r="12" fill="#d1d5db"/>
+          <rect x="14" y="42" width="36" height="16" rx="8" fill="#d1d5db"/>
+          <text x="32" y="60" text-anchor="middle" font-family="Arial" font-size="10" fill="#6b7280">#${id}</text>
+        </svg>
+      `);
+      wrap.appendChild(img);
+    });
+  }
+
+  // ========= REFRESH =========
   async function refresh(){
-    // simples: recarrega deals e rerender
     await loadDeals();
-    renderOverview();
+    renderChecklists();
+    renderTable();
   }
 
-  // =========================
-  // INIT
-  // =========================
-  async function init(){
-    // monta UI
-    mountBase();
-
-    // balances
-    loadBalances();
-    reserveSet(reserveGet());
-
-    // sidebar month
-    buildMonthOptions();
-
-    // carrega fields/enums
-    await loadFields();
-
-    // users footer
-    await loadUsers();
-
-    // deals
-    await loadDeals();
-
-    // binds
-    bindGlobal();
-
-    // render
-    renderOverview();
-
-    // segurança: some sentinel se existir (você pediu)
-    const sentinel = document.getElementById("fin-sentinel");
-    if(sentinel) sentinel.style.display = "none";
-  }
-
-  // fallback fatal UI
+  // ========= INIT =========
   function showFatal(err){
-    const root = document.getElementById("fin-root") || document.body;
-    root.innerHTML = `
-      <div style="padding:14px;font-family:system-ui">
-        <div style="font-weight:1000;font-size:14px;margin-bottom:10px">Falha ao carregar o painel</div>
-        <pre style="white-space:pre-wrap;background:#fff;border:1px solid #ddd;border-radius:12px;padding:12px">${esc(err && (err.stack||err.message||err) || "Erro")}</pre>
-        <div style="margin-top:10px;font-size:12px;color:#666;font-weight:800">
-          Dica: se você não configurou FINANCEIRO_CFG.WEBHOOK_URL no HTML e seu Worker não tem /bx, vai dar erro de integração.
-        </div>
+    const r = document.getElementById("fin-root") || document.body;
+    r.innerHTML = `
+      <div style="padding:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial">
+        <div style="font-weight:950;font-size:14px;margin-bottom:8px">Falha ao carregar o painel</div>
+        <pre style="white-space:pre-wrap;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:12px;padding:12px;max-width:1100px;overflow:auto">${esc(err && (err.stack||err.message||err) || err)}</pre>
+        <div style="font-size:12px;opacity:.75;margin-top:8px">Dica: confira WEBHOOK_BASE no financeiro.js.</div>
       </div>
     `;
   }
@@ -1524,5 +1324,17 @@
   window.addEventListener("error", (e)=> showFatal(e.error || e.message || e));
   window.addEventListener("unhandledrejection", (e)=> showFatal(e.reason || e));
 
-  init().catch(showFatal);
+  (async function init(){
+    try{
+      mount();
+      setSentinelHidden();
+      bindUI();
+      await loadUsersFooter();
+      await loadFields();
+      fillSelects();
+      await refresh();
+    }catch(err){
+      showFatal(err);
+    }
+  })();
 })();
