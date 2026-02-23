@@ -1,6 +1,3 @@
-/* SUBSTITUA TODO SEU financeiro.js POR ESTE (Centro de custo na sidebar + Cartões modal + toggles + placeholders de gráficos)
-   Mantém ES5 compat.
-*/
 (function () {
   "use strict";
 
@@ -22,7 +19,6 @@
       partnersUserIds: [1, 27, 15]
     },
 
-    // Cartões (do que você já passou)
     CARDS: [
       { name:"CT ITAÚ PJ", venc:"02", melhor:"21" },
       { name:"CT PORTO PF", venc:"10", melhor:"04" },
@@ -33,7 +29,6 @@
       { name:"CT PORTO PJ", venc:"30", melhor:"25" }
     ],
 
-    // Campos UF
     F: {
       TIPO_FIN: "UF_CRM_1771208061",
       COMPETENCIA: "UF_CRM_1771163661",
@@ -59,95 +54,42 @@
       CONCLUIDO: "C27:UC_LP2NSK"
     },
 
-    PAGE_SIZE: 200
+    PAGE_SIZE: 300
   };
 
   var root = document.getElementById("fin-root") || document.body;
 
   function esc(s) {
     s = String(s == null ? "" : s);
-    return s
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 
-  function safeMsg(err) {
-    try { return err && (err.stack || err.message) ? String(err.stack || err.message) : String(err); }
-    catch (_) { return "Erro desconhecido"; }
-  }
+  function parseJson(text) { try { return JSON.parse(text); } catch (_) { return null; } }
 
-  function showFatal(msg, err) {
-    root.innerHTML =
-      '<div style="min-height:100vh;padding:16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;' +
-      "background: linear-gradient(180deg, #0b1020, #070a14);color:#e5e7eb;\">" +
-      '<div style="max-width:1100px;margin:0 auto;">' +
-      '<div style="display:flex;align-items:center;gap:10px;">' +
-      '<img src="' + esc(CFG.LOGO_URL) + '" style="width:44px;height:44px;border-radius:14px;background:#fff;padding:6px;object-fit:contain">' +
-      '<div><div style="font-weight:950;font-size:16px">Falha ao carregar</div><div style="opacity:.85;font-weight:800;font-size:12px">' + esc(msg || "Erro") + "</div></div>" +
-      "</div>" +
-      '<pre style="margin-top:14px;white-space:pre-wrap;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:12px;overflow:auto">' +
-      esc(safeMsg(err)) +
-      "</pre></div></div>";
-  }
+  function apiCall(method, payload) {
+    var body = JSON.stringify(payload || {});
+    var headers = { "content-type": "application/json" };
 
-  window.addEventListener("error", function (e) { showFatal("Erro JS", e.error || e.message || e); });
-  window.addEventListener("unhandledrejection", function (e) { showFatal("Promise rejeitada", e.reason || e); });
-
-  var S = {
-    enums: {},
-    stages: [],
-    deals: [],
-    filtered: [],
-    partners: [],
-    lastSyncAt: null,
-    loading: false,
-    apiMode: null,
-
-    // filtros
-    filters: {
-      q: "",
-      centro: "",     // sidebar
-      competencia: "",
-      tipo: "",
-      conta: "",
-      statusFin: "",
-      stageId: "",
-
-      // toggles
-      showPayables: true,   // despesas a pagar/pagas
-      showReceivables: true // receitas a receber/recebidas
-    },
-
-    // Fundo de reserva (localStorage)
-    reserve: {
-      balance: 0
+    function req(url) {
+      return fetch(url, { method: "POST", headers: headers, body: body })
+        .then(function (r) {
+          return r.text().then(function (txt) {
+            var j = parseJson(txt);
+            if (!r.ok) throw new Error((j && (j.error_description || j.error)) || txt || ("HTTP " + r.status));
+            if (j && j.error) throw new Error(j.error_description || j.error);
+            return { json: j || {}, mode: (url.indexOf("?method=") > -1 ? "query" : "path") };
+          });
+        });
     }
-  };
+
+    return req(API_BASE + "/" + method)
+      .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
+      .then(function (res) { S.apiMode = res.mode; return res.json; });
+  }
 
   function el(q) { return root.querySelector(q); }
   function els(q) { return Array.prototype.slice.call(root.querySelectorAll(q)); }
-
-  function setLoading(v) {
-    S.loading = !!v;
-    var badge = el("#fin-loading");
-    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
-    els("[data-busylock='1']").forEach(function (b) { b.disabled = S.loading; });
-  }
-
-  function toast(msg, type) {
-    type = type || "ok";
-    var host = el("#fin-toast-host");
-    if (!host) { alert(msg); return; }
-    var t = document.createElement("div");
-    t.className = "fin-toast fin-toast--" + type;
-    t.textContent = msg;
-    host.appendChild(t);
-    setTimeout(function () { t.classList.add("fin-toast--show"); }, 10);
-    setTimeout(function () {
-      t.classList.remove("fin-toast--show");
-      setTimeout(function () { if (t && t.parentNode) t.parentNode.removeChild(t); }, 200);
-    }, 3200);
-  }
 
   function nowBR() {
     var dt = new Date();
@@ -166,6 +108,28 @@
     var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (m) return m[3] + "-" + m[2] + "-" + m[1];
     return s;
+  }
+
+  function addDaysISO(iso, days) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setDate(d.getDate() + days);
+    var y = d.getFullYear();
+    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
+    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
+    return y + "-" + mo + "-" + da;
+  }
+
+  function addMonthsISO(iso, months) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setMonth(d.getMonth() + months);
+    var y = d.getFullYear();
+    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
+    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
+    return y + "-" + mo + "-" + da;
   }
 
   function moneyBR(v) {
@@ -189,57 +153,98 @@
     return isFinite(n) ? n : 0;
   }
 
-  function parseJson(text) { try { return JSON.parse(text); } catch (_) { return null; } }
-
-  function apiCall(method, payload) {
-    var body = JSON.stringify(payload || {});
-    var headers = { "content-type": "application/json" };
-
-    function req(url) {
-      return fetch(url, { method: "POST", headers: headers, body: body })
-        .then(function (r) {
-          return r.text().then(function (txt) {
-            var j = parseJson(txt);
-            if (!r.ok) {
-              var msg = (j && (j.error_description || j.error)) || txt || ("HTTP " + r.status);
-              throw new Error(msg);
-            }
-            if (j && j.error) throw new Error(j.error_description || j.error);
-            return { json: j || {}, mode: (url.indexOf("?method=") > -1 ? "query" : "path") };
-          });
-        });
-    }
-
-    return req(API_BASE + "/" + method)
-      .catch(function () { return req(API_BASE + "?method=" + encodeURIComponent(method)); })
-      .then(function (res) { S.apiMode = res.mode; return res.json; });
+  function toast(msg, type) {
+    type = type || "ok";
+    var host = el("#fin-toast-host");
+    if (!host) { alert(msg); return; }
+    var t = document.createElement("div");
+    t.className = "fin-toast fin-toast--" + type;
+    t.textContent = msg;
+    host.appendChild(t);
+    setTimeout(function () { t.classList.add("fin-toast--show"); }, 10);
+    setTimeout(function () {
+      t.classList.remove("fin-toast--show");
+      setTimeout(function () { if (t && t.parentNode) t.parentNode.removeChild(t); }, 200);
+    }, 3200);
   }
 
+  function setLoading(v) {
+    S.loading = !!v;
+    var badge = el("#fin-loading");
+    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
+    els("[data-busylock='1']").forEach(function (b) { b.disabled = S.loading; });
+  }
+
+  function modal(html) {
+    var wrap = document.createElement("div");
+    wrap.className = "fin-modal-wrap";
+    wrap.innerHTML =
+      '<div class="fin-modal-backdrop" data-close="1"></div>' +
+      '<div class="fin-modal">' + html + "</div>";
+    document.body.appendChild(wrap);
+
+    wrap.addEventListener("click", function (e) {
+      var t = e.target;
+      if (t && t.getAttribute && t.getAttribute("data-close") === "1") {
+        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      }
+    });
+
+    return {
+      node: wrap,
+      close: function () { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); },
+      q: function (s) { return wrap.querySelector(s); }
+    };
+  }
+
+  // ====== Estado ======
+  var S = {
+    enums: {},
+    stages: [],
+    deals: [],
+    filtered: [],
+    partners: [],
+    lastSyncAt: null,
+    loading: false,
+    apiMode: null,
+
+    filters: {
+      q: "",
+      centro: "",
+      competencia: "",
+      tipo: "",
+      conta: "",
+      statusFin: "",
+      stageId: "",
+
+      // checkbox globais (visibilidade)
+      showPayables: true,
+      showReceivables: true
+    },
+
+    reserve: { balance: 0 }
+  };
+
+  // ====== Helpers de enums ======
   function buildOptions(items, includeBlank, blankText) {
     if (includeBlank !== false) includeBlank = true;
     blankText = blankText || "— Todos —";
     var arr = Array.isArray(items) ? items : [];
     var out = [];
     if (includeBlank) out.push('<option value="">' + esc(blankText) + "</option>");
-    for (var i = 0; i < arr.length; i++) {
-      out.push('<option value="' + esc(arr[i].ID) + '">' + esc(arr[i].VALUE) + "</option>");
-    }
+    for (var i = 0; i < arr.length; i++) out.push('<option value="' + esc(arr[i].ID) + '">' + esc(arr[i].VALUE) + "</option>");
     return out.join("");
   }
 
   function enumName(fieldId, enumId) {
     if (!enumId) return "";
     var list = (S.enums && S.enums[fieldId]) ? S.enums[fieldId] : [];
-    for (var i = 0; i < list.length; i++) {
-      if (String(list[i].ID) === String(enumId)) return list[i].VALUE;
-    }
+    for (var i = 0; i < list.length; i++) if (String(list[i].ID) === String(enumId)) return list[i].VALUE;
     return String(enumId);
   }
 
   function stageName(stageId) {
-    for (var i = 0; i < S.stages.length; i++) {
-      if (String(S.stages[i].STATUS_ID) === String(stageId)) return S.stages[i].NAME;
-    }
+    for (var i = 0; i < S.stages.length; i++) if (String(S.stages[i].STATUS_ID) === String(stageId)) return S.stages[i].NAME;
     return String(stageId || "");
   }
 
@@ -260,6 +265,21 @@
     return stageId === CFG.STAGES.REC_A_RECEBER || stageId === CFG.STAGES.REC_RECEBIDA;
   }
 
+  function initialStageForTipo(tipoEnumId) {
+    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
+    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_A_PAGAR;
+    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_A_RECEBER;
+    return CFG.STAGES.DESP_A_PAGAR;
+  }
+
+  function paidStageForTipo(tipoEnumId) {
+    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
+    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_PAGA;
+    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_RECEBIDA;
+    return "";
+  }
+
+  // ====== Bitrix CRUD ======
   function updateDeal(id, fields) {
     return apiCall("crm.deal.update", { id: String(id), fields: fields || {} });
   }
@@ -268,7 +288,23 @@
       return r && r.result ? r.result : null;
     });
   }
+  function deleteDeal(id) {
+    return apiCall("crm.deal.delete", { id: String(id) });
+  }
 
+  // ====== Reserva (local) ======
+  function loadReserve() {
+    try {
+      var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
+      S.reserve.balance = raw ? Number(raw) : 0;
+      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
+    } catch (_) { S.reserve.balance = 0; }
+  }
+  function saveReserve() {
+    try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {}
+  }
+
+  // ====== Load Meta + Stages ======
   function loadMeta() {
     return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
       var fields = (fieldsRes && fieldsRes.result) ? fieldsRes.result : {};
@@ -299,6 +335,7 @@
     });
   }
 
+  // ====== Deals list (somente etapas permitidas) ======
   function listDealsAll() {
     var out = [];
     var start = 0;
@@ -331,153 +368,210 @@
     return loop();
   }
 
-  // ====== RESERVA ======
-  function loadReserve() {
-    try {
-      var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
-      S.reserve.balance = raw ? Number(raw) : 0;
-      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
-    } catch (_) { S.reserve.balance = 0; }
+  // ====== Avatars ======
+  function initialsFromName(name) {
+    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    var a = parts[0] ? parts[0].charAt(0) : "";
+    var b = parts[1] ? parts[1].charAt(0) : "";
+    var out = (a + b).toUpperCase();
+    return out || "CG";
   }
-  function saveReserve() {
-    try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {}
-  }
-
-  // ====== MODAL ======
-  function modal(html) {
-    var wrap = document.createElement("div");
-    wrap.className = "fin-modal-wrap";
-    wrap.innerHTML =
-      '<div class="fin-modal-backdrop" data-close="1"></div>' +
-      '<div class="fin-modal">' + html + "</div>";
-    document.body.appendChild(wrap);
-
-    wrap.addEventListener("click", function (e) {
-      var t = e.target;
-      if (t && t.getAttribute && t.getAttribute("data-close") === "1") {
-        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      }
-    });
-
-    return {
-      node: wrap,
-      close: function () { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); },
-      q: function (s) { return wrap.querySelector(s); }
-    };
-  }
-
-  function initialStageForTipo(tipoEnumId) {
-    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
-    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_A_PAGAR;
-    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_A_RECEBER;
-    return CFG.STAGES.DESP_A_PAGAR;
-  }
-
-  function paidStageForTipo(tipoEnumId) {
-    var txt = (enumName(CFG.F.TIPO_FIN, tipoEnumId) || "").toUpperCase();
-    if (txt.indexOf("DESP") > -1) return CFG.STAGES.DESP_PAGA;
-    if (txt.indexOf("REC") > -1) return CFG.STAGES.REC_RECEBIDA;
+  function resolveUserPhotoUrl(user) {
+    var raw = user && (user.PERSONAL_PHOTO_URL || user.PERSONAL_PHOTO || user.PHOTO || "");
+    if (!raw) return "";
+    if (typeof raw === "string" && raw.indexOf("http") === 0) return raw;
     return "";
   }
+  function loadPartners() {
+    return apiCall("user.get", { ID: CFG.FOOTER.partnersUserIds })
+      .then(function (r) { S.partners = (r && r.result) ? r.result : []; })
+      .catch(function () { S.partners = []; });
+  }
+  function renderPartnersAvatars() {
+    var host = el("#fin-avatars");
+    if (!host) return;
 
-  function openReserveModal() {
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Fundo de Reserva</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-field"><label>Saldo atual</label>' +
-          '<input id="rv" value="' + esc(String(S.reserve.balance || 0).replace(".", ",")) + '" placeholder="Ex.: 5000,00">' +
-        "</div>" +
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="rsave" data-busylock="1">Salvar</button>' +
-        "</div>" +
-      "</div>"
-    );
-    m.q("#rsave").addEventListener("click", function () {
-      var val = parseMoneyBR(m.q("#rv").value || "");
-      S.reserve.balance = val;
-      saveReserve();
-      toast("Reserva atualizada ✅");
-      m.close();
-      renderReserveCard();
-    });
+    var byId = {};
+    for (var i = 0; i < S.partners.length; i++) byId[String(S.partners[i].ID)] = S.partners[i];
+
+    var html = [];
+    for (var j = 0; j < CFG.FOOTER.partnersUserIds.length; j++) {
+      var id = CFG.FOOTER.partnersUserIds[j];
+      var u = byId[String(id)] || {};
+      var name = ((u.NAME || "") + " " + (u.LAST_NAME || "")).trim() || ("User " + id);
+      var url = resolveUserPhotoUrl(u);
+
+      if (url) html.push('<div class="fin-avatar" title="' + esc(name) + '"><img src="' + esc(url) + '" alt="' + esc(name) + '"></div>');
+      else html.push('<div class="fin-avatar" title="' + esc(name) + '">' + esc(initialsFromName(name)) + "</div>");
+    }
+    host.innerHTML = html.join("");
   }
 
-  function openCardsModal() {
-    var items = CFG.CARDS || [];
-    var rows = [];
-    for (var i = 0; i < items.length; i++) {
-      rows.push(
-        '<button class="fin-side-item" data-card="' + esc(items[i].name) + '" style="width:100%">' +
-          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(items[i].name) +
-          ' <span style="opacity:.7;font-weight:800">• Venc ' + esc(items[i].venc) + ' • Melhor ' + esc(items[i].melhor) + "</span></span>" +
+  // ====== Sidebar (Centro de custo) ======
+  function renderSidebarCenters() {
+    var host = el("#fin-side-centers");
+    if (!host) return;
+
+    var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
+    var sel = String(S.filters.centro || "");
+
+    function btn(id, label, active) {
+      return (
+        '<button class="fin-side-item ' + (active ? "is-active" : "") + '" data-centro="' + esc(id) + '">' +
+          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" +
         "</button>"
       );
     }
 
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Cartões</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-hint">Clique em um cartão para ver/editar previsões e lançamentos.</div>' +
-        '<div style="margin-top:12px; display:flex; flex-direction:column; gap:8px">' + rows.join("") + "</div>" +
-      "</div>"
-    );
+    var html = btn("", "Todos os centros", !sel);
+    for (var i = 0; i < items.length; i++) html += btn(String(items[i].ID), String(items[i].VALUE), sel === String(items[i].ID));
 
-    var btns = m.node.querySelectorAll("[data-card]");
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener("click", function () {
-        var name = this.getAttribute("data-card");
-        m.close();
-        openCardDetailModal(name);
+    host.innerHTML = html;
+
+    var bs = host.querySelectorAll("[data-centro]");
+    for (var k = 0; k < bs.length; k++) {
+      bs[k].addEventListener("click", function () {
+        S.filters.centro = this.getAttribute("data-centro") || "";
+        renderSidebarCenters();
+        applyFilters();
       });
     }
   }
 
-  function openCardDetailModal(cardName) {
-    // Por enquanto: mostra lançamentos filtrando por "Forma de pagamento" contendo cartão OU OBS contendo cartão
-    // (Mais tarde podemos oficializar via campo específico se você quiser)
-    var list = S.deals || [];
-    var matches = [];
-    var nameUpper = String(cardName || "").toUpperCase();
+  // ====== Totais ======
+  function renderTotals() {
+    var list = S.filtered || [];
+    var prev = 0, real = 0;
 
     for (var i = 0; i < list.length; i++) {
-      var d = list[i];
-      var fp = enumName(CFG.F.FORMA_PGTO, d[CFG.F.FORMA_PGTO]) || "";
-      var obs = String(d[CFG.F.OBS] || "");
-      var fav = String(d[CFG.F.FAVORECIDO] || "");
-      var hay = (fp + " " + obs + " " + fav).toUpperCase();
-      if (hay.indexOf(nameUpper) > -1) matches.push(d);
+      prev += Number(list[i][CFG.F.VALOR_PREV] || 0) || 0;
+      real += Number(list[i][CFG.F.VALOR_REAL] || 0) || 0;
     }
 
-    var lines = [];
-    for (var k = 0; k < matches.length && k < 200; k++) {
-      var x = matches[k];
-      lines.push(
-        "<tr>" +
-          '<td class="fin-mono">#' + esc(x.ID) + "</td>" +
-          "<td>" + esc(x[CFG.F.FAVORECIDO] || x.TITLE || "") + "</td>" +
-          '<td class="fin-mono">' + esc(toISODate(x[CFG.F.DATA_PREV] || "")) + "</td>" +
-          '<td class="fin-mono">' + esc(moneyBR(x[CFG.F.VALOR_PREV])) + "</td>" +
-          "<td>" + esc(stageName(x.STAGE_ID)) + "</td>" +
-        "</tr>"
-      );
-    }
+    if (el("#tot-prev")) el("#tot-prev").textContent = moneyBR(prev);
+    if (el("#tot-real")) el("#tot-real").textContent = moneyBR(real);
+    if (el("#reserve-balance")) el("#reserve-balance").textContent = moneyBR(S.reserve.balance || 0);
+    if (el("#tot-count")) el("#tot-count").textContent = String(list.length);
 
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(cardName) + "</div><button class=\"fin-x\" data-close=\"1\">×</button></div>" +
-      '<div class="fin-modal-body">' +
-        '<div class="fin-hint">Vencimento: <b>' + esc(cardName) + "</b>. Aqui lista lançamentos vinculados ao cartão.</div>" +
-        '<div class="fin-table-wrap" style="margin-top:12px">' +
-          '<table class="fin-table" style="min-width:720px">' +
-            "<thead><tr><th>ID</th><th>Favorecido</th><th>Data</th><th>Previsto</th><th>Etapa</th></tr></thead>" +
-            '<tbody>' + (lines.length ? lines.join("") : '<tr><td colspan="5" class="fin-muted">Nenhum lançamento encontrado para este cartão.</td></tr>') + "</tbody>" +
-          "</table>" +
-        "</div>" +
-        '<div class="fin-hint" style="margin-top:10px">Depois vamos adicionar: previsão de fatura, valor pago editável e painel do cartão.</div>' +
-      "</div>"
-    );
+    if (S.lastSyncAt && el("#fin-lastsync")) {
+      el("#fin-lastsync").textContent = "Atualizado em " + S.lastSyncAt + " • API: " + (S.apiMode || "?");
+    }
   }
 
+  // ====== Gráficos (placeholders; já posicionados abaixo dos checkboxes) ======
+  function renderChartsPlaceholders() {
+    var a = el("#chart-cat");
+    var b = el("#chart-evo");
+    if (a) a.innerHTML = '<div class="fin-chart-box">Pizza: Despesas por Categorias (próximo passo)</div>';
+    if (b) b.innerHTML = '<div class="fin-chart-box">Linha: Evolução Receitas x Despesas (próximo passo)</div>';
+  }
+
+  // ====== Aplicar filtros ======
+  function applyFilters() {
+    var q = String(S.filters.q || "").trim().toLowerCase();
+
+    S.filtered = (S.deals || []).filter(function (d) {
+      if (isBadFav(d[CFG.F.FAVORECIDO])) return false;
+
+      if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
+      if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
+      if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
+      if (S.filters.conta && String(d[CFG.F.CONTA] || "") !== String(S.filters.conta)) return false;
+      if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
+
+      // Etapa: default esconde CONCLUÍDO
+      if (S.filters.stageId) {
+        if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
+      } else {
+        if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
+      }
+
+      // checkbox globais (visibilidade)
+      if (!S.filters.showPayables && isExpenseStage(d.STAGE_ID)) return false;
+      if (!S.filters.showReceivables && isRevenueStage(d.STAGE_ID)) return false;
+
+      if (q) {
+        var hay = [
+          d.ID, d.TITLE,
+          d[CFG.F.FAVORECIDO],
+          d[CFG.F.OBS],
+          enumName(CFG.F.CONTA, d[CFG.F.CONTA]),
+          enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]),
+          enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA])
+        ].join(" ").toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    renderTable();
+    renderTotals();
+    renderChartsPlaceholders();
+  }
+
+  // ====== Modal “Realizar/Receber” (usado pelo checkbox por linha) ======
+  function openPayReceiveModal(deal) {
+    var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
+    var isRec = String(deal.STAGE_ID) === CFG.STAGES.REC_A_RECEBER;
+
+    var title = isDesp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(title) + '</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-grid">' +
+          '<div class="fin-field"><label>Valor pago/recebido</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
+          '<div class="fin-field"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+        '</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="pr-save" data-busylock="1">Salvar</button>' +
+        '</div>' +
+      '</div>'
+    );
+
+    m.q("#pr-save").addEventListener("click", function () {
+      setLoading(true);
+
+      var v = parseMoneyBR(m.q("#pr-val").value || "");
+      var dt = toISODate(m.q("#pr-date").value || "");
+      var paidStage = paidStageForTipo(deal[CFG.F.TIPO_FIN]);
+
+      var fields = {};
+      fields[CFG.F.VALOR_REAL] = v;
+      fields[CFG.F.DATA_REAL] = dt;
+      if (paidStage) fields.STAGE_ID = paidStage;
+
+      updateDeal(deal.ID, fields)
+        .then(function () { toast("Atualizado ✅"); m.close(); return refresh(); })
+        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
+        .finally(function () { setLoading(false); });
+    });
+  }
+
+  // ====== Excluir ======
+  function confirmDelete(deal) {
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">Excluir lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-hint">Tem certeza que deseja <b>EXCLUIR</b> o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?<br>Isso remove o negócio do Bitrix.</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
+        '</div>' +
+      '</div>'
+    );
+
+    m.q("#del-ok").addEventListener("click", function () {
+      setLoading(true);
+      deleteDeal(deal.ID)
+        .then(function () { toast("Excluído ✅"); m.close(); return refresh(); })
+        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
+        .finally(function () { setLoading(false); });
+    });
+  }
+
+  // ====== Edit/Novo simples ======
   function openEditModal(deal) {
     var isEdit = !!deal;
     function v(k) { return deal ? (deal[k] == null ? "" : deal[k]) : ""; }
@@ -488,56 +582,56 @@
         '<div class="fin-grid">' +
 
           '<div class="fin-field"><label>Tipo Financeiro</label>' +
-            '<select id="m-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + "</select>" +
-          "</div>" +
+            '<select id="m-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select>' +
+          '</div>' +
 
-          '<div class="fin-field"><label>Competência (mês)</label>' +
-            '<select id="m-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + "</select>" +
-          "</div>" +
+          '<div class="fin-field"><label>Competência</label>' +
+            '<select id="m-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select>' +
+          '</div>' +
 
           '<div class="fin-field"><label>Centro de custo</label>' +
-            '<select id="m-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + "</select>" +
-          "</div>" +
+            '<select id="m-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select>' +
+          '</div>' +
 
           '<div class="fin-field"><label>Conta / Origem</label>' +
-            '<select id="m-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + "</select>" +
-          "</div>" +
+            '<select id="m-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select>' +
+          '</div>' +
 
           '<div class="fin-field"><label>Data Prevista</label>' +
             '<input id="m-dprev" placeholder="YYYY-MM-DD" value="' + esc(toISODate(v(CFG.F.DATA_PREV))) + '">' +
-          "</div>" +
+          '</div>' +
 
           '<div class="fin-field"><label>Valor Previsto</label>' +
             '<input id="m-vprev" placeholder="Ex.: 1500,00" value="' + esc(v(CFG.F.VALOR_PREV)) + '">' +
-          "</div>" +
+          '</div>' +
 
           '<div class="fin-field"><label>Favorecido / Pagador</label>' +
             '<input id="m-fav" placeholder="Ex.: Light, Vivo, Cliente..." value="' + esc(v(CFG.F.FAVORECIDO)) + '">' +
-          "</div>" +
+          '</div>' +
 
           '<div class="fin-field"><label>Categoria</label>' +
-            '<select id="m-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + "</select>" +
-          "</div>" +
+            '<select id="m-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select>' +
+          '</div>' +
 
           '<div class="fin-field"><label>Status Financeiro</label>' +
-            '<select id="m-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + "</select>" +
-          "</div>" +
+            '<select id="m-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select>' +
+          '</div>' +
 
           '<div class="fin-field"><label>Forma de pagamento</label>' +
-            '<select id="m-forma">' + buildOptions(S.enums[CFG.F.FORMA_PGTO] || [], true, "—") + "</select>" +
-          "</div>" +
+            '<select id="m-forma">' + buildOptions(S.enums[CFG.F.FORMA_PGTO] || [], true, "—") + '</select>' +
+          '</div>' +
 
-        "</div>" +
+        '</div>' +
 
         '<div class="fin-field" style="margin-top:10px"><label>Observações</label>' +
-          '<textarea id="m-obs" rows="3">' + esc(v(CFG.F.OBS)) + "</textarea>" +
-        "</div>" +
+          '<textarea id="m-obs" rows="3">' + esc(v(CFG.F.OBS)) + '</textarea>' +
+        '</div>' +
 
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="m-save" data-busylock="1">' + (isEdit ? "Salvar" : "Criar") + "</button>" +
-        "</div>" +
-      "</div>"
+          '<button class="fin-btn fin-btn--primary" id="m-save" data-busylock="1">' + (isEdit ? "Salvar" : "Criar") + '</button>' +
+        '</div>' +
+      '</div>'
     );
 
     m.q("#m-tipo").value = String(v(CFG.F.TIPO_FIN) || "");
@@ -598,174 +692,163 @@
     });
   }
 
-  function markRealizado(deal) {
+  // ====== Lote (mensal/semanal/avulsa/cartão) ======
+  function openBatchModal() {
+    var cardOpts = ['<option value="">—</option>'];
+    for (var i = 0; i < CFG.CARDS.length; i++) cardOpts.push('<option value="' + esc(CFG.CARDS[i].name) + '">' + esc(CFG.CARDS[i].name) + "</option>");
+
     var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Marcar como realizado</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-head"><div class="fin-modal-title">Criar em lote</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
+
         '<div class="fin-grid">' +
-          '<div class="fin-field"><label>Valor realizado</label><input id="r-val" value="' + esc(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "") + '"></div>' +
-          '<div class="fin-field"><label>Data realizada</label><input id="r-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
-        "</div>" +
+          '<div class="fin-field"><label>Tipo Financeiro</label><select id="b-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select></div>' +
+          '<div class="fin-field"><label>Periodicidade</label>' +
+            '<select id="b-per">' +
+              '<option value="once">Avulsa (1x)</option>' +
+              '<option value="weekly">Semanal</option>' +
+              '<option value="monthly">Mensal</option>' +
+              '<option value="card">No cartão</option>' +
+            '</select>' +
+          '</div>' +
+
+          '<div class="fin-field"><label>Quantidade</label><input id="b-qtd" value="1" placeholder="Ex.: 12"></div>' +
+          '<div class="fin-field"><label>Primeira data prevista</label><input id="b-date" placeholder="YYYY-MM-DD"></div>' +
+
+          '<div class="fin-field"><label>Valor previsto</label><input id="b-val" placeholder="Ex.: 1500,00"></div>' +
+          '<div class="fin-field"><label>Competência</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+
+          '<div class="fin-field"><label>Centro de custo</label><select id="b-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
+          '<div class="fin-field"><label>Conta / Origem</label><select id="b-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+
+          '<div class="fin-field"><label>Categoria</label><select id="b-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
+          '<div class="fin-field"><label>Forma de pagamento</label><select id="b-forma">' + buildOptions(S.enums[CFG.F.FORMA_PGTO] || [], true, "—") + '</select></div>' +
+
+          '<div class="fin-field"><label>Cartão (se "No cartão")</label><select id="b-card">' + cardOpts.join("") + '</select></div>' +
+          '<div class="fin-field"><label>Favorecido/Pagador</label><input id="b-fav" placeholder="Ex.: Light, Vivo, Cliente..."></div>' +
+        '</div>' +
+
+        '<div class="fin-field" style="margin-top:10px"><label>Observações</label><textarea id="b-obs" rows="2"></textarea></div>' +
+
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="r-save" data-busylock="1">Salvar</button>' +
-        "</div>" +
-      "</div>"
+          '<button class="fin-btn fin-btn--primary" id="b-go" data-busylock="1">Criar em lote</button>' +
+        '</div>' +
+
+      '</div>'
     );
 
-    m.q("#r-save").addEventListener("click", function () {
+    m.q("#b-go").addEventListener("click", function () {
       setLoading(true);
-      var v = parseMoneyBR(m.q("#r-val").value || "");
-      var dt = toISODate(m.q("#r-date").value || "");
-      var paidStage = paidStageForTipo(deal[CFG.F.TIPO_FIN]);
+      try {
+        var tipo = m.q("#b-tipo").value;
+        if (!tipo) throw new Error("Selecione o Tipo Financeiro.");
 
-      var fields = {};
-      fields[CFG.F.VALOR_REAL] = v;
-      fields[CFG.F.DATA_REAL] = dt;
-      if (paidStage) fields.STAGE_ID = paidStage;
+        var per = m.q("#b-per").value;
+        var qtd = Math.max(1, parseInt(m.q("#b-qtd").value || "1", 10) || 1);
+        var first = toISODate(m.q("#b-date").value || "");
+        if (!first) throw new Error("Informe a primeira data prevista (YYYY-MM-DD).");
 
-      updateDeal(deal.ID, fields)
-        .then(function () { toast("Realizado salvo ✅"); m.close(); return refresh(); })
-        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
-        .finally(function () { setLoading(false); });
+        var vprev = parseMoneyBR(m.q("#b-val").value || "");
+        var comp = m.q("#b-comp").value || "";
+        var cc = m.q("#b-cc").value || "";
+        var conta = m.q("#b-conta").value || "";
+        var cat = m.q("#b-cat").value || "";
+        var forma = m.q("#b-forma").value || "";
+        var card = m.q("#b-card").value || "";
+        var fav = String(m.q("#b-fav").value || "").trim();
+        var obs = String(m.q("#b-obs").value || "").trim();
+
+        if (isBadFav(fav)) throw new Error("Favorecido inválido (parece FILA/QUEUE).");
+
+        var stage = initialStageForTipo(tipo);
+
+        var i;
+        var ops = Promise.resolve();
+        var created = 0;
+
+        function calcDate(idx) {
+          if (per === "weekly") return addDaysISO(first, idx * 7);
+          if (per === "monthly") return addMonthsISO(first, idx);
+          return first;
+        }
+
+        for (i = 0; i < qtd; i++) (function (idx) {
+          ops = ops.then(function () {
+            var dt = calcDate(idx);
+
+            var fields = {};
+            fields.TITLE = "FIN • " + (enumName(CFG.F.TIPO_FIN, tipo) || "FIN") + (fav ? " • " + fav : "");
+            fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
+            fields.STAGE_ID = stage;
+
+            fields[CFG.F.TIPO_FIN] = tipo;
+            fields[CFG.F.COMPETENCIA] = comp;
+            fields[CFG.F.CENTRO_CUSTO] = cc;
+            fields[CFG.F.CONTA] = conta;
+            fields[CFG.F.DATA_PREV] = dt;
+            fields[CFG.F.VALOR_PREV] = vprev;
+            fields[CFG.F.FAVORECIDO] = fav;
+            fields[CFG.F.CATEGORIA] = cat;
+            fields[CFG.F.FORMA_PGTO] = (per === "card" && card) ? "" : forma;
+            fields[CFG.F.OBS] = obs;
+
+            if (per === "card" && card) {
+              // “No cartão”: registra o nome do cartão na OBS e/ou Forma de Pagto (se preferir, depois fazemos campo dedicado)
+              fields[CFG.F.OBS] = (obs ? (obs + " | ") : "") + "CARTÃO: " + card;
+            }
+
+            return createDeal(fields).then(function () { created++; });
+          });
+        })(i);
+
+        ops.then(function () {
+          toast("Lote criado ✅ (" + created + " itens)");
+          m.close();
+          return refresh();
+        }).catch(function (e) {
+          toast("Falha no lote: " + (e.message || String(e)), "err");
+        }).finally(function () {
+          setLoading(false);
+        });
+
+      } catch (err) {
+        toast(err.message || String(err), "err");
+        setLoading(false);
+      }
     });
   }
 
-  function cancelDeal(deal) {
+  // ====== Reserva ======
+  function openReserveModal() {
     var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Cancelar lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-head"><div class="fin-modal-title">Fundo de Reserva</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
-        '<div class="fin-hint">Isso move o negócio para <b>CANCELADO</b>.</div>' +
+        '<div class="fin-field"><label>Saldo atual</label><input id="rv" value="' + esc(String(S.reserve.balance || 0).replace(".", ",")) + '" placeholder="Ex.: 5000,00"></div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Voltar</button>' +
-          '<button class="fin-btn fin-btn--danger" id="c-save" data-busylock="1">Cancelar</button>' +
-        "</div>" +
-      "</div>"
+          '<button class="fin-btn" data-close="1">Cancelar</button>' +
+          '<button class="fin-btn fin-btn--primary" id="rsave" data-busylock="1">Salvar</button>' +
+        '</div>' +
+      '</div>'
     );
-
-    m.q("#c-save").addEventListener("click", function () {
-      setLoading(true);
-      updateDeal(deal.ID, { STAGE_ID: CFG.STAGES.CANCELADO })
-        .then(function () { toast("Cancelado ✅"); m.close(); return refresh(); })
-        .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
-        .finally(function () { setLoading(false); });
+    m.q("#rsave").addEventListener("click", function () {
+      var val = parseMoneyBR(m.q("#rv").value || "");
+      S.reserve.balance = val;
+      saveReserve();
+      toast("Reserva atualizada ✅");
+      m.close();
+      renderTotals();
     });
   }
 
-  // ====== GRÁFICOS (placeholders agora; liga no próximo passo) ======
-  function renderChartsPlaceholders() {
-    var host1 = el("#chart-cat");
-    var host2 = el("#chart-evo");
-    if (host1) host1.innerHTML = '<div style="height:220px;border:1px dashed #cbd5e1;border-radius:14px;background:#fff;display:grid;place-items:center;font-weight:950;color:#111827">Pizza: Despesas por Categorias (em breve)</div>';
-    if (host2) host2.innerHTML = '<div style="height:220px;border:1px dashed #cbd5e1;border-radius:14px;background:#fff;display:grid;place-items:center;font-weight:950;color:#111827">Linha: Evolução Receitas x Despesas (em breve)</div>';
-  }
-
-  // ====== Sidebar: Centro de custo ======
-  function renderSidebarCenters() {
-    var host = el("#fin-side-centers");
-    if (!host) return;
-
-    var items = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
-    var sel = String(S.filters.centro || "");
-
-    function btn(id, label, active) {
-      return (
-        '<button class="fin-side-item ' + (active ? "is-active" : "") + '" data-centro="' + esc(id) + '">' +
-          '<span class="fin-dot"></span><span class="fin-side-label">' + esc(label) + "</span>" +
-        "</button>"
-      );
-    }
-
-    var html = btn("", "Todos os centros", !sel);
-    for (var i = 0; i < items.length; i++) html += btn(String(items[i].ID), String(items[i].VALUE), sel === String(items[i].ID));
-
-    host.innerHTML = html;
-
-    var bs = host.querySelectorAll("[data-centro]");
-    for (var k = 0; k < bs.length; k++) {
-      bs[k].addEventListener("click", function () {
-        S.filters.centro = this.getAttribute("data-centro") || "";
-        renderSidebarCenters();
-        applyFilters();
-      });
-    }
-  }
-
-  // ====== Filters + toggles ======
-  function applyFilters() {
-    var q = String(S.filters.q || "").trim().toLowerCase();
-
-    S.filtered = (S.deals || []).filter(function (d) {
-      if (isBadFav(d[CFG.F.FAVORECIDO])) return false;
-
-      // Sidebar: centro de custo
-      if (S.filters.centro && String(d[CFG.F.CENTRO_CUSTO] || "") !== String(S.filters.centro)) return false;
-
-      if (S.filters.competencia && String(d[CFG.F.COMPETENCIA] || "") !== String(S.filters.competencia)) return false;
-      if (S.filters.tipo && String(d[CFG.F.TIPO_FIN] || "") !== String(S.filters.tipo)) return false;
-      if (S.filters.conta && String(d[CFG.F.CONTA] || "") !== String(S.filters.conta)) return false;
-      if (S.filters.statusFin && String(d[CFG.F.STATUS_FIN] || "") !== String(S.filters.statusFin)) return false;
-
-      // Etapa: default esconde CONCLUÍDO
-      if (S.filters.stageId) {
-        if (String(d.STAGE_ID || "") !== String(S.filters.stageId)) return false;
-      } else {
-        if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
-      }
-
-      // toggles despesas/receitas
-      if (!S.filters.showPayables && isExpenseStage(d.STAGE_ID)) return false;
-      if (!S.filters.showReceivables && isRevenueStage(d.STAGE_ID)) return false;
-
-      if (q) {
-        var hay = [
-          d.ID, d.TITLE,
-          d[CFG.F.FAVORECIDO],
-          d[CFG.F.OBS],
-          enumName(CFG.F.CONTA, d[CFG.F.CONTA]),
-          enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]),
-          enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA])
-        ].join(" ").toLowerCase();
-        if (hay.indexOf(q) === -1) return false;
-      }
-      return true;
-    });
-
-    renderTable();
-    renderTotals();
-    renderChartsPlaceholders();
-  }
-
-  function renderTotals() {
-    var list = S.filtered || [];
-    var prev = 0, real = 0;
-
-    for (var i = 0; i < list.length; i++) {
-      prev += Number(list[i][CFG.F.VALOR_PREV] || 0) || 0;
-      real += Number(list[i][CFG.F.VALOR_REAL] || 0) || 0;
-    }
-
-    if (el("#tot-prev")) el("#tot-prev").textContent = moneyBR(prev);
-    if (el("#tot-real")) el("#tot-real").textContent = moneyBR(real);
-    if (el("#tot-count")) el("#tot-count").textContent = String(list.length);
-
-    if (S.lastSyncAt && el("#fin-lastsync")) {
-      el("#fin-lastsync").textContent = "Atualizado em " + S.lastSyncAt + " • API: " + (S.apiMode || "?");
-    }
-  }
-
-  function renderReserveCard() {
-    var x = el("#reserve-balance");
-    if (x) x.textContent = moneyBR(S.reserve.balance || 0);
-  }
-
+  // ====== Tabela (com checkbox por linha + excluir) ======
   function renderTable() {
     var tb = el("#fin-tbody");
     if (!tb) return;
 
     var list = S.filtered || [];
     if (!list.length) {
-      tb.innerHTML = '<tr><td colspan="10" class="fin-muted">Nenhum item encontrado.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="11" class="fin-muted">Nenhum item encontrado.</td></tr>';
       return;
     }
 
@@ -773,6 +856,12 @@
     for (var i = 0; i < list.length && i < CFG.PAGE_SIZE; i++) {
       var d = list[i];
       var fav = d[CFG.F.FAVORECIDO] || d.TITLE || "";
+
+      var canCheck = (String(d.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR) || (String(d.STAGE_ID) === CFG.STAGES.REC_A_RECEBER);
+      var chkLabel = (String(d.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR) ? "Pagar" : ((String(d.STAGE_ID) === CFG.STAGES.REC_A_RECEBER) ? "Receber" : "");
+      var chk = canCheck
+        ? '<span class="fin-rowchk"><input type="checkbox" data-act="chk" data-id="' + esc(d.ID) + '"><span>' + esc(chkLabel) + '</span></span>'
+        : '<span class="fin-muted">—</span>';
 
       rows.push(
         "<tr>" +
@@ -785,11 +874,12 @@
           '<td class="fin-mono">' + esc(toISODate(d[CFG.F.DATA_PREV] || "")) + "</td>" +
           '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_PREV])) + "</td>" +
           '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_REAL])) + "</td>" +
+          "<td>" + esc(stageName(d.STAGE_ID)) + "</td>" +
           "<td>" +
             '<div class="fin-actions-row">' +
+              chk +
               '<button class="fin-mini" data-act="edit" data-id="' + esc(d.ID) + '">Editar</button>' +
-              '<button class="fin-mini fin-mini--ok" data-act="real" data-id="' + esc(d.ID) + '">Realizar</button>' +
-              '<button class="fin-mini fin-mini--danger" data-act="cancel" data-id="' + esc(d.ID) + '">Cancelar</button>' +
+              '<button class="fin-mini fin-mini--danger" data-act="del" data-id="' + esc(d.ID) + '">Excluir</button>' +
             "</div>" +
           "</td>" +
         "</tr>"
@@ -798,20 +888,22 @@
 
     tb.innerHTML = rows.join("");
 
-    var btns = tb.querySelectorAll("button[data-act]");
+    var btns = tb.querySelectorAll("[data-act]");
     for (var j = 0; j < btns.length; j++) {
       btns[j].addEventListener("click", function () {
         var id = this.getAttribute("data-id");
         var act = this.getAttribute("data-act");
         var deal = null;
-        for (var x = 0; x < S.deals.length; x++) {
-          if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
-        }
+        for (var x = 0; x < S.deals.length; x++) if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
         if (!deal) return;
 
-        if (act === "edit") openEditModal(deal);
-        if (act === "real") markRealizado(deal);
-        if (act === "cancel") cancelDeal(deal);
+        if (act === "edit") return openEditModal(deal);
+        if (act === "del") return confirmDelete(deal);
+        if (act === "chk") {
+          // evita “marcar” visualmente; usa só como gatilho
+          try { this.checked = false; } catch(_) {}
+          return openPayReceiveModal(deal);
+        }
       });
     }
   }
@@ -861,151 +953,117 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1200);
   }
 
-  // ====== Avatars ======
-  function initialsFromName(name) {
-    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-    var a = parts[0] ? parts[0].charAt(0) : "";
-    var b = parts[1] ? parts[1].charAt(0) : "";
-    var out = (a + b).toUpperCase();
-    return out || "CG";
-  }
-  function resolveUserPhotoUrl(user) {
-    var raw = user && (user.PERSONAL_PHOTO_URL || user.PERSONAL_PHOTO || user.PHOTO || "");
-    if (!raw) return "";
-    if (typeof raw === "string" && raw.indexOf("http") === 0) return raw;
-    return "";
-  }
-  function loadPartners() {
-    return apiCall("user.get", { ID: CFG.FOOTER.partnersUserIds })
-      .then(function (r) { S.partners = (r && r.result) ? r.result : []; })
-      .catch(function () { S.partners = []; });
-  }
-  function renderPartnersAvatars() {
-    var host = el("#fin-avatars");
-    if (!host) return;
-
-    var byId = {};
-    for (var i = 0; i < S.partners.length; i++) byId[String(S.partners[i].ID)] = S.partners[i];
-
-    var html = [];
-    for (var j = 0; j < CFG.FOOTER.partnersUserIds.length; j++) {
-      var id = CFG.FOOTER.partnersUserIds[j];
-      var u = byId[String(id)] || {};
-      var name = ((u.NAME || "") + " " + (u.LAST_NAME || "")).trim() || ("User " + id);
-      var url = resolveUserPhotoUrl(u);
-
-      if (url) html.push('<div class="fin-avatar" title="' + esc(name) + '"><img src="' + esc(url) + '" alt="' + esc(name) + '"></div>');
-      else html.push('<div class="fin-avatar" title="' + esc(name) + '">' + esc(initialsFromName(name)) + "</div>");
-    }
-    host.innerHTML = html.join("");
-  }
-
-  // ====== Render ======
+  // ====== Render (layout corrigido: header/footer full width) ======
   function render() {
     root.innerHTML =
-      '<div class="fin-shell">' +
-        '<aside class="fin-side">' +
-          '<div class="fin-side-brand">' +
-            '<img class="fin-brand-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
-            '<div><div class="fin-brand-title">Financeiro CGD</div><div class="fin-brand-sub">Deals • Pipeline 27</div></div>' +
-          "</div>" +
+      '<div class="fin-page">' +
 
-          '<div class="fin-side-block">' +
-            '<div class="fin-side-h">Centro de custo</div>' +
-            '<div id="fin-side-centers" class="fin-side-list"></div>' +
-          "</div>" +
-        "</aside>" +
+        '<header class="fin-topbar">' +
+          '<div class="fin-top-left">' +
+            '<img class="fin-top-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
+            '<div>' +
+              '<div class="fin-top-title">Financeiro CGD</div>' +
+              '<div class="fin-top-sub"><span id="fin-lastsync">—</span> <span id="fin-loading" class="fin-loading" style="display:none">Carregando…</span></div>' +
+            '</div>' +
+          '</div>' +
 
-        '<main class="fin-main">' +
-          '<header class="fin-topbar">' +
-            '<div class="fin-top-left">' +
-              '<img class="fin-top-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
-              '<div>' +
-                '<div class="fin-top-title">Financeiro CGD</div>' +
-                '<div class="fin-top-sub"><span id="fin-lastsync">—</span> <span id="fin-loading" class="fin-loading" style="display:none">Carregando…</span></div>' +
-              "</div>" +
-            "</div>" +
+          '<div class="fin-top-actions">' +
+            '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
+            '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
+            '<button class="fin-btn fin-btn--primary" id="btn-new" data-busylock="1">NOVO</button>' +
+            '<button class="fin-btn fin-btn--primary" id="btn-batch" data-busylock="1">LOTE</button>' +
+            '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
+            '<button class="fin-btn" id="btn-csv" data-busylock="1">EXPORTAR CSV</button>' +
+          '</div>' +
+        '</header>' +
 
-            '<div class="fin-top-actions">' +
-              '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
-              '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
-              '<button class="fin-btn" id="btn-cards" data-busylock="1">CARTÕES</button>' +
-              '<button class="fin-btn fin-btn--primary" id="btn-new" data-busylock="1">NOVO</button>' +
-              '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
-              '<button class="fin-btn" id="btn-csv" data-busylock="1">EXPORTAR CSV</button>' +
-            "</div>" +
-          "</header>" +
+        '<div class="fin-body">' +
+          '<aside class="fin-side">' +
+            '<div class="fin-side-brand">' +
+              '<img class="fin-brand-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
+              '<div><div class="fin-brand-title">Financeiro CGD</div><div class="fin-brand-sub">Deals • Pipeline 27</div></div>' +
+            '</div>' +
 
-          '<section class="fin-panel"><div class="fin-panel-inner">' +
+            '<div class="fin-side-block">' +
+              '<div class="fin-side-h">Centro de custo</div>' +
+              '<div id="fin-side-centers" class="fin-side-list"></div>' +
+            '</div>' +
+          '</aside>' +
 
-            '<div class="fin-kpis">' +
-              '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
-              '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
-              '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
-            "</div>" +
+          '<main>' +
+            '<section class="fin-panel"><div class="fin-panel-inner">' +
 
-            '<div class="fin-filters">' +
-              '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + "</select></div>" +
-              '<div class="fin-field"><label>Tipo</label><select id="f-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || []) + "</select></div>" +
-              '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + "</select></div>" +
-              '<div class="fin-field"><label>Status</label><select id="f-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + "</select></div>" +
-              '<div class="fin-field"><label>Etapa</label><select id="f-stage"><option value="">— Todos (exceto CONCLUÍDO) —</option>' +
-                (S.stages || []).map(function (s) { return '<option value="' + esc(s.STATUS_ID) + '">' + esc(s.NAME) + "</option>"; }).join("") +
-              "</select></div>" +
+              '<div class="fin-kpis">' +
+                '<div class="fin-kpi"><div class="fin-kpi-k">Total Previsto</div><div class="fin-kpi-v" id="tot-prev">—</div></div>' +
+                '<div class="fin-kpi"><div class="fin-kpi-k">Total Realizado</div><div class="fin-kpi-v" id="tot-real">—</div></div>' +
+                '<div class="fin-kpi"><div class="fin-kpi-k">Fundo de reserva</div><div class="fin-kpi-v" id="reserve-balance">—</div></div>' +
+              '</div>' +
 
-              '<div class="fin-field" style="margin-left:auto"><label>Despesas</label>' +
-                '<select id="tog-exp"><option value="1">A PAGAR + PAGAS</option><option value="0">Ocultar</option></select>' +
-              "</div>" +
-              '<div class="fin-field"><label>Receitas</label>' +
-                '<select id="tog-rec"><option value="1">A RECEBER + RECEBIDAS</option><option value="0">Ocultar</option></select>' +
-              "</div>" +
-            "</div>" +
+              '<div class="fin-filters">' +
+                '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
+                '<div class="fin-field"><label>Tipo</label><select id="f-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || []) + '</select></div>' +
+                '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
+                '<div class="fin-field"><label>Status</label><select id="f-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select></div>' +
+                '<div class="fin-field"><label>Etapa</label><select id="f-stage"><option value="">— Todos (exceto CONCLUÍDO) —</option>' +
+                  (S.stages || []).map(function (s) { return '<option value="' + esc(s.STATUS_ID) + '">' + esc(s.NAME) + '</option>'; }).join("") +
+                '</select></div>' +
 
-            '<div style="display:grid;grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">' +
-              '<div id="chart-cat"></div>' +
-              '<div id="chart-evo"></div>' +
-            "</div>" +
+                '<div style="flex-basis:100%; height:0"></div>' +
 
-            '<div class="fin-table-wrap" style="margin-top:12px">' +
-              '<table class="fin-table">' +
-                "<thead><tr>" +
-                  '<th style="width:76px">ID</th>' +
-                  "<th>Favorecido</th>" +
-                  '<th style="width:170px">Centro</th>' +
-                  '<th style="width:170px">Conta</th>' +
-                  '<th style="width:140px">Tipo</th>' +
-                  '<th style="width:130px">Competência</th>' +
-                  '<th style="width:120px">Data Prev.</th>' +
-                  '<th style="width:140px">Previsto</th>' +
-                  '<th style="width:140px">Realizado</th>' +
-                  '<th style="width:240px">Ações</th>' +
-                "</tr></thead>" +
-                '<tbody id="fin-tbody"><tr><td colspan="10" class="fin-muted">Carregando…</td></tr></tbody>' +
-              "</table>" +
-            "</div>" +
+                '<div class="fin-toggles">' +
+                  '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas (A PAGAR + PAGAS)</span></label>' +
+                  '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas (A RECEBER + RECEBIDAS)</span></label>' +
+                '</div>' +
 
-            '<div id="fin-toast-host" class="fin-toast-host"></div>' +
-          "</div></section>" +
+                '<div class="fin-charts" style="flex-basis:100%">' +
+                  '<div id="chart-cat"></div>' +
+                  '<div id="chart-evo"></div>' +
+                '</div>' +
+              '</div>' +
 
-          '<footer class="fin-footerbar">' +
-            '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + "</div></div>" +
-            '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + "</div>" +
-            '<div class="fin-footer-right">' +
-              CFG.FOOTER.companies.map(function (c) {
-                return '<div class="fin-footer-box"><div class="t">' + esc(c.name) + '</div><div class="s">' + esc(c.meta) + "</div></div>";
-              }).join("") +
-            "</div>" +
-            '<div class="fin-footer-avatars" id="fin-avatars"></div>' +
-          "</footer>" +
+              '<div class="fin-table-wrap" style="margin-top:12px">' +
+                '<table class="fin-table">' +
+                  '<thead><tr>' +
+                    '<th style="width:76px">ID</th>' +
+                    '<th>Favorecido</th>' +
+                    '<th style="width:170px">Centro</th>' +
+                    '<th style="width:170px">Conta</th>' +
+                    '<th style="width:140px">Tipo</th>' +
+                    '<th style="width:130px">Competência</th>' +
+                    '<th style="width:120px">Data Prev.</th>' +
+                    '<th style="width:140px">Previsto</th>' +
+                    '<th style="width:140px">Realizado</th>' +
+                    '<th style="width:160px">Etapa</th>' +
+                    '<th style="width:320px">Ações</th>' +
+                  '</tr></thead>' +
+                  '<tbody id="fin-tbody"><tr><td colspan="11" class="fin-muted">Carregando…</td></tr></tbody>' +
+                '</table>' +
+              '</div>' +
 
-        "</main>" +
-      "</div>";
+              '<div id="fin-toast-host" class="fin-toast-host"></div>' +
 
-    // events
+            '</div></section>' +
+          '</main>' +
+        '</div>' +
+
+        '<footer class="fin-footerbar">' +
+          '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + '</div></div>' +
+          '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + '</div>' +
+          '<div class="fin-footer-right">' +
+            CFG.FOOTER.companies.map(function (c) {
+              return '<div class="fin-footer-box"><div class="t">' + esc(c.name) + '</div><div class="s">' + esc(c.meta) + '</div></div>';
+            }).join("") +
+          '</div>' +
+          '<div class="fin-footer-avatars" id="fin-avatars"></div>' +
+        '</footer>' +
+
+      '</div>';
+
+    // Events
     el("#btn-new").addEventListener("click", function () { openEditModal(null); });
+    el("#btn-batch").addEventListener("click", function () { openBatchModal(); });
     el("#btn-refresh").addEventListener("click", function () { refresh(); });
     el("#btn-csv").addEventListener("click", function () { exportCSV(); });
-    el("#btn-cards").addEventListener("click", function () { openCardsModal(); });
     el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
 
     el("#f-q").addEventListener("input", function (e) { S.filters.q = e.target.value || ""; applyFilters(); });
@@ -1015,13 +1073,14 @@
     el("#f-status").addEventListener("change", function () { S.filters.statusFin = el("#f-status").value || ""; applyFilters(); });
     el("#f-stage").addEventListener("change", function () { S.filters.stageId = el("#f-stage").value || ""; applyFilters(); });
 
-    el("#tog-exp").addEventListener("change", function () { S.filters.showPayables = (el("#tog-exp").value === "1"); applyFilters(); });
-    el("#tog-rec").addEventListener("change", function () { S.filters.showReceivables = (el("#tog-rec").value === "1"); applyFilters(); });
+    el("#tog-exp").addEventListener("change", function () { S.filters.showPayables = !!el("#tog-exp").checked; applyFilters(); });
+    el("#tog-rec").addEventListener("change", function () { S.filters.showReceivables = !!el("#tog-rec").checked; applyFilters(); });
 
     renderSidebarCenters();
-    renderReserveCard();
+    renderChartsPlaceholders();
   }
 
+  // ====== Refresh ======
   function refresh() {
     setLoading(true);
     return listDealsAll()
@@ -1033,7 +1092,7 @@
       .catch(function (e) {
         toast("Falha ao carregar: " + (e.message || String(e)), "err");
         var tb = el("#fin-tbody");
-        if (tb) tb.innerHTML = '<tr><td colspan="10" class="fin-muted">Erro: ' + esc(e.message || String(e)) + "</td></tr>";
+        if (tb) tb.innerHTML = '<tr><td colspan="11" class="fin-muted">Erro: ' + esc(e.message || String(e)) + '</td></tr>';
       })
       .finally(function () { setLoading(false); });
   }
@@ -1049,6 +1108,7 @@
     };
   }
 
+  // ====== Boot ======
   function boot() {
     try {
       var s = document.getElementById("fin-sentinel");
@@ -1056,8 +1116,6 @@
     } catch (_) {}
 
     loadReserve();
-
-    root.innerHTML = '<div class="fin-boot"><div class="fin-boot-card"><div class="fin-boot-title">Financeiro CGD</div><div class="fin-boot-sub">Carregando…</div></div></div>';
 
     return loadMeta()
       .then(function () {
@@ -1068,8 +1126,14 @@
         renderPartnersAvatars();
         return refresh();
       })
-      .catch(function (e) { showFatal("Erro ao iniciar", e); });
+      .catch(function (e) {
+        toast("Erro ao iniciar: " + (e.message || String(e)), "err");
+        root.innerHTML = '<div style="padding:16px;color:#fff">Falha ao iniciar. Veja console.</div>';
+      });
   }
+
+  window.addEventListener("error", function () { /* erros já aparecem via console; UI usa toasts */ });
+  window.addEventListener("unhandledrejection", function () { /* idem */ });
 
   boot();
 })();
