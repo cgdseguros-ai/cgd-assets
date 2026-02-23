@@ -487,3 +487,14 @@ body{
   .fin-footer-right{justify-content:flex-start; flex-wrap:wrap}
   .fin-footer-avatars{justify-content:flex-start}
 }
+
+/* ✅ PATCH: modal "quase tela cheia" + botão voltar */
+.fin-modal.is-full{
+  width: min(1600px, calc(100% - 24px));
+  height: calc(100% - 34px);
+  max-height: 92vh;
+}
+.fin-modal.is-full .fin-modal-body{
+  max-height: calc(92vh - 56px);
+  overflow: auto;
+}
