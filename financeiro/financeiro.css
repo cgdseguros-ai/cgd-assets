@@ -1,8 +1,5 @@
 /* financeiro.css — CGD Financeiro (COMPLETO) */
 
-/* =========================
-   Reset / Base
-========================= */
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body{
@@ -28,24 +25,14 @@ img{ max-width:100%; display:block; }
   --darkText: #fff;
 }
 
-/* Helpers */
 .fin-muted{ color: var(--muted); }
 .fin-strong{ font-weight: 950; }
 .fin-small{ font-size: 12px; }
 .fin-mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
-/* =========================
-   Page Layout
-========================= */
-.fin-page{
-  min-height: 100vh;
-  background: var(--bg);
-}
+.fin-page{ min-height: 100vh; background: var(--bg); }
 
-/* dá espaço pro rodapé fixo */
-.fin-shell{
-  padding-bottom: 86px;
-}
+.fin-shell{ padding-bottom: 86px; }
 
 .fin-body{
   display:flex;
@@ -54,7 +41,7 @@ img{ max-width:100%; display:block; }
 }
 
 /* =========================
-   TOPBAR (pedido)
+   TOPBAR (corrigido)
 ========================= */
 .fin-topbar{
   position: sticky;
@@ -67,8 +54,8 @@ img{ max-width:100%; display:block; }
   gap:14px;
 
   padding: 10px 14px;
-  background: var(--dark);              /* ✅ */
-  color: var(--darkText);              /* ✅ */
+  background: var(--dark);
+  color: var(--darkText);
   border-bottom: 1px solid var(--darkBorder);
 }
 
@@ -79,7 +66,9 @@ img{ max-width:100%; display:block; }
   min-width: 260px;
 }
 
-/* ✅ Logo redonda e +100% (2x) */
+/* ✅ Logo redonda +100% sem destruir layout
+   (assumindo logo “antes” ~28px -> agora 56px)
+*/
 .fin-top-logo{
   width: 56px;
   height: 56px;
@@ -87,15 +76,11 @@ img{ max-width:100%; display:block; }
   object-fit: cover;
   background:#fff;
   border: 2px solid rgba(255,255,255,.25);
-  transform: scale(2);
-  transform-origin: left center;
 }
 
-/* Ajusta espaço do logo 2x sem “empurrar” tudo demais */
-.fin-top-left{ padding-left: 52px; }
-@media (max-width: 980px){
-  .fin-top-left{ padding-left: 40px; }
-  .fin-top-logo{ transform: scale(1.6); }
+/* Ajuste responsivo (mobile) */
+@media (max-width: 720px){
+  .fin-top-logo{ width: 44px; height: 44px; }
 }
 
 .fin-top-title{
@@ -122,7 +107,7 @@ img{ max-width:100%; display:block; }
   font-weight: 900;
 }
 
-/* ✅ busca branca e texto preto */
+/* Busca branca e texto preto */
 .fin-search{
   display:flex;
   align-items:center;
@@ -149,6 +134,21 @@ img{ max-width:100%; display:block; }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+/* botões no topbar */
+.fin-topbar .fin-btn{
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08);
+  color: #fff;
+}
+.fin-topbar .fin-btn:hover{ background: rgba(255,255,255,.12); }
+
+.fin-topbar .fin-btn--primary{
+  background: #fff;
+  color: #2c2c2c;
+  border-color: rgba(255,255,255,.25);
+}
+.fin-topbar .fin-btn--primary:hover{ filter: brightness(.96); }
 
 /* =========================
    Sidebar
@@ -199,12 +199,7 @@ img{ max-width:100%; display:block; }
   border-color: rgba(0,0,0,.18);
   box-shadow: 0 10px 22px rgba(0,0,0,.08);
 }
-.fin-dot{
-  width:10px;
-  height:10px;
-  border-radius: 999px;
-  background: rgba(0,0,0,.25);
-}
+.fin-dot{ width:10px; height:10px; border-radius: 999px; background: rgba(0,0,0,.25); }
 .fin-side-label{ font-size: 13px; }
 
 /* =========================
@@ -219,11 +214,8 @@ main{ flex:1 1 auto; min-width: 0; }
   box-shadow: var(--shadow2);
   overflow:hidden;
 }
-.fin-panel-inner{
-  padding: 14px;
-}
+.fin-panel-inner{ padding: 14px; }
 
-/* KPIs */
 .fin-kpis{
   display:grid;
   grid-template-columns: repeat(3, minmax(180px, 1fr));
@@ -238,7 +230,6 @@ main{ flex:1 1 auto; min-width: 0; }
 .fin-kpi-k{ color: var(--muted); font-size: 12px; font-weight: 900; }
 .fin-kpi-v{ font-size: 18px; font-weight: 950; margin-top: 6px; }
 
-/* Filters */
 .fin-filters{
   margin-top: 12px;
   display:flex;
@@ -268,17 +259,14 @@ main{ flex:1 1 auto; min-width: 0; }
   color: var(--text);
   font-size: 14px;
 }
-.fin-field textarea{
-  min-height: 44px;
-  resize: vertical;
-}
+.fin-field textarea{ min-height: 44px; resize: vertical; }
 
-/* toggles / check */
 .fin-toggles{
   display:flex;
   align-items:center;
   gap: 12px;
   flex-wrap: wrap;
+  width:100%;
 }
 .fin-check{
   display:flex;
@@ -287,11 +275,8 @@ main{ flex:1 1 auto; min-width: 0; }
   font-weight: 900;
   font-size: 13px;
 }
-.fin-check input[type="checkbox"]{
-  width:16px; height:16px;
-}
+.fin-check input[type="checkbox"]{ width:16px; height:16px; }
 
-/* charts placeholders */
 .fin-charts{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -310,9 +295,6 @@ main{ flex:1 1 auto; min-width: 0; }
   align-items:center;
 }
 
-/* =========================
-   Table
-========================= */
 .fin-table-wrap{
   overflow:auto;
   border: 1px solid var(--border);
@@ -345,18 +327,9 @@ main{ flex:1 1 auto; min-width: 0; }
   vertical-align: top;
   font-size: 13px;
 }
-.fin-table tbody tr:hover td{
-  background: rgba(0,0,0,.015);
-}
-.fin-actions-row{
-  display:flex;
-  gap:8px;
-  flex-wrap: wrap;
-}
+.fin-table tbody tr:hover td{ background: rgba(0,0,0,.015); }
+.fin-actions-row{ display:flex; gap:8px; flex-wrap: wrap; }
 
-/* =========================
-   Buttons
-========================= */
 .fin-btn{
   border: 1px solid var(--border);
   background: #fff;
@@ -368,10 +341,7 @@ main{ flex:1 1 auto; min-width: 0; }
   font-size: 13px;
 }
 .fin-btn:hover{ filter: brightness(.98); }
-.fin-btn:disabled{
-  opacity: .55;
-  cursor:not-allowed;
-}
+.fin-btn:disabled{ opacity: .55; cursor:not-allowed; }
 
 .fin-btn--primary{
   background: #111;
@@ -387,7 +357,6 @@ main{ flex:1 1 auto; min-width: 0; }
 }
 .fin-btn--danger:hover{ filter: brightness(1.05); }
 
-/* mini buttons inside table */
 .fin-mini{
   border: 1px solid var(--border);
   background: #fff;
@@ -399,20 +368,9 @@ main{ flex:1 1 auto; min-width: 0; }
   font-size: 12px;
 }
 .fin-mini:hover{ filter: brightness(.98); }
-.fin-mini--ok{
-  background: #0f7a3b;
-  color:#fff;
-  border-color: rgba(0,0,0,.12);
-}
-.fin-mini--danger{
-  background: #d21f2b;
-  color:#fff;
-  border-color: rgba(0,0,0,.12);
-}
+.fin-mini--ok{ background: #0f7a3b; color:#fff; border-color: rgba(0,0,0,.12); }
+.fin-mini--danger{ background: #d21f2b; color:#fff; border-color: rgba(0,0,0,.12); }
 
-/* =========================
-   Toasts
-========================= */
 .fin-toast-host{
   position: fixed;
   right: 14px;
@@ -423,7 +381,6 @@ main{ flex:1 1 auto; min-width: 0; }
   gap: 8px;
   pointer-events:none;
 }
-
 .fin-toast{
   pointer-events:none;
   opacity: 0;
@@ -441,9 +398,6 @@ main{ flex:1 1 auto; min-width: 0; }
 .fin-toast--ok{ border-color: rgba(15,122,59,.25); }
 .fin-toast--err{ border-color: rgba(210,31,43,.25); }
 
-/* =========================
-   Modal (full screen support)
-========================= */
 .fin-modal-wrap{
   position: fixed;
   inset: 0;
@@ -453,13 +407,7 @@ main{ flex:1 1 auto; min-width: 0; }
   justify-content: center;
   padding: 14px;
 }
-
-.fin-modal-backdrop{
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,.45);
-}
-
+.fin-modal-backdrop{ position: absolute; inset: 0; background: rgba(0,0,0,.45); }
 .fin-modal{
   position: relative;
   width: min(980px, 100%);
@@ -472,15 +420,12 @@ main{ flex:1 1 auto; min-width: 0; }
   display:flex;
   flex-direction: column;
 }
-
-/* ✅ tela cheia: altura e largura total */
 .fin-modal--full{
   width: 100vw !important;
   height: 100vh !important;
   max-height: 100vh !important;
   border-radius: 0 !important;
 }
-
 .fin-modal-head{
   display:flex;
   align-items:center;
@@ -490,10 +435,7 @@ main{ flex:1 1 auto; min-width: 0; }
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(0,0,0,.03), transparent);
 }
-.fin-modal-title{
-  font-weight: 950;
-  font-size: 14px;
-}
+.fin-modal-title{ font-weight: 950; font-size: 14px; }
 .fin-x{
   width: 40px;
   height: 40px;
@@ -509,24 +451,11 @@ main{ flex:1 1 auto; min-width: 0; }
   justify-content:center;
 }
 .fin-x:hover{ filter: brightness(.98); }
+.fin-modal-body{ padding: 14px; overflow:auto; flex: 1 1 auto; }
 
-.fin-modal-body{
-  padding: 14px;
-  overflow:auto;
-  flex: 1 1 auto;
-}
-
-/* rows inside modals */
-.fin-row{
-  display:flex;
-  align-items:flex-end;
-  gap:10px;
-}
+.fin-row{ display:flex; align-items:flex-end; gap:10px; }
 .fin-row--right{ justify-content:flex-end; }
 
-/* =========================
-   Batch Table (Lotes/Cartão)
-========================= */
 .fin-batch-table{
   width: 100%;
   border-collapse: separate;
@@ -576,11 +505,10 @@ main{ flex:1 1 auto; min-width: 0; }
 }
 
 /* =========================
-   FOOTER (pedido)
+   FOOTER fixo (pedido)
 ========================= */
-/* Rodapé fixo e em UMA linha */
 .fin-footerbar{
-  position: fixed;                 /* ✅ */
+  position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
@@ -591,12 +519,12 @@ main{ flex:1 1 auto; min-width: 0; }
   gap: 14px;
 
   padding: 10px 14px;
-  background: var(--dark);         /* ✅ */
-  color: var(--darkText);          /* ✅ */
+  background: var(--dark);
+  color: var(--darkText);
   border-top: 1px solid var(--darkBorder);
 
-  flex-wrap: nowrap;               /* ✅ */
-  overflow-x: auto;                /* se apertar, rola */
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
 /* avatares à esquerda */
@@ -606,7 +534,6 @@ main{ flex:1 1 auto; min-width: 0; }
   gap: 8px;
   flex: 0 0 auto;
 }
-
 .fin-avatar{
   width: 34px;
   height: 34px;
@@ -620,11 +547,7 @@ main{ flex:1 1 auto; min-width: 0; }
   color: #fff;
   overflow:hidden;
 }
-.fin-avatar img{
-  width:100%;
-  height:100%;
-  object-fit: cover;
-}
+.fin-avatar img{ width:100%; height:100%; object-fit: cover; }
 
 .fin-footer-left{
   display:flex;
@@ -633,33 +556,26 @@ main{ flex:1 1 auto; min-width: 0; }
   min-width: 260px;
   flex: 0 0 auto;
 }
-.fin-footer-left .k{
-  font-weight: 950;
-  font-size: 12px;
-  opacity: .95;
-}
-.fin-footer-left .v{
-  font-size: 12px;
-  opacity: .85;
-}
+.fin-footer-left .k{ font-weight: 950; font-size: 12px; opacity: .95; }
+.fin-footer-left .v{ font-size: 12px; opacity: .85; }
 
-/* créditos no meio e em itálico */
+/* créditos itálico */
 .fin-footer-center{
   flex: 1 1 auto;
   text-align: center;
   font-size: 12px;
   opacity: .92;
   white-space: nowrap;
-  font-style: italic;              /* ✅ */
+  font-style: italic;
 }
 
-/* empresas lado a lado (uma linha) */
+/* empresas lado a lado */
 .fin-footer-right{
-  display:flex;                    /* ✅ */
+  display:flex;
   align-items:center;
   gap: 10px;
   flex: 0 0 auto;
-  white-space: nowrap;             /* ✅ não quebra */
+  white-space: nowrap;
 }
 .fin-footer-box{
   padding: 6px 10px;
@@ -671,24 +587,7 @@ main{ flex:1 1 auto; min-width: 0; }
 .fin-footer-box .s{ font-size: 11px; opacity: .92; }
 
 /* =========================
-   Dark topbar button contrast
-========================= */
-.fin-topbar .fin-btn{
-  border: 1px solid rgba(255,255,255,.18);
-  background: rgba(255,255,255,.08);
-  color: #fff;
-}
-.fin-topbar .fin-btn:hover{ background: rgba(255,255,255,.12); }
-
-.fin-topbar .fin-btn--primary{
-  background: #fff;
-  color: #2c2c2c;
-  border-color: rgba(255,255,255,.25);
-}
-.fin-topbar .fin-btn--primary:hover{ filter: brightness(.96); }
-
-/* =========================
-   Responsive tweaks
+   Responsive
 ========================= */
 @media (max-width: 1100px){
   .fin-body{ flex-direction: column; }
@@ -696,7 +595,6 @@ main{ flex:1 1 auto; min-width: 0; }
   .fin-kpis{ grid-template-columns: 1fr; }
   .fin-charts{ grid-template-columns: 1fr; }
 }
-
 @media (max-width: 720px){
   .fin-search{ min-width: 220px; }
   .fin-top-actions{ gap:6px; }
