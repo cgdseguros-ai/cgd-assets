@@ -5,9 +5,9 @@
   var API_BASE = WORKER_BASE.replace(/\/$/, "") + "/api";
 
   var CFG = {
-    DEAL_CATEGORY_ID: 27,        // Financeiro
-    REMINDER_CATEGORY_ID: 17,    // Pipeline 17 (assumido)
-    REMINDER_ASSIGNED_ID: 813,   // User 813
+    DEAL_CATEGORY_ID: 27,
+    REMINDER_CATEGORY_ID: 17,
+    REMINDER_ASSIGNED_ID: 813,
 
     LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=1285iby7j41w",
 
@@ -29,7 +29,6 @@
       VALOR_REAL: "UF_CRM_1770770017",
       DATA_REAL: "UF_CRM_1770771170",
       FAVORECIDO: "UF_CRM_1770775760",
-      FORMA_PGTO: "UF_CRM_1769351652",
       OBS: "UF_CRM_691385BE7D33D",
       CATEGORIA: "UF_CRM_1770770570",
       DATA_PREV: "UF_CRM_1770769767",
@@ -48,9 +47,6 @@
     },
 
     PAGE_SIZE: 300,
-
-    // vínculo dos lembretes da pipeline 17 gravado na OBS do financeiro:
-    // ex: "... | REL_P17:123,124,130"
     REL_PREFIX: "REL_P17:"
   };
 
@@ -62,6 +58,7 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
   function parseJson(t) { try { return JSON.parse(t); } catch (_) { return null; } }
+  function el(q) { return root.querySelector(q); }
 
   function apiCall(method, payload) {
     var body = JSON.stringify(payload || {});
@@ -84,8 +81,6 @@
       .then(function (res) { S.apiMode = res.mode; return res.json; });
   }
 
-  function el(q) { return root.querySelector(q); }
-
   function nowBR() {
     var dt = new Date();
     var dd = String(dt.getDate()); if (dd.length < 2) dd = "0" + dd;
@@ -105,26 +100,14 @@
     return s;
   }
 
-  function addDaysISO(iso, days) {
-    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    d.setDate(d.getDate() + days);
-    var y = d.getFullYear();
-    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
-    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
-    return y + "-" + mo + "-" + da;
-  }
-
-  function addMonthsISO(iso, months) {
-    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return iso;
-    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    d.setMonth(d.getMonth() + months);
-    var y = d.getFullYear();
-    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
-    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
-    return y + "-" + mo + "-" + da;
+  function parseMoneyBR(s) {
+    var t = String(s == null ? "" : s).trim();
+    if (!t) return 0;
+    t = t.replace(/[^\d,.-]/g, "");
+    t = t.replace(/\./g, "");
+    t = t.replace(",", ".");
+    var n = Number(t);
+    return isFinite(n) ? n : 0;
   }
 
   function moneyBR(v) {
@@ -138,14 +121,50 @@
     return "R$ " + a + "," + b;
   }
 
-  function parseMoneyBR(s) {
-    var t = String(s == null ? "" : s).trim();
-    if (!t) return 0;
-    t = t.replace(/[^\d,.-]/g, "");
-    t = t.replace(/\./g, "");
-    t = t.replace(",", ".");
-    var n = Number(t);
-    return isFinite(n) ? n : 0;
+  function addDaysISO(iso, days) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setDate(d.getDate() + days);
+    var y = d.getFullYear();
+    var mo = String(d.getMonth() + 1); if (mo.length < 2) mo = "0" + mo;
+    var da = String(d.getDate()); if (da.length < 2) da = "0" + da;
+    return y + "-" + mo + "-" + da;
+  }
+
+  function addMonthsISO(iso, months, forceDay) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var y = Number(m[1]), mo = Number(m[2]) - 1, da = Number(m[3]);
+    var d = new Date(y, mo, da);
+    d.setMonth(d.getMonth() + months);
+
+    if (forceDay != null) {
+      var fd = Math.max(1, Math.min(31, Number(forceDay) || 1));
+      var tryD = new Date(d.getFullYear(), d.getMonth(), fd);
+      if (tryD.getMonth() === d.getMonth()) d = tryD;
+      else d = new Date(d.getFullYear(), d.getMonth() + 1, 0); // último dia do mês
+    }
+
+    var yy = d.getFullYear();
+    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
+    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
+    return yy + "-" + mm + "-" + dd;
+  }
+
+  function addYearsISO(iso, years, forceMonth, forceDay) {
+    var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    var y = Number(m[1]) + years;
+    var mo = (forceMonth != null) ? (Math.max(1, Math.min(12, Number(forceMonth)||1)) - 1) : (Number(m[2]) - 1);
+    var da = (forceDay != null) ? Math.max(1, Math.min(31, Number(forceDay)||1)) : Number(m[3]);
+
+    var d = new Date(y, mo, da);
+    if (d.getMonth() !== mo) d = new Date(y, mo + 1, 0); // último dia do mês se inválido
+    var yy = d.getFullYear();
+    var mm = String(d.getMonth() + 1); if (mm.length < 2) mm = "0" + mm;
+    var dd = String(d.getDate()); if (dd.length < 2) dd = "0" + dd;
+    return yy + "-" + mm + "-" + dd;
   }
 
   function toast(msg, type) {
@@ -185,6 +204,14 @@
     };
   }
 
+  function setLoading(v) {
+    S.loading = !!v;
+    var badge = el("#fin-loading");
+    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
+    var btns = root.querySelectorAll("[data-busylock='1']");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = S.loading;
+  }
+
   var S = {
     enums: {},
     stages: [],
@@ -210,13 +237,14 @@
     reserve: { balance: 0 }
   };
 
-  function setLoading(v) {
-    S.loading = !!v;
-    var badge = el("#fin-loading");
-    if (badge) badge.style.display = S.loading ? "inline-flex" : "none";
-    var btns = root.querySelectorAll("[data-busylock='1']");
-    for (var i = 0; i < btns.length; i++) btns[i].disabled = S.loading;
+  function loadReserve() {
+    try {
+      var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
+      S.reserve.balance = raw ? Number(raw) : 0;
+      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
+    } catch (_) { S.reserve.balance = 0; }
   }
+  function saveReserve() { try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {} }
 
   function buildOptions(items, includeBlank, blankText) {
     if (includeBlank !== false) includeBlank = true;
@@ -251,15 +279,6 @@
   function updateDeal(id, fields) { return apiCall("crm.deal.update", { id: String(id), fields: fields || {} }); }
   function createDeal(fields) { return apiCall("crm.deal.add", { fields: fields || {} }).then(function (r) { return r && r.result ? r.result : null; }); }
   function deleteDeal(id) { return apiCall("crm.deal.delete", { id: String(id) }); }
-
-  function loadReserve() {
-    try {
-      var raw = localStorage.getItem("FIN_RESERVE_BALANCE");
-      S.reserve.balance = raw ? Number(raw) : 0;
-      if (!isFinite(S.reserve.balance)) S.reserve.balance = 0;
-    } catch (_) { S.reserve.balance = 0; }
-  }
-  function saveReserve() { try { localStorage.setItem("FIN_RESERVE_BALANCE", String(S.reserve.balance || 0)); } catch (_) {} }
 
   function loadMeta() {
     return apiCall("crm.deal.fields", {}).then(function (fieldsRes) {
@@ -307,7 +326,7 @@
           "ID", "TITLE", "STAGE_ID", "CATEGORY_ID",
           CFG.F.TIPO_FIN, CFG.F.COMPETENCIA, CFG.F.VALOR_PREV, CFG.F.VALOR_REAL,
           CFG.F.DATA_REAL, CFG.F.FAVORECIDO, CFG.F.OBS, CFG.F.CATEGORIA,
-          CFG.F.DATA_PREV, CFG.F.STATUS_FIN, CFG.F.CONTA, CFG.F.CENTRO_CUSTO, CFG.F.FORMA_PGTO
+          CFG.F.DATA_PREV, CFG.F.STATUS_FIN, CFG.F.CONTA, CFG.F.CENTRO_CUSTO
         ],
         filter: { CATEGORY_ID: String(CFG.DEAL_CATEGORY_ID), STAGE_ID: stageArr },
         order: { ID: "DESC" },
@@ -322,58 +341,6 @@
     return loop();
   }
 
-  /* ======== Pipeline 17 Lembretes (6) ========
-     - cria negócio na Pipeline 17 para ASSIGNED_BY_ID=813
-     - grava IDs criados na OBS do financeiro: " ... | REL_P17:123,124"
-     - ao excluir o financeiro recorrente, deleta também esses IDs.
-     Campos específicos do seu lembrete na pipeline 17 não foram informados,
-     então usamos: TITLE, CATEGORY_ID, ASSIGNED_BY_ID e (se existir) BEGINDATE/UF... depois ajustamos.
-  */
-  function parseRelP17Ids(obs) {
-    var s = String(obs || "");
-    var idx = s.indexOf(CFG.REL_PREFIX);
-    if (idx === -1) return [];
-    var tail = s.slice(idx + CFG.REL_PREFIX.length);
-    var m = tail.match(/^\s*([0-9,\s]+)/);
-    if (!m) return [];
-    return m[1].split(",").map(function (x) { return String(x).trim(); }).filter(Boolean);
-  }
-
-  function upsertRelP17InObs(obs, ids) {
-    obs = String(obs || "").trim();
-    ids = (ids || []).map(String).filter(Boolean);
-    // remove existente
-    var p = obs.indexOf(CFG.REL_PREFIX);
-    if (p !== -1) obs = obs.slice(0, p).trim().replace(/\|\s*$/, "").trim();
-    if (!ids.length) return obs;
-    var add = CFG.REL_PREFIX + ids.join(",");
-    return obs ? (obs + " | " + add) : add;
-  }
-
-  function createReminderP17(finDeal, dueISO) {
-    var fav = (finDeal && finDeal[CFG.F.FAVORECIDO]) ? finDeal[CFG.F.FAVORECIDO] : (finDeal.TITLE || "Lembrete");
-    var title = "LEMBRETE • Venc " + dueISO + " • " + fav;
-
-    var fields = {
-      TITLE: title,
-      CATEGORY_ID: String(CFG.REMINDER_CATEGORY_ID),
-      ASSIGNED_BY_ID: String(CFG.REMINDER_ASSIGNED_ID)
-    };
-
-    // Se você tiver um campo de data no Pipeline 17 (ex.: UF_CRM_xxx), me passe e eu coloco aqui.
-    // Por enquanto, o vencimento fica no título + pode ficar na OBS do próprio P17 se quiser.
-    return createDeal(fields);
-  }
-
-  function deleteReminderP17Ids(ids) {
-    ids = (ids || []).map(String).filter(Boolean);
-    var p = Promise.resolve();
-    for (var i = 0; i < ids.length; i++) (function (id) {
-      p = p.then(function () { return deleteDeal(id).catch(function () { /* ignora se já apagou */ }); });
-    })(ids[i]);
-    return p;
-  }
-
   function initialsFromName(name) {
     var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
     var a = parts[0] ? parts[0].charAt(0) : "";
@@ -381,17 +348,20 @@
     var out = (a + b).toUpperCase();
     return out || "CG";
   }
+
   function resolveUserPhotoUrl(user) {
     var raw = user && (user.PERSONAL_PHOTO_URL || user.PERSONAL_PHOTO || user.PHOTO || "");
     if (!raw) return "";
     if (typeof raw === "string" && raw.indexOf("http") === 0) return raw;
     return "";
   }
+
   function loadPartners() {
     return apiCall("user.get", { ID: CFG.FOOTER.partnersUserIds })
       .then(function (r) { S.partners = (r && r.result) ? r.result : []; })
       .catch(function () { S.partners = []; });
   }
+
   function renderPartnersAvatars() {
     var host = el("#fin-avatars");
     if (!host) return;
@@ -486,7 +456,6 @@
         if (String(d.STAGE_ID || "") === String(CFG.STAGES.CONCLUIDO)) return false;
       }
 
-      // checkbox globais (visibilidade)
       var st = String(d.STAGE_ID || "");
       var isExp = (st === CFG.STAGES.DESP_A_PAGAR || st === CFG.STAGES.DESP_PAGA);
       var isRec = (st === CFG.STAGES.REC_A_RECEBER || st === CFG.STAGES.REC_RECEBIDA);
@@ -513,7 +482,6 @@
     renderChartsPlaceholders();
   }
 
-  /* (9) mover etapa sem depender do “Tipo” */
   function nextStageByCurrent(stageId) {
     stageId = String(stageId || "");
     if (stageId === CFG.STAGES.DESP_A_PAGAR) return CFG.STAGES.DESP_PAGA;
@@ -534,9 +502,9 @@
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(title) + '</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
-        '<div class="fin-grid">' +
-          '<div class="fin-field"><label>Valor pago/recebido</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
-          '<div class="fin-field"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Valor pago/recebido</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
         '</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
@@ -564,13 +532,10 @@
   }
 
   function confirmDelete(deal) {
-    var ids = parseRelP17Ids(deal[CFG.F.OBS] || "");
-    var extra = ids.length ? ("<br><br><b>ATENÇÃO:</b> este lançamento tem " + ids.length + " lembretes vinculados na Pipeline 17 (User 813). Eles também serão apagados.") : "";
-
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">Excluir lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
-        '<div class="fin-hint">Tem certeza que deseja <b>EXCLUIR</b> o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?<br>Isso remove o negócio do Bitrix.' + extra + '</div>' +
+        '<div style="font-weight:900">Tem certeza que deseja EXCLUIR o card <span class="fin-mono">#' + esc(deal.ID) + '</span>?</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
           '<button class="fin-btn fin-btn--danger" id="del-ok" data-busylock="1">Excluir</button>' +
@@ -580,329 +545,367 @@
 
     m.q("#del-ok").addEventListener("click", function () {
       setLoading(true);
-
-      // (6) se tiver REL_P17, apaga os lembretes também
-      deleteReminderP17Ids(ids)
-        .then(function () { return deleteDeal(deal.ID); })
+      deleteDeal(deal.ID)
         .then(function () { toast("Excluído ✅"); m.close(); return refresh(); })
         .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
         .finally(function () { setLoading(false); });
     });
   }
 
-  /* (7) NOVO LANÇAMENTO: avulsa / recorr semanal / recorr mensal
-     - para recorrência mensal de DESPESA: cria também lembretes na pipeline 17 (6)
+  /* ===== Competência =====
+     - Para recorrentes: NÃO é obrigatória (a não ser que seu campo no Bitrix esteja marcado como obrigatório).
+     - Se não preencher, tentamos achar um enum compatível pelo mês/ano da Data inicial.
   */
-  function openNewModal() {
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Novo lançamento</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
+  function guessCompetenciaIdFromISO(iso) {
+    iso = toISODate(iso);
+    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return "";
+    var yy = m[1], mm = m[2];
 
-        '<div class="fin-grid">' +
-          '<div class="fin-field"><label>Tipo Financeiro</label><select id="n-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || [], true, "Selecione...") + '</select></div>' +
-          '<div class="fin-field"><label>Competência</label><select id="n-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-
-          '<div class="fin-field"><label>Centro de custo</label><select id="n-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
-          '<div class="fin-field"><label>Conta / Origem</label><select id="n-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-
-          '<div class="fin-field"><label>Data Prevista (1ª)</label><input id="n-date" placeholder="YYYY-MM-DD"></div>' +
-          '<div class="fin-field"><label>Valor Previsto</label><input id="n-val" placeholder="Ex.: 1500,00"></div>' +
-
-          '<div class="fin-field"><label>Favorecido / Pagador</label><input id="n-fav" placeholder="Ex.: Light, Vivo, Cliente..."></div>' +
-          '<div class="fin-field"><label>Categoria</label><select id="n-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
-
-          '<div class="fin-field"><label>Recorrência</label>' +
-            '<select id="n-rec">' +
-              '<option value="once">Avulsa (1x)</option>' +
-              '<option value="weekly">Semanal</option>' +
-              '<option value="monthly">Mensal</option>' +
-            '</select>' +
-          '</div>' +
-
-          '<div class="fin-field"><label>Qtd. ocorrências</label><input id="n-qtd" value="1" placeholder="Ex.: 12"></div>' +
-        '</div>' +
-
-        '<div class="fin-field" style="margin-top:10px"><label>Observações</label><textarea id="n-obs" rows="2"></textarea></div>' +
-
-        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
-          '<button class="fin-btn" data-close="1">Cancelar</button>' +
-          '<button class="fin-btn fin-btn--primary" id="n-go" data-busylock="1">Criar</button>' +
-        '</div>' +
-
-      '</div>'
-    );
-
-    m.q("#n-go").addEventListener("click", function () {
-      setLoading(true);
-      try {
-        var tipo = m.q("#n-tipo").value;
-        if (!tipo) throw new Error("Selecione o Tipo Financeiro.");
-
-        var comp = m.q("#n-comp").value || "";
-        var cc = m.q("#n-cc").value || "";
-        var conta = m.q("#n-conta").value || "";
-        var date0 = toISODate(m.q("#n-date").value || "");
-        if (!date0) throw new Error("Informe a Data Prevista (YYYY-MM-DD).");
-
-        var vprev = parseMoneyBR(m.q("#n-val").value || "");
-        var fav = String(m.q("#n-fav").value || "").trim();
-        var cat = m.q("#n-cat").value || "";
-        var obs = String(m.q("#n-obs").value || "").trim();
-
-        if (isBadFav(fav)) throw new Error("Favorecido inválido (parece FILA/QUEUE).");
-
-        var rec = m.q("#n-rec").value;
-        var qtd = Math.max(1, parseInt(m.q("#n-qtd").value || "1", 10) || 1);
-
-        // define etapa inicial por texto do tipo (melhor: se no seu enum tiver "DESPESA"/"RECEITA")
-        var tipoTxt = (enumName(CFG.F.TIPO_FIN, tipo) || "").toUpperCase();
-        var isDesp = (tipoTxt.indexOf("DESP") > -1);
-        var isRec = (tipoTxt.indexOf("REC") > -1);
-
-        var stage = isRec ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
-
-        function calcDate(idx) {
-          if (rec === "weekly") return addDaysISO(date0, idx * 7);
-          if (rec === "monthly") return addMonthsISO(date0, idx);
-          return date0;
-        }
-
-        var ops = Promise.resolve();
-        var created = 0;
-        var reminderIds = [];
-
-        for (var i = 0; i < qtd; i++) (function (idx) {
-          ops = ops.then(function () {
-            var dt = calcDate(idx);
-
-            var fields = {};
-            fields.TITLE = "FIN • " + (enumName(CFG.F.TIPO_FIN, tipo) || "FIN") + (fav ? " • " + fav : "");
-            fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
-            fields.STAGE_ID = stage;
-
-            fields[CFG.F.TIPO_FIN] = tipo;
-            fields[CFG.F.COMPETENCIA] = comp;
-            fields[CFG.F.CENTRO_CUSTO] = cc;
-            fields[CFG.F.CONTA] = conta;
-            fields[CFG.F.DATA_PREV] = dt;
-            fields[CFG.F.VALOR_PREV] = vprev;
-            fields[CFG.F.FAVORECIDO] = fav;
-            fields[CFG.F.CATEGORIA] = cat;
-            fields[CFG.F.OBS] = obs;
-
-            return createDeal(fields).then(function (newId) {
-              created++;
-
-              // (6) somente “recorrência mensal de DESPESA” cria lembretes na pipeline 17
-              if (rec === "monthly" && isDesp) {
-                return createReminderP17({ TITLE: fields.TITLE, UF: fields }, dt).then(function (rid) {
-                  if (rid) reminderIds.push(String(rid));
-                  // grava o vínculo no próprio deal financeiro recém criado
-                  if (rid) {
-                    var newObs = upsertRelP17InObs(obs, [rid]);
-                    var upd = {}; upd[CFG.F.OBS] = newObs;
-                    return updateDeal(newId, upd);
-                  }
-                });
-              }
-            });
-          });
-        })(i);
-
-        ops.then(function () {
-          toast("Criado ✅ (" + created + " item(ns))");
-          m.close();
-          return refresh();
-        }).catch(function (e) {
-          toast("Falha: " + (e.message || String(e)), "err");
-        }).finally(function () {
-          setLoading(false);
-        });
-
-      } catch (err) {
-        toast(err.message || String(err), "err");
-        setLoading(false);
-      }
-    });
-  }
-
-  /* (8) LOTE: modal em lista (várias linhas)
-     - com botões “Criar DESPESAS” e “Criar RECEITAS”
-     - cada linha pode ser avulsa/semanal/mensal
-  */
-  function openBatchListModal() {
-    var rows = [{ fav:"", val:"", date:"", rec:"once", qtd:"1" }];
-
-    function renderRows(host) {
-      var html = "";
-      for (var i = 0; i < rows.length; i++) {
-        html +=
-          '<div class="fin-grid" style="margin-bottom:10px;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--off)">' +
-            '<div class="fin-field"><label>Favorecido/Pagador</label><input data-k="fav" data-i="'+i+'" value="'+esc(rows[i].fav)+'" placeholder="Ex.: Light, Cliente..."></div>' +
-            '<div class="fin-field"><label>Valor</label><input data-k="val" data-i="'+i+'" value="'+esc(rows[i].val)+'" placeholder="Ex.: 1500,00"></div>' +
-            '<div class="fin-field"><label>Data 1ª</label><input data-k="date" data-i="'+i+'" value="'+esc(rows[i].date)+'" placeholder="YYYY-MM-DD"></div>' +
-            '<div class="fin-field"><label>Recorrência</label>' +
-              '<select data-k="rec" data-i="'+i+'">' +
-                '<option value="once" '+(rows[i].rec==="once"?"selected":"")+'>Avulsa</option>' +
-                '<option value="weekly" '+(rows[i].rec==="weekly"?"selected":"")+'>Semanal</option>' +
-                '<option value="monthly" '+(rows[i].rec==="monthly"?"selected":"")+'>Mensal</option>' +
-              '</select>' +
-            '</div>' +
-            '<div class="fin-field"><label>Qtd</label><input data-k="qtd" data-i="'+i+'" value="'+esc(rows[i].qtd)+'" placeholder="Ex.: 12"></div>' +
-            '<div class="fin-field"><label>Ações</label><button class="fin-btn fin-btn--danger" data-del="'+i+'">Remover</button></div>' +
-          '</div>';
-      }
-      host.innerHTML = html;
-
-      var inputs = host.querySelectorAll("input[data-k],select[data-k]");
-      for (var j = 0; j < inputs.length; j++) {
-        inputs[j].addEventListener("input", function () {
-          var k = this.getAttribute("data-k");
-          var idx = parseInt(this.getAttribute("data-i") || "0", 10);
-          rows[idx][k] = this.value;
-        });
-        inputs[j].addEventListener("change", function () {
-          var k = this.getAttribute("data-k");
-          var idx = parseInt(this.getAttribute("data-i") || "0", 10);
-          rows[idx][k] = this.value;
-        });
-      }
-
-      var dels = host.querySelectorAll("[data-del]");
-      for (var d = 0; d < dels.length; d++) {
-        dels[d].addEventListener("click", function () {
-          var idx = parseInt(this.getAttribute("data-del") || "0", 10);
-          rows.splice(idx, 1);
-          if (!rows.length) rows.push({ fav:"", val:"", date:"", rec:"once", qtd:"1" });
-          renderRows(host);
-        });
+    var list = S.enums[CFG.F.COMPETENCIA] || [];
+    var candidates = [];
+    for (var i = 0; i < list.length; i++) {
+      var v = String(list[i].VALUE || "").toLowerCase();
+      if (v.indexOf(yy) > -1) candidates.push(list[i]);
+    }
+    // tenta achar pelo mês como "02" ou "fev"
+    var mmNum = String(Number(mm)); // 2
+    var map = {
+      "01":["jan","janeiro","01"],
+      "02":["fev","fevereiro","02"],
+      "03":["mar","março","03"],
+      "04":["abr","abril","04"],
+      "05":["mai","maio","05"],
+      "06":["jun","junho","06"],
+      "07":["jul","julho","07"],
+      "08":["ago","agosto","08"],
+      "09":["set","setembro","09"],
+      "10":["out","outubro","10"],
+      "11":["nov","novembro","11"],
+      "12":["dez","dezembro","12"]
+    };
+    var keys = map[mm] || [mm, mmNum];
+    for (var j = 0; j < candidates.length; j++) {
+      var t = String(candidates[j].VALUE || "").toLowerCase();
+      for (var k = 0; k < keys.length; k++) {
+        if (t.indexOf(keys[k]) > -1) return String(candidates[j].ID);
       }
     }
+    // fallback: procura no list inteiro
+    for (var a = 0; a < list.length; a++) {
+      var tt = String(list[a].VALUE || "").toLowerCase();
+      for (var kk = 0; kk < keys.length; kk++) {
+        if (tt.indexOf(keys[kk]) > -1 && tt.indexOf(yy) > -1) return String(list[a].ID);
+      }
+    }
+    return "";
+  }
 
-    var m = modal(
-      '<div class="fin-modal-head"><div class="fin-modal-title">Lote (preencher várias linhas)</div><button class="fin-x" data-close="1">×</button></div>' +
-      '<div class="fin-modal-body">' +
+  /* ========= LOTE (Tabela) ========= */
+  function openBatchTableModal() {
+    // linhas
+    var rows = [
+      mkRow()
+    ];
 
-        '<div class="fin-grid">' +
-          '<div class="fin-field"><label>Centro de custo</label><select id="b-cc">' + buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—") + '</select></div>' +
-          '<div class="fin-field"><label>Conta / Origem</label><select id="b-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-          '<div class="fin-field"><label>Competência</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-          '<div class="fin-field"><label>Categoria</label><select id="b-cat">' + buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—") + '</select></div>' +
+    function mkRow() {
+      return {
+        centro: "",
+        conta: "",
+        categoria: "",
+        favorecido: "",
+        valor: "",
+        obs: "",
+        // tipo do lançamento (despesa/receita)
+        kind: "DESPESA",
+        // recorrência
+        freq: "once",          // once | weekly | monthly | yearly
+        // parâmetros
+        start: "",
+        count: "1",
+        weekday: "1",          // 1..7 (seg..dom)
+        monthday: "1",         // 1..31
+        month: "1"             // 1..12 (anual)
+      };
+    }
+
+    function weekdayLabel(v){
+      var m = { "1":"Seg", "2":"Ter", "3":"Qua", "4":"Qui", "5":"Sex", "6":"Sáb", "7":"Dom" };
+      return m[String(v)] || v;
+    }
+
+    function calcDate(baseISO, row, idx) {
+      baseISO = toISODate(baseISO);
+      if (!baseISO) return "";
+
+      if (row.freq === "once") return baseISO;
+
+      if (row.freq === "weekly") {
+        // se escolher "dia da semana", ajusta a primeira ocorrência pro próximo dia
+        var wd = Number(row.weekday || 1); // 1..7
+        var d = new Date(baseISO + "T12:00:00");
+        var jswd = d.getDay(); // 0..6 (dom..sab)
+        var cur = (jswd === 0 ? 7 : jswd); // 1..7
+        var delta = wd - cur;
+        if (delta < 0) delta += 7;
+        var first = addDaysISO(baseISO, delta);
+        return addDaysISO(first, idx * 7);
+      }
+
+      if (row.freq === "monthly") {
+        var day = Number(row.monthday || 1);
+        return addMonthsISO(baseISO, idx, day);
+      }
+
+      if (row.freq === "yearly") {
+        var mo = Number(row.month || 1);
+        var dayy = Number(row.monthday || 1);
+        // primeiro ano usa a data base como referência (mas aplica mês/dia escolhidos)
+        var baseY = String(baseISO).slice(0,4);
+        var first = baseY + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
+        // se first < baseISO, joga pro próximo ano
+        if (first < baseISO) first = String(Number(baseY)+1) + "-" + String(mo).padStart(2,"0") + "-" + String(dayy).padStart(2,"0");
+        return addYearsISO(first, idx, mo, dayy);
+      }
+
+      return baseISO;
+    }
+
+    function tipoEnumForKind(kind) {
+      var items = S.enums[CFG.F.TIPO_FIN] || [];
+      for (var i = 0; i < items.length; i++) {
+        var t = String(items[i].VALUE || "").toUpperCase();
+        if (kind === "DESPESA" && t.indexOf("DESP") > -1) return String(items[i].ID);
+        if (kind === "RECEITA" && t.indexOf("REC") > -1) return String(items[i].ID);
+      }
+      return "";
+    }
+
+    function stageForKind(kind) {
+      return (kind === "RECEITA") ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
+    }
+
+    function renderTable(host) {
+      var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, "—");
+      var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "—");
+      var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, "—");
+
+      var html =
+        '<div class="fin-muted" style="margin-bottom:10px;font-weight:900">' +
+          'LOTE em modo lista/tabela. Preencha as linhas e clique em <b>Criar</b>.' +
+          '<br>Competência é opcional: se não preencher, o sistema tenta derivar pela Data inicial.' +
         '</div>' +
 
-        '<div class="fin-field" style="margin-top:10px"><label>Observações (aplica a todas)</label><textarea id="b-obs" rows="2"></textarea></div>' +
+        '<div style="overflow:auto;max-height:60vh">' +
+          '<table class="fin-batch-table">' +
+            '<thead><tr>' +
+              '<th style="min-width:120px">CENTRO DE CUSTO</th>' +
+              '<th style="min-width:120px">CONTA</th>' +
+              '<th style="min-width:120px">CATEGORIA</th>' +
+              '<th style="min-width:180px">FAVORECIDO</th>' +
+              '<th style="min-width:110px">VALOR</th>' +
+              '<th style="min-width:220px">OBS</th>' +
+              '<th style="min-width:100px">TIPO</th>' +
+              '<th style="min-width:120px">RECORRÊNCIA</th>' +
+              '<th style="min-width:120px">DIA SEMANA</th>' +
+              '<th style="min-width:120px">DIA MÊS</th>' +
+              '<th style="min-width:140px">MÊS (ANUAL)</th>' +
+              '<th style="min-width:140px">DATA INICIAL</th>' +
+              '<th style="min-width:90px">QTD</th>' +
+              '<th style="min-width:90px"></th>' +
+            '</tr></thead><tbody>';
 
-        '<div style="margin-top:10px" id="b-rows"></div>' +
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var showWeek = (r.freq === "weekly");
+        var showMonthDay = (r.freq === "monthly" || r.freq === "yearly");
+        var showMonth = (r.freq === "yearly");
 
-        '<div class="fin-row" style="margin-top:10px;justify-content:space-between">' +
-          '<button class="fin-btn" id="b-add">+ Adicionar linha</button>' +
-          '<div class="fin-row fin-row--right" style="gap:8px">' +
-            '<button class="fin-btn fin-btn--primary" id="b-exp" data-busylock="1">Criar DESPESAS</button>' +
-            '<button class="fin-btn fin-btn--primary" id="b-rec" data-busylock="1">Criar RECEITAS</button>' +
+        html += '<tr data-i="'+i+'">' +
+          '<td><select class="fin-batch-sel" data-k="centro">' + ccOpts.replace('value="'+esc(r.centro)+'"', 'value="'+esc(r.centro)+'" selected') + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="conta">' + contaOpts.replace('value="'+esc(r.conta)+'"', 'value="'+esc(r.conta)+'" selected') + '</select></td>' +
+          '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts.replace('value="'+esc(r.categoria)+'"', 'value="'+esc(r.categoria)+'" selected') + '</select></td>' +
+          '<td><input class="fin-batch-inp" data-k="favorecido" value="'+esc(r.favorecido)+'" placeholder="Ex.: Light, Cliente..."></td>' +
+          '<td><input class="fin-batch-inp" data-k="valor" value="'+esc(r.valor)+'" placeholder="1500,00"></td>' +
+          '<td><textarea class="fin-batch-txt" data-k="obs" placeholder="Observações...">'+esc(r.obs)+'</textarea></td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="kind">' +
+              '<option value="DESPESA" '+(r.kind==="DESPESA"?"selected":"")+'>DESPESA</option>' +
+              '<option value="RECEITA" '+(r.kind==="RECEITA"?"selected":"")+'>RECEITA</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="freq">' +
+              '<option value="once" '+(r.freq==="once"?"selected":"")+'>Avulsa</option>' +
+              '<option value="weekly" '+(r.freq==="weekly"?"selected":"")+'>Semanal</option>' +
+              '<option value="monthly" '+(r.freq==="monthly"?"selected":"")+'>Mensal</option>' +
+              '<option value="yearly" '+(r.freq==="yearly"?"selected":"")+'>Anual</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td>' +
+            '<select class="fin-batch-sel" data-k="weekday" '+(showWeek?'':'disabled')+'>' +
+              '<option value="1" '+(r.weekday==="1"?"selected":"")+'>Seg</option>' +
+              '<option value="2" '+(r.weekday==="2"?"selected":"")+'>Ter</option>' +
+              '<option value="3" '+(r.weekday==="3"?"selected":"")+'>Qua</option>' +
+              '<option value="4" '+(r.weekday==="4"?"selected":"")+'>Qui</option>' +
+              '<option value="5" '+(r.weekday==="5"?"selected":"")+'>Sex</option>' +
+              '<option value="6" '+(r.weekday==="6"?"selected":"")+'>Sáb</option>' +
+              '<option value="7" '+(r.weekday==="7"?"selected":"")+'>Dom</option>' +
+            '</select>' +
+          '</td>' +
+
+          '<td><input class="fin-batch-inp" data-k="monthday" value="'+esc(r.monthday)+'" '+(showMonthDay?'':'disabled')+' placeholder="1..31"></td>' +
+          '<td><input class="fin-batch-inp" data-k="month" value="'+esc(r.month)+'" '+(showMonth?'':'disabled')+' placeholder="1..12"></td>' +
+
+          '<td><input class="fin-batch-inp" data-k="start" value="'+esc(r.start)+'" placeholder="YYYY-MM-DD"></td>' +
+          '<td><input class="fin-batch-inp" data-k="count" value="'+esc(r.count)+'" placeholder="1"></td>' +
+
+          '<td><button class="fin-btn fin-btn--danger" data-del="1" style="width:100%">Remover</button></td>' +
+        '</tr>';
+      }
+
+      html += '</tbody></table></div>' +
+        '<div class="fin-row" style="margin-top:10px;justify-content:space-between;flex-wrap:wrap">' +
+          '<button class="fin-btn" id="b-add">+ Linha</button>' +
+          '<div class="fin-row fin-row--right" style="gap:8px;flex-wrap:wrap">' +
+            '<div class="fin-field" style="min-width:260px"><label>Competência (opcional)</label><select id="b-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || [], true, "Automático") + '</select></div>' +
+            '<button class="fin-btn fin-btn--primary" id="b-create" data-busylock="1">Criar</button>' +
           '</div>' +
-        '</div>' +
+        '</div>';
 
-      '</div>'
-    );
+      host.innerHTML = html;
 
-    var host = m.q("#b-rows");
-    renderRows(host);
+      host.querySelector("#b-add").addEventListener("click", function(){
+        rows.push(mkRow());
+        renderTable(host);
+      });
 
-    m.q("#b-add").addEventListener("click", function () {
-      rows.push({ fav:"", val:"", date:"", rec:"once", qtd:"1" });
-      renderRows(host);
-    });
+      host.querySelector("#b-create").addEventListener("click", function(){
+        createBatch(host.querySelector("#b-comp").value || "");
+      });
 
-    function createBatch(kind) {
+      // listeners de edição
+      var tbody = host.querySelector("tbody");
+      tbody.addEventListener("input", function(e){
+        var tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        var i = Number(tr.getAttribute("data-i"));
+        var k = e.target.getAttribute("data-k");
+        if (!k) return;
+        rows[i][k] = e.target.value;
+      });
+      tbody.addEventListener("change", function(e){
+        var tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        var i = Number(tr.getAttribute("data-i"));
+        var k = e.target.getAttribute("data-k");
+        if (!k) return;
+        rows[i][k] = e.target.value;
+
+        // se mudou frequência, re-render pra habilitar/desabilitar campos (semana/mês/ano)
+        if (k === "freq") renderTable(host);
+      });
+
+      tbody.addEventListener("click", function(e){
+        var btn = e.target.closest("[data-del]");
+        if (!btn) return;
+        var tr = btn.closest("tr[data-i]");
+        var i = Number(tr.getAttribute("data-i"));
+        rows.splice(i, 1);
+        if (!rows.length) rows.push(mkRow());
+        renderTable(host);
+      });
+    }
+
+    function createBatch(compOverride) {
       setLoading(true);
+
       try {
-        var cc = m.q("#b-cc").value || "";
-        var conta = m.q("#b-conta").value || "";
-        var comp = m.q("#b-comp").value || "";
-        var cat = m.q("#b-cat").value || "";
-        var obsAll = String(m.q("#b-obs").value || "").trim();
-
-        // achar tipo enum por texto (despesa/receita). Se você preferir fixar ID, me diga o ID do enum.
-        var tipoEnum = "";
-        var items = S.enums[CFG.F.TIPO_FIN] || [];
-        for (var i = 0; i < items.length; i++) {
-          var t = String(items[i].VALUE || "").toUpperCase();
-          if (kind === "EXP" && t.indexOf("DESP") > -1) { tipoEnum = String(items[i].ID); break; }
-          if (kind === "REC" && t.indexOf("REC") > -1) { tipoEnum = String(items[i].ID); break; }
-        }
-        if (!tipoEnum) throw new Error("Não achei um 'Tipo Financeiro' com texto de " + (kind==="EXP"?"DESPESA":"RECEITA") + ". Me diga qual enum usar.");
-
-        var stage = (kind === "REC") ? CFG.STAGES.REC_A_RECEBER : CFG.STAGES.DESP_A_PAGAR;
-
-        function calcDate(base, rec, idx) {
-          if (rec === "weekly") return addDaysISO(base, idx * 7);
-          if (rec === "monthly") return addMonthsISO(base, idx);
-          return base;
-        }
-
+        // valida e cria
         var ops = Promise.resolve();
         var created = 0;
 
-        for (var r = 0; r < rows.length; r++) (function (row) {
-          ops = ops.then(function () {
-            var fav = String(row.fav || "").trim();
-            if (!fav) throw new Error("Tem linha sem Favorecido.");
+        for (var i = 0; i < rows.length; i++) (function(r){
+          ops = ops.then(function(){
+            var fav = String(r.favorecido || "").trim();
+            if (!fav) throw new Error("Linha sem Favorecido.");
             if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
 
-            var vprev = parseMoneyBR(row.val || "");
-            var d0 = toISODate(row.date || "");
-            if (!d0) throw new Error("Linha sem Data 1ª (YYYY-MM-DD).");
+            var vprev = parseMoneyBR(r.valor || "");
+            var start = toISODate(r.start || "");
+            if (!start) throw new Error("Linha sem Data inicial (YYYY-MM-DD).");
 
-            var rec = row.rec || "once";
-            var qtd = Math.max(1, parseInt(row.qtd || "1", 10) || 1);
+            var cc = r.centro || "";
+            var conta = r.conta || "";
+            var cat = r.categoria || "";
+            var obs = String(r.obs || "").trim();
+
+            var kind = (r.kind === "RECEITA") ? "RECEITA" : "DESPESA";
+            var tipoEnum = tipoEnumForKind(kind);
+            if (!tipoEnum) throw new Error("Não encontrei enum de Tipo Financeiro para " + kind + ". (Precisa existir um item DESPESA/RECEITA no seu campo Tipo.)");
+
+            var stage = stageForKind(kind);
+
+            var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
+
+            // competência: usa override do topo; se vazio, tenta derivar pela data
+            var comp = compOverride || "";
+            if (!comp) comp = guessCompetenciaIdFromISO(start);
 
             var p = Promise.resolve();
-
-            for (var j = 0; j < qtd; j++) (function (idx) {
-              p = p.then(function () {
-                var dt = calcDate(d0, rec, idx);
+            for (var k = 0; k < count; k++) (function(idx){
+              p = p.then(function(){
+                var dt = calcDate(start, r, idx);
 
                 var fields = {};
-                fields.TITLE = "FIN • " + (kind === "REC" ? "RECEITA" : "DESPESA") + " • " + fav;
+                fields.TITLE = "FIN • " + kind + " • " + fav;
                 fields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
                 fields.STAGE_ID = stage;
 
                 fields[CFG.F.TIPO_FIN] = tipoEnum;
-                fields[CFG.F.COMPETENCIA] = comp;
-                fields[CFG.F.CENTRO_CUSTO] = cc;
-                fields[CFG.F.CONTA] = conta;
+                if (comp) fields[CFG.F.COMPETENCIA] = comp; // opcional
+                if (cc) fields[CFG.F.CENTRO_CUSTO] = cc;
+                if (conta) fields[CFG.F.CONTA] = conta;
+                if (cat) fields[CFG.F.CATEGORIA] = cat;
+
                 fields[CFG.F.DATA_PREV] = dt;
                 fields[CFG.F.VALOR_PREV] = vprev;
                 fields[CFG.F.FAVORECIDO] = fav;
-                fields[CFG.F.CATEGORIA] = cat;
-                fields[CFG.F.OBS] = obsAll;
+                if (obs) fields[CFG.F.OBS] = obs;
 
-                return createDeal(fields).then(function () { created++; });
+                return createDeal(fields).then(function(){ created++; });
               });
-            })(j);
+            })(k);
 
             return p;
           });
-        })(rows[r]);
+        })(rows[i]);
 
-        ops.then(function () {
+        ops.then(function(){
           toast("Lote criado ✅ (" + created + " itens)");
           m.close();
           return refresh();
-        }).catch(function (e) {
+        }).catch(function(e){
           toast("Falha no lote: " + (e.message || String(e)), "err");
-        }).finally(function () {
+        }).finally(function(){
           setLoading(false);
         });
 
-      } catch (err) {
+      } catch(err) {
         toast(err.message || String(err), "err");
         setLoading(false);
       }
     }
 
-    m.q("#b-exp").addEventListener("click", function () { createBatch("EXP"); });
-    m.q("#b-rec").addEventListener("click", function () { createBatch("REC"); });
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">LOTE — Lançar várias despesas/receitas</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body"><div id="batch-host"></div></div>'
+    );
+
+    renderTable(m.q("#batch-host"));
   }
 
   function openReserveModal() {
@@ -963,7 +966,6 @@
           "<td>" +
             '<div class="fin-actions-row">' +
               chk +
-              '<button class="fin-mini" data-act="edit" data-id="' + esc(d.ID) + '">Editar</button>' +
               '<button class="fin-mini fin-mini--danger" data-act="del" data-id="' + esc(d.ID) + '">Excluir</button>' +
             "</div>" +
           "</td>" +
@@ -982,7 +984,6 @@
         for (var x = 0; x < S.deals.length; x++) if (String(S.deals[x].ID) === String(id)) { deal = S.deals[x]; break; }
         if (!deal) return;
 
-        if (act === "edit") return toast("Editar (próximo passo: edição completa)"); // você pediu foco em recorrência/fluxo; deixo o edit completo no próximo ajuste
         if (act === "del") return confirmDelete(deal);
         if (act === "chk") {
           try { this.checked = false; } catch(_) {}
@@ -990,47 +991,6 @@
         }
       });
     }
-  }
-
-  function exportCSV() {
-    var list = S.filtered || [];
-    if (!list.length) { toast("Nada para exportar.", "err"); return; }
-
-    var headers = ["ID","CENTRO_CUSTO","CONTA","TIPO","COMPETENCIA","DATA_PREVISTA","VALOR_PREVISTO","VALOR_REALIZADO","ETAPA","FAVORECIDO","CATEGORIA","OBS"];
-    var csv = [];
-    csv.push(headers.join(";"));
-
-    function q(s) { s = String(s == null ? "" : s).replace(/"/g, '""'); return '"' + s + '"'; }
-
-    for (var i = 0; i < list.length; i++) {
-      var d = list[i];
-      var row = [
-        d.ID,
-        enumName(CFG.F.CENTRO_CUSTO, d[CFG.F.CENTRO_CUSTO]),
-        enumName(CFG.F.CONTA, d[CFG.F.CONTA]),
-        enumName(CFG.F.TIPO_FIN, d[CFG.F.TIPO_FIN]),
-        enumName(CFG.F.COMPETENCIA, d[CFG.F.COMPETENCIA]),
-        toISODate(d[CFG.F.DATA_PREV] || ""),
-        d[CFG.F.VALOR_PREV] != null ? d[CFG.F.VALOR_PREV] : "",
-        d[CFG.F.VALOR_REAL] != null ? d[CFG.F.VALOR_REAL] : "",
-        stageName(d.STAGE_ID),
-        d[CFG.F.FAVORECIDO] || "",
-        enumName(CFG.F.CATEGORIA, d[CFG.F.CATEGORIA]),
-        String(d[CFG.F.OBS] || "").replace(/\s+/g," ").trim()
-      ];
-      var line = [];
-      for (var j = 0; j < row.length; j++) line.push(q(row[j]));
-      csv.push(line.join(";"));
-    }
-
-    var blob = new Blob([csv.join("\n")], { type: "text/csv;charset=utf-8" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "financeiro_pipeline27_" + Date.now() + ".csv";
-    document.body.appendChild(a);
-    a.click();
-    a.parentNode.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1200);
   }
 
   function render() {
@@ -1049,19 +1009,17 @@
           '<div class="fin-top-actions">' +
             '<div class="fin-search"><span aria-hidden="true">🔎</span><input id="f-q" placeholder="Buscar por favorecido, obs, centro..."></div>' +
             '<button class="fin-btn" id="btn-reserve" data-busylock="1">RESERVA</button>' +
-            '<button class="fin-btn fin-btn--primary" id="btn-new" data-busylock="1">NOVO</button>' +
             '<button class="fin-btn fin-btn--primary" id="btn-batch" data-busylock="1">LOTE</button>' +
             '<button class="fin-btn" id="btn-refresh" data-busylock="1">ATUALIZAR</button>' +
-            '<button class="fin-btn" id="btn-csv" data-busylock="1">EXPORTAR CSV</button>' +
           '</div>' +
         '</header>' +
 
         '<div class="fin-shell">' +
           '<div class="fin-body">' +
             '<aside class="fin-side">' +
-              '<div class="fin-side-brand">' +
-                '<img class="fin-brand-logo" src="' + esc(CFG.LOGO_URL) + '" alt="CGD">' +
-                '<div><div class="fin-brand-title">Financeiro CGD</div><div class="fin-brand-sub">Deals • Pipeline 27</div></div>' +
+              '<div class="fin-side-brand">' + /* ✅ sem logo duplicada */
+                '<div class="fin-brand-title">Financeiro CGD</div>' +
+                '<div class="fin-brand-sub">Deals • Pipeline 27</div>' +
               '</div>' +
               '<div class="fin-side-block">' +
                 '<div class="fin-side-h">Centro de custo</div>' +
@@ -1080,18 +1038,12 @@
 
                 '<div class="fin-filters">' +
                   '<div class="fin-field"><label>Competência</label><select id="f-comp">' + buildOptions(S.enums[CFG.F.COMPETENCIA] || []) + '</select></div>' +
-                  '<div class="fin-field"><label>Tipo</label><select id="f-tipo">' + buildOptions(S.enums[CFG.F.TIPO_FIN] || []) + '</select></div>' +
                   '<div class="fin-field"><label>Conta</label><select id="f-conta">' + buildOptions(S.enums[CFG.F.CONTA] || [], true, "—") + '</select></div>' +
-                  '<div class="fin-field"><label>Status</label><select id="f-status">' + buildOptions(S.enums[CFG.F.STATUS_FIN] || [], true, "—") + '</select></div>' +
-                  '<div class="fin-field"><label>Etapa</label><select id="f-stage"><option value="">— Todos (exceto CONCLUÍDO) —</option>' +
-                    (S.stages || []).map(function (s) { return '<option value="' + esc(s.STATUS_ID) + '">' + esc(s.NAME) + '</option>'; }).join("") +
-                  '</select></div>' +
-
                   '<div style="flex-basis:100%; height:0"></div>' +
 
                   '<div class="fin-toggles">' +
-                    '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas (A PAGAR + PAGAS)</span></label>' +
-                    '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas (A RECEBER + RECEBIDAS)</span></label>' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-exp" checked> <span>Mostrar Despesas</span></label>' +
+                    '<label class="fin-check"><input type="checkbox" id="tog-rec" checked> <span>Mostrar Receitas</span></label>' +
                     '<div class="fin-check" style="margin-left:auto"><span class="fin-muted">Qtd. Itens:</span> <span id="tot-count" class="fin-strong">0</span></div>' +
                   '</div>' +
 
@@ -1127,7 +1079,8 @@
           '</div>' +
         '</div>' +
 
-        '<footer class="fin-footerbar">' +
+        /* ✅ Rodapé CGD (agora é DIV, não some) */
+        '<div class="fin-footerbar">' +
           '<div class="fin-footer-left"><div class="k">' + esc(CFG.FOOTER.addressTitle) + '</div><div class="v">' + esc(CFG.FOOTER.addressText) + '</div></div>' +
           '<div class="fin-footer-center">' + esc(CFG.FOOTER.credits) + '</div>' +
           '<div class="fin-footer-right">' +
@@ -1136,22 +1089,21 @@
             }).join("") +
           '</div>' +
           '<div class="fin-footer-avatars" id="fin-avatars"></div>' +
-        '</footer>' +
+        '</div>' +
 
       '</div>';
 
-    el("#btn-new").addEventListener("click", function () { openNewModal(); });
-    el("#btn-batch").addEventListener("click", function () { openBatchListModal(); });
-    el("#btn-refresh").addEventListener("click", function () { refresh(); });
-    el("#btn-csv").addEventListener("click", function () { exportCSV(); });
+    // handlers
     el("#btn-reserve").addEventListener("click", function () { openReserveModal(); });
+
+    // ✅ LOTE agora abre SEM FALHA
+    el("#btn-batch").addEventListener("click", function () { openBatchTableModal(); });
+
+    el("#btn-refresh").addEventListener("click", function () { refresh(); });
 
     el("#f-q").addEventListener("input", function (e) { S.filters.q = e.target.value || ""; applyFilters(); });
     el("#f-comp").addEventListener("change", function () { S.filters.competencia = el("#f-comp").value || ""; applyFilters(); });
-    el("#f-tipo").addEventListener("change", function () { S.filters.tipo = el("#f-tipo").value || ""; applyFilters(); });
     el("#f-conta").addEventListener("change", function () { S.filters.conta = el("#f-conta").value || ""; applyFilters(); });
-    el("#f-status").addEventListener("change", function () { S.filters.statusFin = el("#f-status").value || ""; applyFilters(); });
-    el("#f-stage").addEventListener("change", function () { S.filters.stageId = el("#f-stage").value || ""; applyFilters(); });
 
     el("#tog-exp").addEventListener("change", function () { S.filters.showPayables = !!el("#tog-exp").checked; applyFilters(); });
     el("#tog-rec").addEventListener("change", function () { S.filters.showReceivables = !!el("#tog-rec").checked; applyFilters(); });
@@ -1176,6 +1128,7 @@
       .finally(function () { setLoading(false); });
   }
 
+  // Promise.finally fallback
   if (!Promise.prototype.finally) {
     Promise.prototype.finally = function (cb) {
       var P = this.constructor;
@@ -1187,7 +1140,6 @@
   }
 
   function boot() {
-    // (3) não mexe no sentinel, não exibe “JS iniciou ✅”
     loadReserve();
     return loadMeta()
       .then(function () {
@@ -1203,9 +1155,6 @@
         root.innerHTML = '<div style="padding:16px">Falha ao iniciar. Veja console.</div>';
       });
   }
-
-  window.addEventListener("error", function () {});
-  window.addEventListener("unhandledrejection", function () {});
 
   boot();
 })();
