@@ -10,7 +10,6 @@
   --muted:#6b7280;
 
   --shadow:0 10px 30px rgba(0,0,0,.18);
-
   --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Helvetica Neue", "Noto Sans";
 }
 
@@ -24,18 +23,18 @@ body{
   background: var(--dark2);
 }
 
-/* ✅ (1) Ocultar rodapé do Bitrix Sites (SEM esconder nosso rodapé) */
+/* ✅ Ocultar rodapé do Bitrix Sites (SEM esconder nosso rodapé) */
 .landing-footer, .landing-footer-wrap, .landing-footer-container,
 .bx-footer, .bx-footer-wrap, .bx-footer-container,
 .landing-layout-footer, .landing-ui-footer,
 .landing-public-footer, .landing-footer-main,
-#bx_footer, #footer, .bitrix-footer, .b24-footer{
+#bx_footer, .bitrix-footer, .b24-footer{
   display:none !important;
   height:0 !important;
   overflow:hidden !important;
 }
 
-/* ✅ Ocultar sentinel “JS iniciou ✅” se existir */
+/* ✅ Ocultar sentinel “JS iniciou ✅” */
 #fin-sentinel{display:none !important;}
 
 /* ========= ESTRUTURA ========= */
@@ -93,7 +92,7 @@ body{
   background:var(--off);
   padding:6px;
   object-fit:contain;
-  border-radius:999px; /* ✅ logo redonda */
+  border-radius:999px;
   border:1px solid rgba(0,0,0,.18);
 }
 
@@ -118,7 +117,7 @@ body{
   border-radius:999px;
   border:1px solid rgba(255,255,255,.14);
   background:rgba(255,255,255,.10);
-  min-width:300px;
+  min-width:320px;
   color:#fff;
 }
 .fin-search input{
@@ -225,7 +224,7 @@ body{
 
 .fin-kpis{
   display:grid;
-  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
   gap:12px;
 }
 .fin-kpi{
@@ -318,7 +317,7 @@ body{
   width:100%;
   border-collapse:separate;
   border-spacing:0;
-  min-width:1200px;
+  min-width:1300px;
 }
 .fin-table th,.fin-table td{padding:10px 10px; border-bottom:1px solid var(--line); font-size:12px}
 .fin-table th{
@@ -377,6 +376,17 @@ body{
 }
 .fin-modal-body{padding:14px}
 
+/* ✅ Modal quase tela cheia */
+.fin-modal.is-fullscreen{
+  width: min(95vw, 1500px);
+  height: 90vh;
+  max-height: 90vh;
+}
+.fin-modal.is-fullscreen .fin-modal-body{
+  height: calc(90vh - 56px);
+  overflow:auto;
+}
+
 /* Modal LOTE (tabela editável) */
 .fin-batch-table{
   width:100%;
@@ -413,6 +423,7 @@ body{
 
 .fin-row{display:flex; gap:10px; align-items:center}
 .fin-row--right{justify-content:flex-end}
+.fin-wrap{flex-wrap:wrap}
 
 /* Toast */
 .fin-toast-host{
@@ -439,7 +450,7 @@ body{
 .fin-toast--show{transform:translateY(0); opacity:1}
 .fin-toast--err{background:#7a2a2a}
 
-/* ========= FOOTER BAR (agora é DIV, não some) ========= */
+/* ========= FOOTER BAR ========= */
 .fin-footerbar{
   background:var(--dark);
   color:#fff;
