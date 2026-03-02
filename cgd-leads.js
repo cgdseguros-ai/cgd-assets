@@ -89,6 +89,7 @@
       { name:"LIVIA ALVES", id:3079 },
       { name:"NICOLLE BELMONTE", id:3085 },
       { name:"ANNA CLARA", id:3389 },
+      { name:"DIOGO", id:1 },
       { name:"GABRIEL", id:815 },
       { name:"BEATRIZ", id:3387 },
     ],
