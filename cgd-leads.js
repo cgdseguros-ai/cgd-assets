@@ -56,7 +56,6 @@
         "3081": "C17:EXECUTING",
         "3083": "C17:UC_8O5UFO",
         "3079": "C17:UC_P1P9RJ",
-        "3085": "C17:UC_U8AAGB",
         "3389": "C17:UC_A6LSS8",
         "815":  "C17:UC_ZT6WEB",
         "3387": "C17:UC_RXISLQ"
@@ -89,11 +88,12 @@
       { name:"BRUNA LUISA", id:3081 },
       { name:"FERNANDA SILVA", id:3083 },
       { name:"LIVIA ALVES", id:3079 },
-      { name:"NICOLLE BELMONTE", id:3085 },
       { name:"ANNA CLARA", id:3389 },
       { name:"DIOGO", id:1 },
       { name:"GABRIEL", id:815 },
       { name:"BEATRIZ", id:3387 },
+      { name:"JULIA MELLO",       id:4743 },
+      { name:"NICOLE RODRIGUES",  id:4741 },
     ],
 
     BOSSES: [27, 1, 15],
@@ -1253,7 +1253,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       <div id="cgdApp">
         <div class="cgdTop">
           <div class="cgdTopLeft">
-            <img class="cgdLogo" src="${esc(CONFIG.LOGO_URL)}" alt="CGD" />
+            <img class="cgdLogo" src="" alt="CGD" />
             <div class="cgdTitle">PAINEL DE LEADS • CGD CORRETORA</div>
           </div>
 
@@ -1364,6 +1364,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
         </div>
       </div>
     `;
+    const logoEl = document.querySelector('.cgdLogo');
+    if (logoEl) logoEl.src = CONFIG.LOGO_URL;
   }
 
   // =========================
@@ -1612,6 +1614,42 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     return items.length;
   }
 
+  // Conta leads de um usuário em determinados STATUS_IDs filtrados por UF_CONTAGEM_DATA no range
+  async function fetchCountByStatusesRangeUser(userId, statuses, startISO, endISO) {
+    const data = await bxRaw("crm.lead.list", {
+      filter: {
+        [">=" + CONFIG.UF_CONTAGEM_DATA]: startISO,
+        ["<"  + CONFIG.UF_CONTAGEM_DATA]: endISO,
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": Array.isArray(statuses) ? statuses : [statuses]
+      },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 18000 });
+    const total = Number(data && data.total);
+    if (Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
+
+  // Conta leads de um usuário em determinados STATUS_IDs sem filtro de data
+  async function fetchCurrentCountByStatusesUser(userId, statuses) {
+    const data = await bxRaw("crm.lead.list", {
+      filter: {
+        "ASSIGNED_BY_ID": String(userId),
+        "STATUS_ID": Array.isArray(statuses) ? statuses : [statuses]
+      },
+      order: { ID: "DESC" },
+      select: ["ID"],
+      start: 0
+    }, { timeoutMs: 18000 });
+    const total = Number(data && data.total);
+    if (Number.isFinite(total)) return total;
+    const items = Array.isArray(data?.result) ? data.result : [];
+    return items.length;
+  }
+
   function leadDisplayName(it){
     const nm = [it.NAME, it.SECOND_NAME, it.LAST_NAME].filter(Boolean).map(String).join(" ").trim();
     if(nm) return nm;
@@ -1674,19 +1712,27 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   }
 
   async function actionPickLead(leadId, userId, rotateQueue){
+    // Optimistic UI update
     state.newLeadsAll = state.newLeadsAll.filter(x=> String(x.ID)!==String(leadId));
     state.newLeadsRender = state.newLeadsAll.slice(0, CONFIG.LIMIT_NEW_RENDER);
     renderNewLeads(state.newLeadsRender);
     renderPendingCount(state.pendingCount - 1);
 
-    enqueueOp("pickLead", async ()=>{
-      await leadUpdate(leadId, {
-        ASSIGNED_BY_ID: String(userId),
-        STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
-        // ✅ grava Data PEGAR no padrão do portal (+03:00)
-        [CONFIG.UF_DATA_PEGAR]: isoNowPortal()
-      });
-    });
+    const fields = {
+      ASSIGNED_BY_ID: String(userId),
+      STATUS_ID: CONFIG.LEAD_STATUS.EM_ATENDIMENTO,
+      [CONFIG.UF_DATA_PEGAR]: isoNowPortal()
+    };
+
+    // Tentativa imediata (rápida)
+    try {
+      await leadUpdate(leadId, fields);
+    } catch (err) {
+      console.warn("pickLead direct failed, enqueueing for retry", err);
+      // falhou: enfileira para retry
+      enqueueOp("pickLead", async () => { await leadUpdate(leadId, fields); });
+      flushOps();
+    }
 
     if(rotateQueue){
       enqueueOp("rotateQueueOnPick", async ()=>{
@@ -1702,9 +1748,8 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           state.queue = { ...state.queue, ...q, order };
         }
       });
+      flushOps();
     }
-
-    flushOps();
   }
 
   async function actionDiscardLead(leadId){
@@ -1858,7 +1903,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const ordered = computeUserOrder();
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { pulledToday:0, pulledMonth:0, lastTwo:[], success30:{attended:0, converted:0, pct:0} };
+      const us = state.userStats[u.id] || { activeQual30d:0, currentActiveQual:0, converted30d:0, lastTwo:[], success30:{ a:0, c:0, pct:0 } };
       const l1 = us.lastTwo[0];
       const l2 = us.lastTwo[1];
 
@@ -1866,29 +1911,27 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       const last2 = l2 ? `Anterior: ${leadDisplayName(l2)}` : "Anterior: —";
 
       const imgUrl = state.userPhoto.get(String(u.id)) || BLANK_IMG;
-      const suc = us.success30 || { attended:0, converted:0, pct:0 };
+      const suc = us.success30 || { a:0, c:0, pct:0 };
 
       const card = document.createElement("div");
       card.className = "cgdCard";
       card.style.padding = "9px";
       card.innerHTML = `
-        <div class="cgdUserLine">
-          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy" src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
-          <div style="width:100%; min-width:0">
-            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px">
-              <div style="font-weight:950; font-size:13px; line-height:1.15; min-width:0; word-break:break-word">${esc(u.name)}</div>
-              <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap; justify-content:flex-end; flex:0 0 auto">
-                <span class="cgdBadge">dia: ${esc(us.pulledToday||0)}</span>
-                <span class="cgdBadge">mês: ${esc(us.pulledMonth||0)}</span>
-              </div>
-            </div>
-            <div style="margin-top:6px; display:flex; gap:4px; flex-wrap:wrap">
-              <span class="cgdBadge">sucesso 30d: ${esc(suc.pct||0)}% (${esc(suc.converted||0)}/${esc(suc.attended||0)})</span>
-            </div>
-            <div style="margin-top:7px; font-size:11px; font-weight:900; opacity:.84; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last1)}</div>
-            <div style="margin-top:3px; font-size:11px; font-weight:900; opacity:.72; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last2)}</div>
+        <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px">
+          <img class="cgdUserPic" alt="${esc(u.name)}" loading="lazy"
+               src="${esc(imgUrl || BLANK_IMG)}" data-user-pic="${esc(u.id)}" />
+          <div style="font-weight:950; font-size:13px; line-height:1.2; word-break:break-word; min-width:0; flex:1 1 auto">
+            ${esc(u.name)}
           </div>
         </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 6px; margin-bottom:7px">
+          <span class="cgdBadge" style="text-align:center">atv+qual 30d: <b>${esc(suc.a || 0)}</b></span>
+          <span class="cgdBadge" style="text-align:center">atv+qual atual: <b>${esc(us.currentActiveQual || 0)}</b></span>
+          <span class="cgdBadge" style="text-align:center">conv 30d: <b>${esc(suc.c || 0)}</b></span>
+          <span class="cgdBadge" style="text-align:center">sucesso 30d: <b>${esc(suc.pct || 0)}%</b> (${esc(suc.c || 0)}/${esc(suc.a || 0)})</span>
+        </div>
+        <div style="font-size:11px; font-weight:900; opacity:.84; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last1)}</div>
+        <div style="margin-top:3px; font-size:11px; font-weight:900; opacity:.72; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last2)}</div>
       `;
       list.appendChild(card);
     });
@@ -1924,18 +1967,17 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // ABRIR: FULL + retry
   // =========================
   async function fetchUserStatsFull(userId){
-    const { startISO: dayS, endISO: dayE } = dayRangePortal();
-    const { startISO: monS, endISO: monE } = monthRangePortal();
     const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
 
-    const pulledToday = await fetchPegCountRangeUser(userId, dayS, dayE);
-    const pulledMonth = await fetchPegCountRangeUser(userId, monS, monE);
-
-    const [att30, conv30] = await Promise.all([
-      fetchPegCountRangeUserStatus(userId, CONFIG.LEAD_STATUS.ATENDIDO, r30S, r30E),
-      fetchPegCountRangeUserStatus(userId, CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA, r30S, r30E)
+    const [aq30, curAQ, conv30] = await Promise.all([
+      fetchCountByStatusesRangeUser(userId,
+        [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
+      fetchCurrentCountByStatusesUser(userId,
+        [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO]),
+      fetchCountByStatusesRangeUser(userId,
+        [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
     ]);
-    const pct = (att30 > 0) ? Math.round((conv30 / att30) * 100) : 0;
+    const pct = aq30 > 0 ? Math.round((conv30 / aq30) * 100) : 0;
 
     const list = await bxListAll("crm.lead.list", {
       filter: { "ASSIGNED_BY_ID": String(userId) },
@@ -1949,11 +1991,12 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     }).slice(0,2);
 
     return {
-      pulledToday: pulledToday||0,
-      pulledMonth: pulledMonth||0,
+      activeQual30d:     aq30   || 0,
+      currentActiveQual: curAQ  || 0,
+      converted30d:      conv30 || 0,
       lastTwo,
       list: list || [],
-      success30: { attended: att30||0, converted: conv30||0, pct }
+      success30: { a: aq30 || 0, c: conv30 || 0, pct }
     };
   }
 
@@ -2622,30 +2665,31 @@ async function modalBatchTransfer(){
     try{
       renderWho();
 
-      const { startISO: dayS, endISO: dayE } = dayRangePortal();
-      const { startISO: monS, endISO: monE } = monthRangePortal();
       const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
 
       const users = CONFIG.USERS.slice();
       for(let i=0;i<users.length;i+=5){
         const part = users.slice(i,i+5);
         const jobs = part.map(async u=>{
-          const [d, m, lt, att30, conv30] = await Promise.all([
-            fetchPegCountRangeUser(u.id, dayS, dayE),
-            fetchPegCountRangeUser(u.id, monS, monE),
+          const [aq30, curAQ, conv30, lt] = await Promise.all([
+            fetchCountByStatusesRangeUser(u.id,
+              [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
+            fetchCurrentCountByStatusesUser(u.id,
+              [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO]),
+            fetchCountByStatusesRangeUser(u.id,
+              [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
             fetchUserLastTwoFast(u.id),
-            fetchPegCountRangeUserStatus(u.id, CONFIG.LEAD_STATUS.ATENDIDO, r30S, r30E),
-            fetchPegCountRangeUserStatus(u.id, CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA, r30S, r30E),
           ]);
 
-          const pct = (att30 > 0) ? Math.round((conv30 / att30) * 100) : 0;
+          const pct = aq30 > 0 ? Math.round((conv30 / aq30) * 100) : 0;
 
           state.userStats[u.id] = {
             ...(state.userStats[u.id]||{}),
-            pulledToday: d||0,
-            pulledMonth: m||0,
-            lastTwo: lt.lastTwo || [],
-            success30: { attended: att30||0, converted: conv30||0, pct }
+            activeQual30d:     aq30   || 0,
+            currentActiveQual: curAQ  || 0,
+            converted30d:      conv30 || 0,
+            lastTwo:           lt.lastTwo || [],
+            success30: { a: aq30 || 0, c: conv30 || 0, pct },
           };
         });
         await Promise.all(jobs);
