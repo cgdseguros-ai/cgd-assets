@@ -72,7 +72,7 @@
     REFRESH_NEW_LEADS_MS: 4500,
     REFRESH_STATS_MS: 9000,
     REFRESH_QUEUE_MS: 3000,
-    REFRESH_WHO_MS: 12000,
+    REFRESH_WHO_MS: 10000,
 
     LIMIT_NEW_RENDER: 30,
     LIMIT_BATCH_MAX:  600,
@@ -1587,7 +1587,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 18000 });
+    }, { timeoutMs: 10000 });
     const total = Number(data && data.total);
     if(Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
@@ -1626,7 +1626,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 18000 });
+    }, { timeoutMs: 10000 });
     const total = Number(data && data.total);
     if (Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
@@ -1643,7 +1643,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       order: { ID: "DESC" },
       select: ["ID"],
       start: 0
-    }, { timeoutMs: 18000 });
+    }, { timeoutMs: 10000 });
     const total = Number(data && data.total);
     if (Number.isFinite(total)) return total;
     const items = Array.isArray(data?.result) ? data.result : [];
@@ -1903,7 +1903,7 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const ordered = computeUserOrder();
     ordered.forEach(u=>{
-      const us = state.userStats[u.id] || { activeQual30d:0, currentActiveQual:0, converted30d:0, lastTwo:[], success30:{ a:0, c:0, pct:0 } };
+      const us = state.userStats[u.id] || { activeQual30d:0, currentActiveQual:0, converted30d:0, leadsHoje:0, lastTwo:[], success30:{ a:0, c:0, pct:0 } };
       const l1 = us.lastTwo[0];
       const l2 = us.lastTwo[1];
 
@@ -1925,10 +1925,11 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
           </div>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 6px; margin-bottom:7px">
-          <span class="cgdBadge" style="text-align:center">atv+qual 30d: <b>${esc(suc.a || 0)}</b></span>
+          <span class="cgdBadge" style="text-align:center">hoje: <b>${esc(us.leadsHoje || 0)}</b></span>
           <span class="cgdBadge" style="text-align:center">atv+qual atual: <b>${esc(us.currentActiveQual || 0)}</b></span>
+          <span class="cgdBadge" style="text-align:center">atv+qual 30d: <b>${esc(suc.a || 0)}</b></span>
           <span class="cgdBadge" style="text-align:center">conv 30d: <b>${esc(suc.c || 0)}</b></span>
-          <span class="cgdBadge" style="text-align:center">sucesso 30d: <b>${esc(suc.pct || 0)}%</b> (${esc(suc.c || 0)}/${esc(suc.a || 0)})</span>
+          <span class="cgdBadge" style="grid-column:1/-1; text-align:center">sucesso 30d: <b>${esc(suc.pct || 0)}%</b> (${esc(suc.c || 0)}/${esc(suc.a || 0)})</span>
         </div>
         <div style="font-size:11px; font-weight:900; opacity:.84; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last1)}</div>
         <div style="margin-top:3px; font-size:11px; font-weight:900; opacity:.72; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(last2)}</div>
@@ -1968,14 +1969,16 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
   // =========================
   async function fetchUserStatsFull(userId){
     const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
+    const { startISO: dayS, endISO: dayE } = dayRangePortal();
 
-    const [aq30, curAQ, conv30] = await Promise.all([
+    const [aq30, curAQ, conv30, leadsHoje] = await Promise.all([
       fetchCountByStatusesRangeUser(userId,
         [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
       fetchCurrentCountByStatusesUser(userId,
         [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO]),
       fetchCountByStatusesRangeUser(userId,
         [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
+      fetchPegCountRangeUser(userId, dayS, dayE),
     ]);
     const pct = aq30 > 0 ? Math.round((conv30 / aq30) * 100) : 0;
 
@@ -1991,9 +1994,10 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     }).slice(0,2);
 
     return {
-      activeQual30d:     aq30   || 0,
-      currentActiveQual: curAQ  || 0,
-      converted30d:      conv30 || 0,
+      activeQual30d:     aq30       || 0,
+      currentActiveQual: curAQ      || 0,
+      converted30d:      conv30     || 0,
+      leadsHoje:         leadsHoje  || 0,
       lastTwo,
       list: list || [],
       success30: { a: aq30 || 0, c: conv30 || 0, pct }
@@ -2666,12 +2670,13 @@ async function modalBatchTransfer(){
       renderWho();
 
       const { startISO: r30S, endISO: r30E } = last30DaysRangePortal();
+      const { startISO: dayS, endISO: dayE } = dayRangePortal();
 
       const users = CONFIG.USERS.slice();
-      for(let i=0;i<users.length;i+=5){
-        const part = users.slice(i,i+5);
+      for(let i=0;i<users.length;i+=8){
+        const part = users.slice(i,i+8);
         const jobs = part.map(async u=>{
-          const [aq30, curAQ, conv30, lt] = await Promise.all([
+          const [aq30, curAQ, conv30, lt, leadsHoje] = await Promise.all([
             fetchCountByStatusesRangeUser(u.id,
               [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
             fetchCurrentCountByStatusesUser(u.id,
@@ -2679,22 +2684,24 @@ async function modalBatchTransfer(){
             fetchCountByStatusesRangeUser(u.id,
               [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
             fetchUserLastTwoFast(u.id),
+            fetchPegCountRangeUser(u.id, dayS, dayE),
           ]);
 
           const pct = aq30 > 0 ? Math.round((conv30 / aq30) * 100) : 0;
 
           state.userStats[u.id] = {
             ...(state.userStats[u.id]||{}),
-            activeQual30d:     aq30   || 0,
-            currentActiveQual: curAQ  || 0,
-            converted30d:      conv30 || 0,
+            activeQual30d:     aq30       || 0,
+            currentActiveQual: curAQ      || 0,
+            converted30d:      conv30     || 0,
+            leadsHoje:         leadsHoje  || 0,
             lastTwo:           lt.lastTwo || [],
             success30: { a: aq30 || 0, c: conv30 || 0, pct },
           };
         });
         await Promise.all(jobs);
         renderWho();
-        await sleep(60);
+        await sleep(30);
       }
     }catch(err){
       console.warn("user stats failed", err);
@@ -2893,8 +2900,13 @@ async function modalBatchTransfer(){
 
     warmUserPhotos().then(()=> renderBossPics()).catch(()=>{});
 
-    await Promise.allSettled([refreshNewLeads(), refreshPendingCount(), refreshStats(), refreshQueue()]);
-    refreshUsersFast();
+    Promise.allSettled([
+      refreshNewLeads(),
+      refreshPendingCount(),
+      refreshStats(),
+      refreshQueue(),
+      refreshUsersFast(),
+    ]);
     setStatus(`Atualizado: ${nowBRTime()}`);
     renderBossPics();
 
