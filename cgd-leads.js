@@ -62,7 +62,7 @@
       }
     },
 
-    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile/?&token=awjcg85eqrbi",
+    LOGO_URL: "https://bitrix24public.com/b24-6iyx5y.bitrix24.com.br/docs/pub/189eb7d8a5cc26250f61ee3c26e9f997/showFile?token=rtj2bztg7ui6",
 
     LINKS: {
       GET: "https://getcgdcorretora.bitrix24.site/tfequipes/",
@@ -92,7 +92,6 @@
       { name:"DIOGO", id:1 },
       { name:"GABRIEL", id:815 },
       { name:"BEATRIZ", id:3387 },
-      { name:"JULIA MELLO",       id:4743 },
       { name:"NICOLE RODRIGUES",  id:4741 },
     ],
 
@@ -1973,9 +1972,9 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
 
     const [aq30, curAQ, conv30, leadsHoje] = await Promise.all([
       fetchCountByStatusesRangeUser(userId,
-        [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
+        [CONFIG.LEAD_STATUS.ATENDIDO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
       fetchCurrentCountByStatusesUser(userId,
-        [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO]),
+        [CONFIG.LEAD_STATUS.ATENDIDO, CONFIG.LEAD_STATUS.QUALIFICADO]),
       fetchCountByStatusesRangeUser(userId,
         [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
       fetchPegCountRangeUser(userId, dayS, dayE),
@@ -2678,9 +2677,9 @@ async function modalBatchTransfer(){
         const jobs = part.map(async u=>{
           const [aq30, curAQ, conv30, lt, leadsHoje] = await Promise.all([
             fetchCountByStatusesRangeUser(u.id,
-              [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
+              [CONFIG.LEAD_STATUS.ATENDIDO, CONFIG.LEAD_STATUS.QUALIFICADO], r30S, r30E),
             fetchCurrentCountByStatusesUser(u.id,
-              [CONFIG.LEAD_STATUS.EM_ATENDIMENTO, CONFIG.LEAD_STATUS.QUALIFICADO]),
+              [CONFIG.LEAD_STATUS.ATENDIDO, CONFIG.LEAD_STATUS.QUALIFICADO]),
             fetchCountByStatusesRangeUser(u.id,
               [CONFIG.LEAD_STATUS.LEAD_CONVERTIDO_SISTEMA], r30S, r30E),
             fetchUserLastTwoFast(u.id),
