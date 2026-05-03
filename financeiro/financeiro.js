@@ -150,7 +150,65 @@
     if (!iso) return "";
     var m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!m) return iso;
-    return m[3] + "-" + m[2] + "-" + m[1];
+    return m[3] + "/" + m[2] + "/" + m[1];
+  }
+
+  // =========================
+  // RUID helpers (recorrência — padrão equipe17.js)
+  // =========================
+  var RUID_MARKER_RE = /\[RUID=([^\]]+)\]/i;
+
+  function genRUID() {
+    return 'FIN-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+  }
+
+  // =========================
+  // Date input masking (auto-inserts /)
+  // =========================
+  function applyDateMask(inputEl) {
+    if (!inputEl) return;
+    var v = inputEl.value.replace(/\D/g, '');
+    if (v.length > 8) v = v.slice(0, 8);
+    var out = '';
+    if (v.length <= 2) out = v;
+    else if (v.length <= 4) out = v.slice(0, 2) + '/' + v.slice(2);
+    else out = v.slice(0, 2) + '/' + v.slice(2, 4) + '/' + v.slice(4);
+    if (inputEl.value !== out) inputEl.value = out;
+  }
+
+  function bindDateInput(inputEl) {
+    if (!inputEl) return;
+    inputEl.addEventListener('input', function() { applyDateMask(inputEl); });
+  }
+
+  // =========================
+  // Conta helpers (CT = cartão, CC = conta corrente)
+  // =========================
+  var CC_TO_CENTRO_MAP = [
+    { cc: 'CC ITAÚ PJ', centro: 'CGD CORRETORA' },
+    { cc: 'CC ITAU PJ', centro: 'CGD CORRETORA' },
+    { cc: 'CC CORA CGD BARRA', centro: 'CGD BARRA' },
+    { cc: 'CC PICPAY PF', centro: 'DIOGO PF' }
+  ];
+
+  function isCardConta(contaId) {
+    var name = String(enumName(CFG.F.CONTA, contaId) || '').trim().toUpperCase();
+    return name.indexOf('CT ') === 0;
+  }
+
+  function ccAccountToCentroId(contaId) {
+    var contaName = String(enumName(CFG.F.CONTA, contaId) || '').trim();
+    var n = contaName.toUpperCase();
+    var target = '';
+    for (var i = 0; i < CC_TO_CENTRO_MAP.length; i++) {
+      if (n.indexOf(CC_TO_CENTRO_MAP[i].cc.toUpperCase()) > -1) { target = CC_TO_CENTRO_MAP[i].centro; break; }
+    }
+    if (!target) return '';
+    var items = S.enums[CFG.F.CENTRO_CUSTO] || [];
+    for (var j = 0; j < items.length; j++) {
+      if (String(items[j].VALUE || '').toUpperCase() === target) return String(items[j].ID);
+    }
+    return '';
   }
 
   function parseMoneyBR(s) {
@@ -968,8 +1026,14 @@
 
     var ccSel = String(S.filters.centro || "");
     if (el("#cc-balance")) {
-      if (!ccSel) el("#cc-balance").textContent = "—";
-      else el("#cc-balance").textContent = moneyBR(computeCCBalance(ccSel));
+      if (!ccSel) {
+        var allCC = (S.enums && S.enums[CFG.F.CENTRO_CUSTO]) ? S.enums[CFG.F.CENTRO_CUSTO] : [];
+        var totalCC = 0;
+        for (var ic = 0; ic < allCC.length; ic++) totalCC += computeCCBalance(String(allCC[ic].ID));
+        el("#cc-balance").textContent = moneyBR(totalCC);
+      } else {
+        el("#cc-balance").textContent = moneyBR(computeCCBalance(ccSel));
+      }
     }
 
     if (S.lastSyncAt && el("#fin-lastsync")) {
@@ -1144,11 +1208,12 @@
       '<div class="fin-modal-body">' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
           '<div class="fin-field" style="flex:1;min-width:240px"><label>Valor pago/recebido (opcional)</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento (DD-MM-AAAA)</label><input id="pr-date" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento (DD/MM/AAAA)</label><input id="pr-date" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD/MM/AAAA"></div>' +
         '</div>' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
           '<div class="fin-field" style="flex:1;min-width:240px"><label>Conta</label><select id="pr-conta">' + contaOpts + '</select></div>' +
         '</div>' +
+        '<div id="pr-cc-info" class="fin-muted" style="margin-top:8px;font-weight:900;font-size:11px;display:none"></div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
           '<button class="fin-btn fin-btn--primary" id="pr-save" data-busylock="1">Salvar</button>' +
@@ -1157,9 +1222,31 @@
     );
 
     if (currentConta) m.q("#pr-conta").value = currentConta;
+    bindDateInput(m.q("#pr-date"));
+
+    function updateContaInfo() {
+      var contaId = m.q("#pr-conta").value;
+      var infoEl = m.q("#pr-cc-info");
+      if (!contaId || !isDesp) { infoEl.style.display = 'none'; return; }
+      var contaName = enumName(CFG.F.CONTA, contaId) || '';
+      if (isCardConta(contaId)) {
+        infoEl.textContent = '💳 Cartão: será criado lançamento avulso na fatura de ' + contaName + '. Sem débito de centro de custo.';
+        infoEl.style.display = '';
+      } else {
+        var centroId = ccAccountToCentroId(contaId);
+        var centroName = centroId ? (enumName(CFG.F.CENTRO_CUSTO, centroId) || centroId) : '';
+        if (centroName) {
+          infoEl.textContent = '🏦 Conta corrente: irá debitar do centro de custo "' + centroName + '".';
+          infoEl.style.display = '';
+        } else {
+          infoEl.style.display = 'none';
+        }
+      }
+    }
+    m.q("#pr-conta").addEventListener("change", updateContaInfo);
+    updateContaInfo();
 
     m.q("#pr-save").addEventListener("click", function () {
-      var saveBtn = m.q("#pr-save");
       setModalBusy(m.node, true, "Salvando...");
 
       var v = parseMoneyBR(m.q("#pr-val").value || "");
@@ -1170,19 +1257,56 @@
         return;
       }
 
+      var contaSel = m.q("#pr-conta").value;
+      var isCard = isDesp && contaSel && isCardConta(contaSel);
+
       var fields = {};
       fields[CFG.F.VALOR_REAL] = v;
       fields[CFG.F.DATA_REAL] = dt;
       fields.STAGE_ID = stageTo;
-      var contaSel = m.q("#pr-conta").value;
       if (contaSel) fields[CFG.F.CONTA] = contaSel;
+
+      if (isDesp) {
+        if (isCard) {
+          // CT: clear CENTRO_CUSTO to avoid cost-center deduction
+          fields[CFG.F.CENTRO_CUSTO] = '';
+        } else if (contaSel) {
+          // CC: auto-map to cost center
+          var centroId = ccAccountToCentroId(contaSel);
+          if (centroId) fields[CFG.F.CENTRO_CUSTO] = centroId;
+        }
+      }
+
+      var cardName = contaSel ? (enumName(CFG.F.CONTA, contaSel) || contaSel) : '';
+      var fav = String(deal[CFG.F.FAVORECIDO] || deal.TITLE || 'Deal #' + deal.ID);
+      var tipoEnum = tipoEnumForKind('DESPESA');
+      var comp = guessCompetenciaIdFromISO(dt);
 
       updateDeal(deal.ID, fields)
         .then(function () {
           mergeDealPatch(deal.ID, fields);
+          if (isCard && v > 0) {
+            var invoiceFields = {};
+            invoiceFields.TITLE = 'FATURA • ' + cardName + ' • ' + fav;
+            invoiceFields.CATEGORY_ID = String(CFG.DEAL_CATEGORY_ID);
+            invoiceFields.STAGE_ID = CFG.STAGES.DESP_A_PAGAR;
+            if (tipoEnum) invoiceFields[CFG.F.TIPO_FIN] = tipoEnum;
+            invoiceFields[CFG.F.CONTA] = contaSel;
+            invoiceFields[CFG.F.FAVORECIDO] = 'FATURA ' + cardName;
+            invoiceFields[CFG.F.VALOR_PREV] = v;
+            invoiceFields[CFG.F.DATA_PREV] = dt;
+            if (comp) invoiceFields[CFG.F.COMPETENCIA] = comp;
+            invoiceFields[CFG.F.OBS] = 'Compra: ' + fav + ' • Pago via ' + cardName;
+            return createDeal(invoiceFields).then(function (newId) {
+              addDealLocal(invoiceFields, newId);
+              logAudit('Lançamento cartão', 'Deal #' + newId + ' - fatura ' + cardName);
+            });
+          }
+        })
+        .then(function () {
           S.lastSyncAt = nowBR();
           applyFilters();
-          toast("Atualizado ✅");
+          toast(isCard ? "Pago via cartão ✅ (fatura criada)" : "Atualizado ✅");
           m.close();
         })
         .catch(function (e) { toast("Falha: " + (e.message || String(e)), "err"); })
@@ -1244,8 +1368,8 @@
         '</div>' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
           '<div class="fin-field" style="flex:1;min-width:220px"><label>Competência</label><select id="ed-comp">' + compOpts + '</select></div>' +
-          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data prevista (DD-MM-AAAA)</label><input id="ed-dprev" value="' + esc(toDisplayDate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data real (DD-MM-AAAA)</label><input id="ed-dreal" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data prevista (DD/MM/AAAA)</label><input id="ed-dprev" value="' + esc(toDisplayDate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="DD/MM/AAAA"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data real (DD/MM/AAAA)</label><input id="ed-dreal" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD/MM/AAAA"></div>' +
         '</div>' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
           '<div class="fin-field" style="flex:1;min-width:200px"><label>Valor previsto</label><input id="ed-vprev" value="' + esc(String(deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="1500,00"></div>' +
@@ -1265,6 +1389,8 @@
     m.q("#ed-conta").value = String(deal[CFG.F.CONTA] || "");
     m.q("#ed-cat").value = String(deal[CFG.F.CATEGORIA] || "");
     m.q("#ed-comp").value = String(deal[CFG.F.COMPETENCIA] || "");
+    bindDateInput(m.q("#ed-dprev"));
+    bindDateInput(m.q("#ed-dreal"));
 
     m.q("#ed-save").addEventListener("click", function () {
       var fav = String(m.q("#ed-fav").value || "").trim();
@@ -1517,7 +1643,7 @@
 
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
           '<div class="fin-field" style="flex:2;min-width:260px"><label>Título</label><input id="rm-title" value="' + esc(baseTitle) + '"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:220px"><label>Data inicial</label><input id="rm-start" value="' + esc(toISODate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:220px"><label>Data inicial</label><input id="rm-start" value="' + esc(toDisplayDate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="DD/MM/AAAA"></div>' +
         '</div>' +
 
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
@@ -1565,6 +1691,7 @@
     }
     m.q("#rm-freq").addEventListener("change", toggleByFreq);
     toggleByFreq();
+    bindDateInput(m.q("#rm-start"));
 
     m.q("#rm-save").addEventListener("click", function () {
       try {
@@ -1870,7 +1997,7 @@
           '<td><input class="fin-batch-inp" data-k="monthday" value="' + esc(r.monthday) + '" ' + (showMonthDay ? "" : "disabled") + ' placeholder="1..31"></td>' +
           '<td><input class="fin-batch-inp" data-k="month" value="' + esc(r.month) + '" ' + (showMonth ? "" : "disabled") + ' placeholder="1..12"></td>' +
 
-          '<td><input class="fin-batch-inp" data-k="start" value="' + esc(r.start) + '" placeholder="YYYY-MM-DD"></td>' +
+          '<td><input class="fin-batch-inp" data-k="start" value="' + esc(r.start ? toDisplayDate(r.start) : '') + '" placeholder="DD/MM/AAAA"></td>' +
           '<td><input class="fin-batch-inp" data-k="count" value="' + esc(r.count) + '" placeholder="1"></td>' +
 
           '<td><button class="fin-btn fin-btn--danger" data-del="1" style="width:100%">Remover</button></td>' +
@@ -1946,6 +2073,7 @@
         var i = Number(tr.getAttribute("data-i"));
         var k = e.target.getAttribute("data-k");
         if (!k) return;
+        if (k === 'start') applyDateMask(e.target);
         rows[i][k] = e.target.value;
       });
 
@@ -1992,7 +2120,7 @@
           if (isBadFav(fav)) throw new Error("Favorecido inválido (FILA/QUEUE): " + fav);
 
           var start = toISODate(r.start || "");
-          if (!start) throw new Error("Linha com Favorecido sem Data inicial (YYYY-MM-DD). Fav: " + fav);
+          if (!start) throw new Error("Linha com Favorecido sem Data inicial (DD/MM/AAAA). Fav: " + fav);
 
           var vprev = parseMoneyBR(r.valor || "");
           var cc = r.centro || "";
@@ -2002,6 +2130,8 @@
 
           var stage = stageForKind(kind);
           var count = Math.max(1, parseInt(r.count || "1", 10) || 1);
+          var isRecurring = (kind === "DESPESA" && r.freq !== "once" && count > 1);
+          var ruid = isRecurring ? genRUID() : "";
 
           var p = Promise.resolve();
           for (var k = 0; k < count; k++) (function (idx) {
@@ -2024,12 +2154,25 @@
               fields[CFG.F.DATA_PREV] = dt;
               if (vprev || vprev === 0) fields[CFG.F.VALOR_PREV] = vprev;
               fields[CFG.F.FAVORECIDO] = fav;
-              if (obs) fields[CFG.F.OBS] = obs;
+
+              var obsVal = obs;
+              if (ruid) obsVal = (obsVal ? obsVal + '\n' : '') + '[RUID=' + ruid + ']';
+              if (obsVal) fields[CFG.F.OBS] = obsVal;
 
               return createDeal(fields).then(function (newId) {
                 created++;
                 addDealLocal(fields, newId);
-                logAudit('Criar cartão', 'Deal #' + newId + ' criado via cartão');
+                logAudit('Criar lote', 'Deal #' + newId + ' criado via lote');
+
+                if (ruid) {
+                  var reminderFields = {};
+                  reminderFields.TITLE = 'DESP REC • ' + fav + (count > 1 ? ' • ' + (idx + 1) + '/' + count : '');
+                  reminderFields.CATEGORY_ID = String(CFG.REMINDER_CATEGORY_ID);
+                  reminderFields.STAGE_ID = String(CFG.REMINDER_STAGE_ID);
+                  reminderFields.ASSIGNED_BY_ID = String(CFG.REMINDER_ASSIGNED_ID);
+                  reminderFields.COMMENTS = '[RUID=' + ruid + '] FIN • DESPESA RECORRENTE • ' + fav + ' • Data: ' + dt + (obs ? '\nObs: ' + obs : '');
+                  return apiCall('crm.deal.add', { fields: reminderFields }).catch(function() {});
+                }
               });
             });
           })(k);
@@ -2131,7 +2274,7 @@
           '<td><select class="fin-batch-sel" data-k="categoria">' + catOpts + '</select></td>' +
           '<td><input class="fin-batch-inp" data-k="favorecido" value="' + esc(r.favorecido) + '"></td>' +
           '<td><input class="fin-batch-inp" data-k="valor" value="' + esc(r.valor) + '" placeholder="1500,00"></td>' +
-          '<td><input class="fin-batch-inp" data-k="data" value="' + esc(r.data) + '" placeholder="YYYY-MM-DD"></td>' +
+          '<td><input class="fin-batch-inp" data-k="data" value="' + esc(r.data ? toDisplayDate(r.data) : '') + '" placeholder="DD/MM/AAAA"></td>' +
           '<td><input class="fin-batch-inp" data-k="parcelas" value="' + esc(r.parcelas) + '" placeholder="1"></td>' +
           '<td><input class="fin-batch-inp" data-k="parcelaAtual" value="' + esc(r.parcelaAtual) + '" placeholder="1"></td>' +
           '<td><input class="fin-batch-inp" data-k="obs" value="' + esc(r.obs) + '" placeholder="opcional"></td>' +
@@ -2162,6 +2305,7 @@
       var i = Number(tr.getAttribute("data-i"));
       var k = e.target.getAttribute("data-k");
       if (!k) return;
+      if (k === 'data') applyDateMask(e.target);
       rows[i][k] = e.target.value;
     });
     m.q("#cc-tb").addEventListener("change", function (e) {
@@ -2474,7 +2618,8 @@
     var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, '—');
     var ccOpts = buildOptions(S.enums[CFG.F.CENTRO_CUSTO] || [], true, '—');
     var catOpts = buildOptions(S.enums[CFG.F.CATEGORIA] || [], true, '—');
-    var today = toISODate(new Date().toLocaleDateString('pt-BR'));
+    var now = new Date();
+    var today = String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
 
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">Ações em massa</div><button class="fin-x" data-close="1">×</button></div>' +
@@ -2487,7 +2632,7 @@
           '<option value="categoria">Alterar categoria</option>' +
           '<option value="delete">Excluir selecionados</option>' +
         '</select></div>' +
-        '<div id="bulk-stage-box"><div class="fin-field"><label>Data real</label><input id="bulk-data" type="date" value="' + esc(today) + '"></div></div>' +
+        '<div id="bulk-stage-box"><div class="fin-field"><label>Data real (DD/MM/AAAA)</label><input id="bulk-data" placeholder="DD/MM/AAAA" value="' + esc(today) + '"></div></div>' +
         '<div id="bulk-conta-box" style="display:none"><div class="fin-field"><label>Conta</label><select id="bulk-conta">' + contaOpts + '</select></div></div>' +
         '<div id="bulk-centro-box" style="display:none"><div class="fin-field"><label>Centro</label><select id="bulk-centro">' + ccOpts + '</select></div></div>' +
         '<div id="bulk-categoria-box" style="display:none"><div class="fin-field"><label>Categoria</label><select id="bulk-categoria">' + catOpts + '</select></div></div>' +
@@ -2497,6 +2642,8 @@
         '</div>' +
       '</div>'
     );
+
+    bindDateInput(m.q('#bulk-data'));
 
     var sel = m.q('#bulk-action');
     function syncBulkBoxes() {
@@ -2542,7 +2689,7 @@
             var next = nextStageByCurrent(deal.STAGE_ID);
             if (!next) return;
             var fieldsStage = { STAGE_ID: next };
-            fieldsStage[CFG.F.DATA_REAL] = String(m.q('#bulk-data').value || '');
+            fieldsStage[CFG.F.DATA_REAL] = toISODate(m.q('#bulk-data').value || '');
             fieldsStage[CFG.F.VALOR_REAL] = Number(deal[CFG.F.VALOR_REAL] || 0) || Number(deal[CFG.F.VALOR_PREV] || 0) || 0;
             return updateDeal(id, fieldsStage).then(function(){ mergeDealPatch(id, fieldsStage); updated++; logAudit('Ação em massa: estágio', 'Deal #' + id + ' -> ' + stageName(next)); });
           }
@@ -2559,6 +2706,149 @@
         toast('Falha na ação em massa: ' + (e.message || String(e)), 'err');
       }).finally(function(){
         setModalBusy(m.node, false);
+      });
+    });
+  }
+
+  // =========================
+  // Recurring expenses modal (DESPESAS RECORRENTES)
+  // =========================
+  function openRecurringExpensesModal() {
+    var groups = {};
+    var today = new Date().toISOString().slice(0, 10);
+
+    for (var i = 0; i < (S.deals || []).length; i++) {
+      var d = S.deals[i];
+      var st = String(d.STAGE_ID || '');
+      if (st !== CFG.STAGES.DESP_A_PAGAR && st !== CFG.STAGES.DESP_PAGA) continue;
+      var obs = String(d[CFG.F.OBS] || '');
+      var rm = obs.match(RUID_MARKER_RE);
+      if (!rm) continue;
+      var ruid = rm[1];
+      if (!groups[ruid]) groups[ruid] = { ruid: ruid, fav: String(d[CFG.F.FAVORECIDO] || d.TITLE || ''), deals: [] };
+      groups[ruid].deals.push(d);
+    }
+
+    var keys = Object.keys(groups);
+    if (!keys.length) {
+      toast('Nenhuma despesa recorrente encontrada.', 'err');
+      return;
+    }
+
+    for (var ki = 0; ki < keys.length; ki++) {
+      groups[keys[ki]].deals.sort(function(a, b) {
+        var da = toISODate(a[CFG.F.DATA_PREV] || '') || '9999-99-99';
+        var db = toISODate(b[CFG.F.DATA_PREV] || '') || '9999-99-99';
+        return da < db ? -1 : da > db ? 1 : 0;
+      });
+    }
+
+    function renderRecBody() {
+      var rows = [];
+      for (var kii = 0; kii < keys.length; kii++) {
+        var g = groups[keys[kii]];
+        var paid = g.deals.filter(function(x) { return String(x.STAGE_ID) === CFG.STAGES.DESP_PAGA; });
+        var pending = g.deals.filter(function(x) { return String(x.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR; });
+        var future = pending.filter(function(x) {
+          var dp = toISODate(x[CFG.F.DATA_PREV] || '') || '';
+          return dp >= today;
+        });
+        var firstDate = g.deals[0] ? toDisplayDate(g.deals[0][CFG.F.DATA_PREV] || '') : '';
+        var lastDate = g.deals[g.deals.length - 1] ? toDisplayDate(g.deals[g.deals.length - 1][CFG.F.DATA_PREV] || '') : '';
+        var nextDate = '';
+        for (var pi = 0; pi < pending.length; pi++) {
+          var dp2 = toISODate(pending[pi][CFG.F.DATA_PREV] || '') || '';
+          if (dp2 >= today) { nextDate = toDisplayDate(pending[pi][CFG.F.DATA_PREV]); break; }
+        }
+        rows.push(
+          '<tr>' +
+            '<td class="fin-mono" style="font-size:10px">' + esc(g.ruid.slice(0, 18)) + '</td>' +
+            '<td class="fin-strong">' + esc(g.fav) + '</td>' +
+            '<td>' + g.deals.length + '</td>' +
+            '<td style="color:#15803d">' + paid.length + '</td>' +
+            '<td>' + pending.length + '</td>' +
+            '<td class="fin-mono">' + esc(firstDate) + ' → ' + esc(lastDate) + '</td>' +
+            '<td class="fin-mono">' + esc(nextDate || '—') + '</td>' +
+            '<td>' +
+              (future.length > 0
+                ? '<button class="fin-btn fin-btn--danger" data-del-ruid="' + esc(g.ruid) + '" style="font-size:10px;padding:3px 7px">Excluir ' + future.length + ' futuras</button>'
+                : '<span class="fin-muted">sem futuras</span>') +
+            '</td>' +
+          '</tr>'
+        );
+      }
+      return rows.join('');
+    }
+
+    var m = modal(
+      '<div class="fin-modal-head"><div class="fin-modal-title">DESPESAS RECORRENTES</div><button class="fin-x" data-close="1">×</button></div>' +
+      '<div class="fin-modal-body">' +
+        '<div class="fin-muted" style="font-weight:900;margin-bottom:10px">Despesas criadas via lote com recorrência. Excluir futuras mantém as já pagas.</div>' +
+        '<div style="overflow:auto">' +
+          '<table class="fin-table" style="min-width:900px">' +
+            '<thead><tr>' +
+              '<th>RUID</th>' +
+              '<th>Favorecido</th>' +
+              '<th>Total</th>' +
+              '<th>Pagas</th>' +
+              '<th>Pendentes</th>' +
+              '<th>Período</th>' +
+              '<th>Próxima</th>' +
+              '<th style="width:160px">Ações</th>' +
+            '</tr></thead>' +
+            '<tbody id="rec-tbody">' + renderRecBody() + '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div class="fin-row fin-row--right" style="margin-top:12px">' +
+          '<button class="fin-btn" data-close="1">Fechar</button>' +
+        '</div>' +
+      '</div>',
+      { full: true }
+    );
+
+    m.q('#rec-tbody').addEventListener('click', function(ev) {
+      var btn = safeClosest(ev.target, '[data-del-ruid]');
+      if (!btn) return;
+      var ruid = btn.getAttribute('data-del-ruid');
+      if (!ruid) return;
+      var g = groups[ruid];
+      if (!g) return;
+
+      var future = (g.deals || []).filter(function(x) {
+        if (String(x.STAGE_ID) !== CFG.STAGES.DESP_A_PAGAR) return false;
+        var dp = toISODate(x[CFG.F.DATA_PREV] || '') || '';
+        return dp >= today;
+      });
+
+      if (!future.length) { toast('Nenhuma parcela futura a excluir.'); return; }
+      if (!confirm('Excluir ' + future.length + ' parcelas futuras do grupo "' + g.fav + '"?\nAs já pagas serão mantidas.')) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Excluindo...';
+
+      var chain = Promise.resolve();
+      var deleted = 0;
+
+      future.forEach(function(x) {
+        chain = chain.then(function() {
+          return deleteDeal(x.ID).then(function() {
+            removeDealLocal(x.ID);
+            g.deals = g.deals.filter(function(y) { return String(y.ID) !== String(x.ID); });
+            deleted++;
+            logAudit('Excluir recorrente', 'Deal #' + x.ID + ' RUID=' + ruid);
+          });
+        });
+      });
+
+      chain.then(function() {
+        S.lastSyncAt = nowBR();
+        applyFilters();
+        toast('Excluídas ' + deleted + ' parcelas futuras ✅');
+        m.q('#rec-tbody').innerHTML = renderRecBody();
+      }).catch(function(e) {
+        toast('Falha: ' + (e.message || String(e)), 'err');
+      }).finally(function() {
+        if (btn) btn.disabled = false;
       });
     });
   }
@@ -2592,6 +2882,8 @@
 
       var obsTxt = String(d[CFG.F.OBS] || '').trim();
       var obsBtn = obsTxt ? '<button class="fin-mini" data-act="obs" data-id="' + esc(d.ID) + '">OBS</button>' : '<span class="fin-muted">sem OBS</span>';
+      var hasRuid = RUID_MARKER_RE.test(obsTxt);
+      var ruidBadge = hasRuid ? '<span class="fin-rec-badge">REC</span>' : '';
 
       rows.push(
         "<tr>" +
@@ -2612,7 +2904,7 @@
               chk +
               '<button class="fin-mini" data-act="edit" data-id="' + esc(d.ID) + '">Editar</button>' +
               obsBtn +
-              '<button class="fin-mini" data-act="rem" data-id="' + esc(d.ID) + '">Lembrete (MANUELA)</button>' +
+              ruidBadge +
               '<button class="fin-mini fin-mini--danger" data-act="del" data-id="' + esc(d.ID) + '">Excluir</button>' +
             "</div>" +
           "</td>" +
@@ -2646,7 +2938,6 @@
       if (act === "del") return confirmDelete(deal);
       if (act === "chk") return openPayReceiveModal(deal);
       if (act === "edit") return openEditModal(deal);
-      if (act === "rem") return openReminderModalFromDeal(deal);
       if (act === "obs") {
         return modal('<div class="fin-modal-head"><div class="fin-modal-title">Observação • Deal #' + esc(deal.ID) + '</div><button class="fin-x" data-close="1">×</button></div><div class="fin-modal-body"><div style="white-space:pre-wrap">' + esc(deal[CFG.F.OBS] || "Sem observação.") + '</div><div class="fin-row fin-row--right" style="margin-top:12px"><button class="fin-btn" data-close="1">Fechar</button></div></div>');
       }
@@ -2678,6 +2969,7 @@
             '<button class="fin-btn" id="btn-card" data-busylock="1">CARTÃO</button>' +
             '<button class="fin-btn fin-btn--primary" id="btn-batch-d" data-busylock="1">LOTE DESPESAS</button>' +
             '<button class="fin-btn fin-btn--primary" id="btn-batch-r" data-busylock="1">LOTE RECEITAS</button>' +
+            '<button class="fin-btn" id="btn-recurring" data-busylock="1">DESPESAS RECORRENTES</button>' +
             '<button class="fin-btn" id="btn-bulk" data-busylock="1">AÇÃO EM MASSA</button>' +
             '<button class="fin-btn" id="btn-audit">AUDITORIA</button>' +
             '<button class="fin-btn" id="btn-save-filter">SALVAR FILTRO</button>' +
@@ -2693,7 +2985,6 @@
             '<aside class="fin-side">' +
               '<div class="fin-side-brand">' +
                 '<div class="fin-brand-title">Financeiro CGD</div>' +
-                '<div class="fin-brand-sub">Deals • Pipeline 27</div>' +
               '</div>' +
               '<div class="fin-side-block">' +
                 '<div class="fin-side-h">Centro de custo</div>' +
@@ -2779,6 +3070,7 @@
 
     bindEvt("#btn-batch-d", "click", function () { openBatch("DESPESA"); });
     bindEvt("#btn-batch-r", "click", function () { openBatch("RECEITA"); });
+    bindEvt("#btn-recurring", "click", openRecurringExpensesModal);
     bindEvt("#btn-bulk", "click", openBulkActionsModal);
     bindEvt("#btn-audit", "click", openAuditModal);
     bindEvt("#btn-save-filter", "click", saveCurrentFilterPreset);
