@@ -242,17 +242,24 @@
       '<div class="fin-modal-backdrop" data-close="1"></div>' +
       '<div class="fin-modal ' + (opts.full ? "fin-modal--full" : "") + '">' + html + "</div>";
     document.body.appendChild(wrap);
+    document.body.classList.add("fin-modal-open");
+
+    function onWrapRemoved() {
+      if (!document.querySelector(".fin-modal-wrap")) {
+        document.body.classList.remove("fin-modal-open");
+      }
+    }
 
     wrap.addEventListener("click", function (e) {
       var t = e.target;
       if (t && t.getAttribute && t.getAttribute("data-close") === "1") {
-        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        if (wrap && wrap.parentNode) { wrap.parentNode.removeChild(wrap); onWrapRemoved(); }
       }
     });
 
     function onKey(ev) {
       if (ev.key === "Escape") {
-        try { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); } catch (_) {}
+        try { if (wrap && wrap.parentNode) { wrap.parentNode.removeChild(wrap); onWrapRemoved(); } } catch (_) {}
         document.removeEventListener("keydown", onKey);
       }
     }
@@ -262,7 +269,7 @@
       node: wrap,
       close: function () {
         document.removeEventListener("keydown", onKey);
-        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        if (wrap && wrap.parentNode) { wrap.parentNode.removeChild(wrap); onWrapRemoved(); }
       },
       q: function (s) { return wrap.querySelector(s); }
     };
@@ -2753,6 +2760,11 @@
     bindEvt("#btn-save-filter", "click", saveCurrentFilterPreset);
     bindEvt("#btn-filters", "click", openFilterPresetsModal);
     bindEvt("#btn-reset-filters", "click", resetAllFilters);
+    bindEvt("#btn-sync-state", "click", function () {
+      persistInstitutionalNow("manual")
+        .then(function () { toast("Dados sincronizados ✅", "ok"); })
+        .catch(function (e) { toast("Erro ao sincronizar: " + (e && e.message ? e.message : String(e)), "err"); });
+    });
 
     bindEvt("#btn-refresh", "click", refresh);
 

@@ -454,6 +454,7 @@
 /* ===============================
    MODAL (base)
 ================================ */
+body.fin-modal-open { overflow: hidden; }
 .fin-modal-wrap{
   position: fixed;
   inset: 0;
