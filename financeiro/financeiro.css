@@ -379,26 +379,27 @@
   z-index: 2;
   background: #fff;
   border-bottom: 1px solid rgba(0,0,0,.10);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 950;
   color: var(--fin-muted);
   text-transform: uppercase;
   letter-spacing: .04em;
-  padding: 10px 10px;
+  padding: 7px 8px;
 }
 .fin-table tbody td{
   border-bottom: 1px solid rgba(0,0,0,.06);
-  padding: 10px 10px;
+  padding: 5px 8px;
   vertical-align: top;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 750;
 }
 .fin-table tbody tr:hover td{ background: rgba(37,99,235,.04); }
 
 .fin-actions-row{
   display:flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 /* Mini botões na tabela */
@@ -408,10 +409,11 @@
   background: #fff;
   color: var(--fin-text);
   font-weight: 950;
-  font-size: 12px;
-  padding: 7px 10px;
-  border-radius: 12px;
+  font-size: 10px;
+  padding: 4px 6px;
+  border-radius: 8px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .fin-mini:hover{ background: rgba(0,0,0,.03); }
 .fin-mini--danger{
