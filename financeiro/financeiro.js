@@ -145,6 +145,14 @@
     return s;
   }
 
+  function toDisplayDate(d) {
+    var iso = toISODate(d);
+    if (!iso) return "";
+    var m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return iso;
+    return m[3] + "-" + m[2] + "-" + m[1];
+  }
+
   function parseMoneyBR(s) {
     var t = String(s == null ? "" : s).trim();
     if (!t) return 0;
@@ -899,6 +907,12 @@
       return true;
     });
 
+    S.filtered.sort(function (a, b) {
+      var da = toISODate(a[CFG.F.DATA_PREV] || "") || "9999-99-99";
+      var db = toISODate(b[CFG.F.DATA_PREV] || "") || "9999-99-99";
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+
     renderAfterFilter();
   }
 
@@ -1122,12 +1136,18 @@
     var isDesp = String(deal.STAGE_ID) === CFG.STAGES.DESP_A_PAGAR;
     var title = isDesp ? "Marcar DESPESA como PAGA" : "Marcar RECEITA como RECEBIDA";
 
+    var contaOpts = buildOptions(S.enums[CFG.F.CONTA] || [], true, "— Selecione a conta —");
+    var currentConta = String(deal[CFG.F.CONTA] || "");
+
     var m = modal(
       '<div class="fin-modal-head"><div class="fin-modal-title">' + esc(title) + '</div><button class="fin-x" data-close="1">×</button></div>' +
       '<div class="fin-modal-body">' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap">' +
           '<div class="fin-field" style="flex:1;min-width:240px"><label>Valor pago/recebido (opcional)</label><input id="pr-val" value="' + esc(String(deal[CFG.F.VALOR_REAL] || deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="Ex.: 1500,00"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento</label><input id="pr-date" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Data pagamento/recebimento (DD-MM-AAAA)</label><input id="pr-date" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
+        '</div>' +
+        '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
+          '<div class="fin-field" style="flex:1;min-width:240px"><label>Conta</label><select id="pr-conta">' + contaOpts + '</select></div>' +
         '</div>' +
         '<div class="fin-row fin-row--right" style="margin-top:12px">' +
           '<button class="fin-btn" data-close="1">Cancelar</button>' +
@@ -1135,6 +1155,8 @@
         '</div>' +
       '</div>'
     );
+
+    if (currentConta) m.q("#pr-conta").value = currentConta;
 
     m.q("#pr-save").addEventListener("click", function () {
       var saveBtn = m.q("#pr-save");
@@ -1152,6 +1174,8 @@
       fields[CFG.F.VALOR_REAL] = v;
       fields[CFG.F.DATA_REAL] = dt;
       fields.STAGE_ID = stageTo;
+      var contaSel = m.q("#pr-conta").value;
+      if (contaSel) fields[CFG.F.CONTA] = contaSel;
 
       updateDeal(deal.ID, fields)
         .then(function () {
@@ -1220,8 +1244,8 @@
         '</div>' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
           '<div class="fin-field" style="flex:1;min-width:220px"><label>Competência</label><select id="ed-comp">' + compOpts + '</select></div>' +
-          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data prevista</label><input id="ed-dprev" value="' + esc(toISODate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
-          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data real</label><input id="ed-dreal" value="' + esc(toISODate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="YYYY-MM-DD"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data prevista (DD-MM-AAAA)</label><input id="ed-dprev" value="' + esc(toDisplayDate(deal[CFG.F.DATA_PREV] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
+          '<div class="fin-field" style="flex:1;min-width:180px"><label>Data real (DD-MM-AAAA)</label><input id="ed-dreal" value="' + esc(toDisplayDate(deal[CFG.F.DATA_REAL] || "")) + '" placeholder="DD-MM-AAAA"></div>' +
         '</div>' +
         '<div class="fin-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">' +
           '<div class="fin-field" style="flex:1;min-width:200px"><label>Valor previsto</label><input id="ed-vprev" value="' + esc(String(deal[CFG.F.VALOR_PREV] || "")) + '" placeholder="1500,00"></div>' +
@@ -2578,8 +2602,8 @@
           "<td>" + esc(enumName(CFG.F.CONTA, d[CFG.F.CONTA]) || "") + "</td>" +
           "<td>" + esc(enumName(CFG.F.TIPO_FIN, d[CFG.F.TIPO_FIN]) || "") + "</td>" +
           "<td>" + esc(enumName(CFG.F.COMPETENCIA, d[CFG.F.COMPETENCIA]) || "") + "</td>" +
-          '<td class="fin-mono">' + esc(toISODate(d[CFG.F.DATA_PREV] || "")) + "</td>" +
-          '<td class="fin-mono">' + esc(toISODate(d[CFG.F.DATA_REAL] || "")) + "</td>" +
+          '<td class="fin-mono">' + esc(toDisplayDate(d[CFG.F.DATA_PREV] || "")) + "</td>" +
+          '<td class="fin-mono">' + esc(toDisplayDate(d[CFG.F.DATA_REAL] || "")) + "</td>" +
           '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_PREV])) + "</td>" +
           '<td class="fin-mono">' + esc(moneyBR(d[CFG.F.VALOR_REAL])) + "</td>" +
           "<td>" + esc(stageName(d.STAGE_ID)) + "</td>" +
