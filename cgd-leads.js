@@ -38,6 +38,10 @@
     UF_FONTE:     "UF_CRM_1767285733843",
     UF_TELEFONE:  "UF_CRM_1771282207",
 
+    // ✅ Telefones bloqueados no recebimento de NOVOS LEADS.
+    // A comparação ignora +55, DDD, espaços, parênteses, hífens e demais formatações.
+    BLOCKED_LEAD_PHONES: ["21993191448"],
+
     QUEUE: {
       CATEGORY_ID: 27,
       STAGE_ID: "C27:UC_SVUYIO",
@@ -1884,20 +1888,19 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
       order: { ID: "DESC" },
       select: CONFIG.LEAD_SELECT
     }, CONFIG.LIMIT_BATCH_MAX);
-    return items || [];
+
+    // ✅ Não entrega ao painel leads de telefones bloqueados.
+    return (items || []).filter(it=> !isBlockedLeadPhone(it));
   }
 
   async function fetchNewLeadsCount(){
-    const data = await bxRaw("crm.lead.list", {
+    // Precisa carregar os telefones para aplicar o mesmo bloqueio do painel.
+    const items = await bxListAll("crm.lead.list", {
       filter: { "STATUS_ID": CONFIG.LEAD_STATUS.NOVO_LEAD },
       order: { ID: "DESC" },
-      select: ["ID"],
-      start: 0
-    }, { timeoutMs: 16000 });
-    const total = Number(data && data.total);
-    if(Number.isFinite(total)) return total;
-    const items = Array.isArray(data?.result) ? data.result : [];
-    return items.length;
+      select: ["ID", "PHONE", CONFIG.UF_TELEFONE]
+    }, CONFIG.LIMIT_BATCH_MAX);
+    return (items || []).filter(it=> !isBlockedLeadPhone(it)).length;
   }
 
   async function fetchPendingCount(){
@@ -2033,6 +2036,37 @@ body.cgdDark .cgdBadge{ background: rgba(255,255,255,.9) !important; }
     const p = it && it.PHONE;
     if(Array.isArray(p) && p[0] && p[0].VALUE) return String(p[0].VALUE);
     return "";
+  }
+
+  // ✅ Normaliza telefone para bloquear variações de formatação.
+  // Exemplos equivalentes: 21993191448, (21)99319-1448, 993191448, +55 21 99319-1448.
+  function normalizePhoneForBlock(value){
+    let d = String(value ?? "").replace(/\D/g, "");
+    if(!d) return "";
+
+    // Remove código do Brasil quando vier como +55 / 55.
+    if(d.length >= 12 && d.startsWith("55")) d = d.slice(2);
+
+    // A chave final são os 9 dígitos do celular, permitindo comparar com ou sem DDD.
+    return d.length >= 9 ? d.slice(-9) : d;
+  }
+
+  function leadPhoneValues(it){
+    const values = [];
+    const uf = pickUF(it, CONFIG.UF_TELEFONE);
+    if(Array.isArray(uf)) uf.forEach(v=> values.push(v && v.VALUE !== undefined ? v.VALUE : v));
+    else if(uf) values.push(uf);
+
+    const p = it && it.PHONE;
+    if(Array.isArray(p)) p.forEach(v=> values.push(v && v.VALUE !== undefined ? v.VALUE : v));
+    else if(p) values.push(p);
+    return values.filter(v=> v !== null && v !== undefined && String(v).trim() !== "");
+  }
+
+  function isBlockedLeadPhone(it){
+    const blocked = new Set((CONFIG.BLOCKED_LEAD_PHONES || []).map(normalizePhoneForBlock).filter(Boolean));
+    if(!blocked.size) return false;
+    return leadPhoneValues(it).some(v=> blocked.has(normalizePhoneForBlock(v)));
   }
 
   function operStyle(operRaw){
